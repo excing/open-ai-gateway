@@ -1,0 +1,21 @@
+name = "open-ai-gateway"
+main = "worker.js"
+compatibility_date = "2026-03-09"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+# The worker reads configuration from this single JSON environment variable only:
+#   npx wrangler secret put GATEWAY_CONFIG_JSON
+#
+# Example JSON value:
+# {
+#   "defaultProvider": "pollinations",
+#   "defaultModel": "openai",
+#   "providers": {
+#     "pollinations": {
+#       "apiKey": "replace-with-your-key",
+#       "models": ["openai"],
+#       "defaultModel": "openai"
+#     }
+#   }
+# }

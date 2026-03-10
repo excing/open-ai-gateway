@@ -1,0 +1,55 @@
+# Copy this file to `.dev.vars`, then replace all placeholder keys.
+# Wrangler reads `.dev.vars` as dotenv format, so backticks can wrap multiline JSON.
+GATEWAY_CONFIG_JSON=`
+{
+  "defaultProvider": "openai",
+  "defaultModel": "gpt-4o-mini",
+  "modelProviderMap": {
+    "gpt-4o-mini": "openai",
+    "gemini-2.5-flash": "google",
+    "claude-3-5-sonnet-latest": "anthropic",
+    "openai/gpt-4o-mini": "openrouter",
+    "openai": "pollinations"
+  },
+  "providers": {
+    "openai": {
+      "apiKey": "replace-with-openai-key",
+      "baseURL": "https://api.openai.com/v1",
+      "models": ["gpt-4o-mini", "gpt-4.1-mini"],
+      "defaultModel": "gpt-4o-mini",
+      "headers": {}
+    },
+    "google": {
+      "apiKey": "replace-with-google-key",
+      "baseURL": "https://generativelanguage.googleapis.com/v1beta",
+      "models": ["gemini-2.5-flash"],
+      "defaultModel": "gemini-2.5-flash",
+      "headers": {}
+    },
+    "anthropic": {
+      "apiKey": "replace-with-anthropic-key",
+      "baseURL": "https://api.anthropic.com/v1",
+      "models": ["claude-3-5-sonnet-latest"],
+      "defaultModel": "claude-3-5-sonnet-latest",
+      "headers": {}
+    },
+    "openrouter": {
+      "apiKey": "replace-with-openrouter-key",
+      "baseURL": "https://openrouter.ai/api/v1",
+      "models": ["openai/gpt-4o-mini"],
+      "defaultModel": "openai/gpt-4o-mini",
+      "compatibility": "strict",
+      "headers": {},
+      "referrer": "https://open-ai-gateway.archer-zz.workers.dev"
+    },
+    "pollinations": {
+      "apiKey": "replace-with-pollinations-key",
+      "baseURL": "https://text.pollinations.ai/openai",
+      "models": ["openai"],
+      "defaultModel": "openai",
+      "headers": {},
+      "referrer": "https://open-ai-gateway.archer-zz.workers.dev"
+    }
+  }
+}
+`

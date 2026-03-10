@@ -1,0 +1,26 @@
+{
+  "name": "open-ai-gateway",
+  "version": "1.0.0",
+  "description": "",
+  "main": "worker.js",
+  "scripts": {
+    "test": "node --test",
+    "cf:dev": "npx wrangler dev",
+    "cf:deploy": "npx wrangler deploy",
+    "cf:tail": "npx wrangler tail"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.58",
+    "@ai-sdk/google": "^3.0.43",
+    "@ai-sdk/openai": "^3.0.41",
+    "@openrouter/ai-sdk-provider": "^2.2.5",
+    "ai": "^6.0.116",
+    "ai-fallback": "^2.0.0",
+    "ai-sdk-pollinations": "^0.0.1",
+    "wrangler": "^4.71.0"
+  }
+}
