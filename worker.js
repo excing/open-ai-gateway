@@ -1,8 +1,9 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
+import { jsonSchema, tool } from '@ai-sdk/provider-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { generateText, streamText } from 'ai';
+import { convertToModelMessages, generateText, streamText } from 'ai';
 import { createFallback, defaultShouldRetryThisError } from 'ai-fallback';
 import { createPollinations } from 'ai-sdk-pollinations';
 
@@ -37,10 +38,6 @@ export default {
     const url = new URL(request.url);
 
     try {
-      if (url.pathname === '/' || url.pathname === '/index.html') {
-        return withCors(index({ env }));
-      }
-
       if (url.pathname === '/favicon.ico') {
         return withCors(new Response(null, { status: 204 }));
       }
@@ -70,103 +67,8 @@ export default {
   },
 };
 
-function index({ env }) {
-  const config = buildPublicConfig(env);
-  const html = `<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Open AI Gateway</title>
-    <style>
-      body { font-family: ui-sans-serif, system-ui, sans-serif; margin: 0; background: #0b1020; color: #e5e7eb; }
-      main { max-width: 960px; margin: 0 auto; padding: 32px 20px 48px; }
-      h1, h2 { margin: 0 0 12px; }
-      p { color: #cbd5e1; }
-      .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
-      .card { background: #11182d; border: 1px solid #23304f; border-radius: 12px; padding: 16px; }
-      code, pre { font-family: ui-monospace, SFMono-Regular, monospace; }
-      pre { white-space: pre-wrap; word-break: break-word; background: #0f172a; border-radius: 10px; padding: 12px; overflow: auto; }
-      .muted { color: #94a3b8; font-size: 14px; }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>Open AI Gateway</h1>
-      <p>这是一个运行在 Cloudflare Workers 上的 Vercel AI SDK 网关，已接入 OpenAI、Google Gemini、Claude、OpenRouter、Pollinations，并保留了管理页和 OpenAI 风格接口。</p>
-
-      <div class="grid">
-        <section class="card">
-          <h2>网关状态</h2>
-          <pre id="health">loading...</pre>
-        </section>
-        <section class="card">
-          <h2>公开配置</h2>
-          <pre id="config">${escapeHtml(JSON.stringify(config, null, 2))}</pre>
-        </section>
-      </div>
-
-      <section class="card" style="margin-top: 16px;">
-        <h2>已暴露模型</h2>
-        <pre id="models">loading...</pre>
-      </section>
-
-      <section class="card" style="margin-top: 16px;">
-        <h2>调用示例</h2>
-        <pre id="example">curl ${'\\'}
-  -X POST ${'\\'}
-  -H "Content-Type: application/json" ${'\\'}
-  "__GATEWAY_ORIGIN__/api/generate" ${'\\'}
-  -d '{"provider":"${config.defaultProvider || 'openai'}","model":"${config.defaultModel || 'gpt-4o-mini'}","prompt":"你好，介绍一下你自己。"}'</pre>
-        <p class="muted">流式输出请调用 <code>/api/stream</code>；如果要使用 OpenAI 风格请求体，可继续调用 <code>/v1/chat/completions</code>。</p>
-      </section>
-    </main>
-
-    <script>
-      const exampleElement = document.getElementById('example');
-
-      if (exampleElement) {
-        exampleElement.textContent = exampleElement.textContent.replace('__GATEWAY_ORIGIN__', location.origin);
-      }
-
-      async function load() {
-        const [health, models] = await Promise.all([
-          fetch('/api/health').then((r) => r.json()),
-          fetch('/api/models').then((r) => r.json()),
-        ]);
-
-        document.getElementById('health').textContent = JSON.stringify(health, null, 2);
-        document.getElementById('models').textContent = JSON.stringify(models, null, 2);
-      }
-
-      load().catch((error) => {
-        const message = error instanceof Error ? error.message : String(error);
-        document.getElementById('health').textContent = message;
-        document.getElementById('models').textContent = message;
-      });
-    </script>
-  </body>
-</html>`;
-
-  return new Response(html, {
-    headers: { 'content-type': 'text/html; charset=UTF-8' },
-  });
-}
-
 async function api({ request, env, url }) {
   const path = url.pathname.replace(/^\/api/, '') || '/';
-
-  if (request.method === 'GET' && (path === '/' || path === '/config')) {
-    return jsonResponse(buildPublicConfig(env));
-  }
-
-  if (request.method === 'GET' && path === '/models') {
-    return jsonResponse({ object: 'list', data: buildModelList(env) });
-  }
-
-  if (request.method === 'GET' && path === '/health') {
-    return jsonResponse(buildHealth(env));
-  }
 
   if (request.method === 'POST' && path === '/resolve') {
     const body = await safeReadJson(request);
@@ -256,7 +158,7 @@ async function v1({ request, env, url }) {
 
 async function handleGenerateRequest({ body, env, request, url }) {
   try {
-    const { call, resolved } = buildTextGenerationRequest({ body, env, request, url });
+    const { call, resolved } = await buildAiSdkRequest({ body, env, request, url });
     const result = await generateText(call);
     return result.toJsonResponse({
       headers: {
@@ -271,9 +173,9 @@ async function handleGenerateRequest({ body, env, request, url }) {
 
 async function handleStreamRequest({ body, env, request, url }) {
   try {
-    const { call, resolved } = buildTextGenerationRequest({ body, env, request, url });
+    const { call, resolved } = await buildAiSdkRequest({ body, env, request, url });
     const result = streamText(call);
-    return result.toTextStreamResponse({
+    return result.toUIMessageStreamResponse({
       headers: {
         'x-gateway-provider': resolved.provider,
         'x-gateway-model': resolved.model || '',
@@ -284,13 +186,21 @@ async function handleStreamRequest({ body, env, request, url }) {
   }
 }
 
-function buildTextGenerationRequest({ body, env, request, url }) {
+async function buildAiSdkRequest({ body, env, request, url }) {
+  if (!isPlainObject(body)) {
+    throw new Error('Request body must be a JSON object.');
+  }
+
+  rejectLegacyApiAliases(body);
+  rejectUnsupportedAiSdkOptions(body);
+
   const resolved = resolveProvider({
     env,
     provider: body?.provider || request.headers.get('x-provider') || url.searchParams.get('provider'),
     model: body?.model || url.searchParams.get('model'),
   });
-  const promptInput = extractPromptInput(body);
+  const tools = buildDeclarativeTools(body.tools);
+  const promptInput = await normalizeAiSdkPromptInput(body, tools);
 
   if (!resolved.languageModel || !resolved.model) {
     throw new Error(`No model resolved for provider \`${resolved.provider}\`. Set it in \`GATEWAY_CONFIG_JSON\` or pass \`model\` in the request body.`);
@@ -303,87 +213,250 @@ function buildTextGenerationRequest({ body, env, request, url }) {
       system: promptInput.system,
       prompt: promptInput.prompt,
       messages: promptInput.messages,
-      headers: isPlainObject(body?.headers) ? sanitizeHeaders(body.headers) : undefined,
+      tools,
+      toolChoice: normalizeToolChoice(body.toolChoice),
+      activeTools: normalizeActiveTools(body.activeTools),
+      headers: isPlainObject(body?.headers) ? sanitizeRequestHeaders(body.headers) : undefined,
       providerOptions: isPlainObject(body?.providerOptions) ? body.providerOptions : undefined,
       temperature: toNumber(body?.temperature),
-      topP: toNumber(body?.topP ?? body?.top_p),
-      topK: toInteger(body?.topK ?? body?.top_k),
-      maxOutputTokens: toInteger(body?.maxOutputTokens ?? body?.maxTokens ?? body?.max_tokens),
-      presencePenalty: toNumber(body?.presencePenalty ?? body?.presence_penalty),
-      frequencyPenalty: toNumber(body?.frequencyPenalty ?? body?.frequency_penalty),
-      stopSequences: normalizeStopSequences(body?.stopSequences ?? body?.stop),
+      topP: toNumber(body?.topP),
+      topK: toInteger(body?.topK),
+      maxOutputTokens: toInteger(body?.maxOutputTokens),
+      presencePenalty: toNumber(body?.presencePenalty),
+      frequencyPenalty: toNumber(body?.frequencyPenalty),
+      stopSequences: normalizeStopSequences(body?.stopSequences),
       seed: toInteger(body?.seed),
+      maxRetries: toInteger(body?.maxRetries),
+      timeout: normalizeTimeout(body?.timeout),
     }),
   };
 }
 
-function extractPromptInput(body) {
-  if (!body || typeof body !== 'object') {
-    throw new Error('Request body must be JSON and include either `prompt` or `messages`.');
-  }
+async function normalizeAiSdkPromptInput(body, tools) {
+  const prompt = body.prompt == null ? undefined : await normalizePromptValue(body.prompt, tools);
+  const messages = body.messages == null ? undefined : await normalizeMessageInput(body.messages, '`messages`', tools);
+  const system = body.system == null ? undefined : normalizeSystemInput(body.system);
 
-  const prompt = firstString(body.prompt, body.input);
-  const messages = body.messages == null ? null : normalizeChatMessages(body.messages);
-  const system = typeof body.system === 'string' && body.system.trim() ? body.system : undefined;
-
-  if (prompt && messages) {
+  if (prompt !== undefined && messages !== undefined) {
     throw new Error('Use either `prompt` or `messages`, not both.');
   }
 
-  if (!prompt && !messages) {
+  if (prompt === undefined && messages === undefined) {
     throw new Error('Request body must include either `prompt` or `messages`.');
   }
 
   return { prompt, messages, system };
 }
 
-function normalizeChatMessages(messages) {
-  if (!Array.isArray(messages) || messages.length === 0) {
-    throw new Error('`messages` must be a non-empty array.');
+async function normalizePromptValue(value, tools) {
+  if (typeof value === 'string') {
+    return value;
   }
 
-  return messages.map((message) => {
-    if (!message || typeof message !== 'object') {
-      throw new Error('Each message must be an object.');
-    }
+  return normalizeMessageInput(value, '`prompt`', tools);
+}
 
-    const role = String(message.role || '').trim();
+function normalizeSystemInput(value) {
+  if (typeof value === 'string') {
+    return value;
+  }
 
-    if (!['system', 'user', 'assistant'].includes(role)) {
-      throw new Error('Only `system`, `user`, and `assistant` roles are currently supported.');
-    }
+  if (isPlainObject(value)) {
+    return normalizeSystemMessage(value);
+  }
 
-    return {
-      role,
-      content: normalizeMessageContent(message.content),
-    };
+  if (Array.isArray(value)) {
+    return value.map((message) => normalizeSystemMessage(message));
+  }
+
+  throw new Error('`system` must be a string, a system message object, or an array of system message objects.');
+}
+
+function normalizeSystemMessage(message) {
+  if (!isPlainObject(message)) {
+    throw new Error('Each `system` message must be an object.');
+  }
+
+  if (message.role != null && message.role !== 'system') {
+    throw new Error('`system` message objects must use role `system`.');
+  }
+
+  if (typeof message.content !== 'string') {
+    throw new Error('`system` message content must be a string.');
+  }
+
+  return compactObject({
+    role: 'system',
+    content: message.content,
+    providerOptions: isPlainObject(message.providerOptions) ? message.providerOptions : undefined,
   });
 }
 
-function normalizeMessageContent(content) {
-  if (typeof content === 'string' && content.trim()) {
-    return content;
+async function normalizeMessageInput(messages, label, tools) {
+  if (!Array.isArray(messages)) {
+    throw new Error(`${label} must be an array of AI SDK UI messages or ModelMessages.`);
   }
 
-  if (Array.isArray(content)) {
-    const text = content
-      .map((part) => {
-        if (typeof part === 'string') return part;
-        if (!part || typeof part !== 'object') return '';
-        if (part.type === 'text' || part.type === 'input_text') {
-          return typeof part.text === 'string' ? part.text : '';
-        }
-        return '';
-      })
-      .filter(Boolean)
-      .join('\n');
+  const normalized = messages.map((message) => {
+    if (!isPlainObject(message)) {
+      throw new Error(`Each ${label} entry must be an object.`);
+    }
 
-    if (text) {
-      return text;
+    return message;
+  });
+
+  const usesUiMessages = normalized.some((message) => Array.isArray(message.parts));
+  const usesModelMessages = normalized.some((message) => 'content' in message);
+
+  if (usesUiMessages && usesModelMessages) {
+    throw new Error(`${label} must contain either UI messages with \`parts\` or ModelMessages with \`content\`, not a mix.`);
+  }
+
+  if (usesUiMessages) {
+    return convertToModelMessages(normalized.map(stripUiMessageId), { tools });
+  }
+
+  if (usesModelMessages) {
+    return normalized;
+  }
+
+  throw new Error(`${label} messages must use either \`parts\` (UI messages) or \`content\` (ModelMessages).`);
+}
+
+function stripUiMessageId(message) {
+  const { id: _id, ...rest } = message;
+  return rest;
+}
+
+function buildDeclarativeTools(value) {
+  if (value == null) {
+    return undefined;
+  }
+
+  if (!isPlainObject(value)) {
+    throw new Error('`tools` must be an object keyed by tool name.');
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).map(([name, definition]) => [name, buildDeclarativeTool(name, definition)]),
+  );
+}
+
+function buildDeclarativeTool(name, definition) {
+  if (!name.trim()) {
+    throw new Error('Tool names must be non-empty strings.');
+  }
+
+  if (!isPlainObject(definition)) {
+    throw new Error(`\`tools.${name}\` must be an object.`);
+  }
+
+  if ('execute' in definition || 'toModelOutput' in definition) {
+    throw new Error(`\`tools.${name}\` must be declarative JSON only. Runtime functions are not supported on \`/api\` routes.`);
+  }
+
+  const inputSchema = normalizeJsonSchema(definition.inputSchema, `tools.${name}.inputSchema`);
+  const outputSchema = normalizeJsonSchema(definition.outputSchema, `tools.${name}.outputSchema`);
+
+  return tool(
+    compactObject({
+      title: firstString(definition.title),
+      description: firstString(definition.description),
+      providerOptions: isPlainObject(definition.providerOptions) ? definition.providerOptions : undefined,
+      inputSchema: jsonSchema(inputSchema),
+      inputExamples: Array.isArray(definition.inputExamples) ? definition.inputExamples : undefined,
+      needsApproval: typeof definition.needsApproval === 'boolean' ? definition.needsApproval : undefined,
+      strict: typeof definition.strict === 'boolean' ? definition.strict : undefined,
+      outputSchema: jsonSchema(outputSchema),
+    }),
+  );
+}
+
+function normalizeJsonSchema(schema, label) {
+  if (isPlainObject(schema)) {
+    return schema;
+  }
+
+  throw new Error(`\`${label}\` must be a JSON schema object.`);
+}
+
+function normalizeToolChoice(value) {
+  if (value == null) {
+    return undefined;
+  }
+
+  if (typeof value === 'string' || isPlainObject(value)) {
+    return value;
+  }
+
+  throw new Error('`toolChoice` must be a string or an object.');
+}
+
+function normalizeActiveTools(value) {
+  if (value == null) {
+    return undefined;
+  }
+
+  if (!Array.isArray(value)) {
+    throw new Error('`activeTools` must be an array of tool names.');
+  }
+
+  return value.map((name) => String(name).trim());
+}
+
+function normalizeTimeout(value) {
+  if (value == null) {
+    return undefined;
+  }
+
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : undefined;
+  }
+
+  if (!isPlainObject(value)) {
+    throw new Error('`timeout` must be a number or an object with `totalMs`, `stepMs`, or `chunkMs`.');
+  }
+
+  const timeout = compactObject({
+    totalMs: toInteger(value.totalMs),
+    stepMs: toInteger(value.stepMs),
+    chunkMs: toInteger(value.chunkMs),
+  });
+
+  if (Object.keys(timeout).length === 0) {
+    throw new Error('`timeout` must include at least one of `totalMs`, `stepMs`, or `chunkMs`.');
+  }
+
+  return timeout;
+}
+
+function rejectLegacyApiAliases(body) {
+  const legacyAliases = {
+    input: 'prompt',
+    top_p: 'topP',
+    top_k: 'topK',
+    max_tokens: 'maxOutputTokens',
+    maxTokens: 'maxOutputTokens',
+    presence_penalty: 'presencePenalty',
+    frequency_penalty: 'frequencyPenalty',
+    stop: 'stopSequences',
+  };
+
+  for (const [legacyKey, replacement] of Object.entries(legacyAliases)) {
+    if (legacyKey in body) {
+      throw new Error(`\`${legacyKey}\` is not supported on \`/api\` routes. Use AI SDK field \`${replacement}\` instead.`);
     }
   }
+}
 
-  throw new Error('Only text message content is currently supported for AI SDK routes.');
+function rejectUnsupportedAiSdkOptions(body) {
+  const unsupportedOptions = ['output', 'experimental_output', 'stopWhen', 'prepareStep', 'experimental_prepareStep', 'experimental_download', 'abortSignal'];
+
+  for (const key of unsupportedOptions) {
+    if (key in body) {
+      throw new Error(`\`${key}\` is not supported on \`/api\` routes because it requires non-JSON runtime behavior.`);
+    }
+  }
 }
 
 function createModelFromProvider(provider, model, env, providers) {
@@ -688,31 +761,6 @@ function parseGatewayConfig(value) {
   };
 }
 
-function buildPublicConfig(env) {
-  const gatewayConfig = getGatewayConfig(env);
-  const providers = gatewayConfig.providers;
-  const publicProviders = Object.values(providers).map((provider) => ({
-    name: provider.name,
-    kind: provider.kind,
-    baseURL: provider.baseURL || null,
-    defaultModel: provider.defaultModel || null,
-    models: provider.models || [],
-    hasApiKey: Boolean(provider.apiKey),
-    headerKeys: Object.keys(provider.headers || {}),
-    supportsGatewayProxy: supportsGatewayProxy(provider.kind),
-  }));
-
-  return {
-    defaultProvider: gatewayConfig.defaultProvider || publicProviders[0]?.name || null,
-    defaultModel: gatewayConfig.defaultModel || publicProviders[0]?.defaultModel || null,
-    providerCount: publicProviders.length,
-    routes: ['/api/generate', '/api/stream', '/v1/models', '/v1/chat/completions'],
-    providers: publicProviders,
-    modelProviderMap: gatewayConfig.modelProviderMap,
-    configSource: gatewayConfig.source,
-  };
-}
-
 function buildModelList(env) {
   const providers = getProviders(env);
   const data = [];
@@ -884,6 +932,14 @@ function sanitizeHeaders(value) {
   );
 }
 
+function sanitizeRequestHeaders(value) {
+  const disallowed = new Set(['authorization', 'api-key', 'x-api-key', 'cookie']);
+
+  return Object.fromEntries(
+    Object.entries(sanitizeHeaders(value)).filter(([key]) => !disallowed.has(key.toLowerCase())),
+  );
+}
+
 function compactObject(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
 }
@@ -974,13 +1030,5 @@ function withCors(response) {
   });
 }
 
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
-}
 
-export { api, buildModelList, buildPublicConfig, createModelFromProvider, getProviders, resolveProvider, v1 };
+export { api, buildAiSdkRequest, buildModelList, createModelFromProvider, getProviders, resolveProvider, v1 };

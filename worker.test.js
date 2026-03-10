@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
-import worker, { createModelFromProvider, getProviders, resolveProvider } from './worker.js';
+import worker, { buildAiSdkRequest, createModelFromProvider, getProviders, resolveProvider } from './worker.js';
+
+const indexHtml = readFileSync(new URL('./public/index.html', import.meta.url), 'utf8');
 
 const baseConfig = {
   defaultProvider: 'openai',
@@ -19,6 +22,20 @@ const baseConfig = {
 const baseEnv = {
   GATEWAY_CONFIG_JSON: JSON.stringify(baseConfig),
 };
+
+function buildApiCall(body, { requestHeaders = {}, url = 'https://example.com/api/generate' } = {}) {
+  const request = new Request(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...requestHeaders },
+  });
+
+  return buildAiSdkRequest({
+    body,
+    env: baseEnv,
+    request,
+    url: new URL(url),
+  });
+}
 
 test('getProviders returns configured AI SDK providers', () => {
   const providers = getProviders(baseEnv);
@@ -136,40 +153,34 @@ test('api resolve exposes sdk metadata', async () => {
   assert.equal(data.supportsTextGeneration, true);
 });
 
-test('api config does not expose gatewayBaseUrl even if present in input config', async () => {
-  const response = await worker.fetch(
-    new Request('https://example.com/api/config'),
-    {
-      GATEWAY_CONFIG_JSON: JSON.stringify({
-        ...baseConfig,
-        gatewayBaseUrl: 'https://should-not-be-exposed.example.com',
-      }),
-    },
-  );
-
-  assert.equal(response.status, 200);
-  const data = await response.json();
-  assert.equal('gatewayBaseUrl' in data, false);
-  assert.equal(data.defaultProvider, 'openai');
+test('removed metadata api routes return 404', async () => {
+  for (const path of ['/api', '/api/config', '/api/models', '/api/health']) {
+    const response = await worker.fetch(new Request(`https://example.com${path}`), baseEnv);
+    assert.equal(response.status, 404);
+  }
 });
 
-test('index page uses location.origin for the displayed gateway URL', async () => {
-  const response = await worker.fetch(
-    new Request('https://example.com/'),
-    {
-      GATEWAY_CONFIG_JSON: JSON.stringify({
-        ...baseConfig,
-        gatewayBaseUrl: 'https://should-not-be-rendered.example.com',
-      }),
-    },
-  );
+test('static index page uses location.origin without frontend metadata loading', () => {
+  assert.equal(indexHtml.includes('location.origin'), true);
+  assert.equal(indexHtml.includes("fetch('/api/config')"), false);
+  assert.equal(indexHtml.includes("fetch('/api/models')"), false);
+  assert.equal(indexHtml.includes("fetch('/api/health')"), false);
+  assert.equal(indexHtml.includes('should-not-be-rendered.example.com'), false);
+  assert.equal(indexHtml.includes('gatewayBaseUrl'), false);
+});
 
-  assert.equal(response.status, 200);
-  const html = await response.text();
-  assert.equal(html.includes('location.origin'), true);
-  assert.equal(html.includes('__GATEWAY_ORIGIN__/api/generate'), true);
-  assert.equal(html.includes('should-not-be-rendered.example.com'), false);
-  assert.equal(html.includes('gatewayBaseUrl'), false);
+test('static index page renders simple request forms for api and proxy routes', () => {
+  assert.equal(indexHtml.includes('id="generate-form"'), true);
+  assert.equal(indexHtml.includes('id="stream-form"'), true);
+  assert.equal(indexHtml.includes('id="chat-form"'), true);
+  assert.equal(indexHtml.includes('发送到 /api/generate'), true);
+  assert.equal(indexHtml.includes('发送到 /api/stream'), true);
+  assert.equal(indexHtml.includes('发送到 /v1/chat/completions'), true);
+  assert.equal(indexHtml.includes('/v1/chat/completions?provider='), true);
+  assert.equal(indexHtml.includes("const defaults={provider:'openai',model:'gpt-4o-mini'"), true);
+  assert.equal(indexHtml.includes('网关状态'), false);
+  assert.equal(indexHtml.includes('公开配置'), false);
+  assert.equal(indexHtml.includes('已暴露模型'), false);
 });
 
 test('v1 models returns local catalog', async () => {
@@ -229,6 +240,169 @@ test('v1 chat completions proxies directly to upstream without local reformattin
 
     const data = await response.json();
     assert.equal(data.id, 'chatcmpl-upstream');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('buildAiSdkRequest converts UI messages via convertToModelMessages and keeps declarative tools', async () => {
+  const { call } = await buildApiCall({
+    provider: 'openai',
+    model: 'gpt-4o-mini',
+    system: [{ content: 'You are helpful.' }],
+    messages: [
+      {
+        role: 'user',
+        parts: [
+          { type: 'text', text: 'Look at this image.' },
+          { type: 'file', url: 'https://example.com/cat.png', mediaType: 'image/png' },
+        ],
+      },
+      {
+        role: 'assistant',
+        parts: [{ type: 'tool-lookupWeather', toolCallId: 'call_1', state: 'input-available', input: { city: 'Paris' } }],
+      },
+      {
+        id: 'tool-result-msg',
+        role: 'assistant',
+        parts: [{ type: 'tool-lookupWeather', toolCallId: 'call_1', state: 'output-available', input: { city: 'Paris' }, output: { tempC: 21 } }],
+      },
+    ],
+    tools: {
+      lookupWeather: {
+        description: 'Look up the weather for a city.',
+        inputSchema: {
+          type: 'object',
+          properties: { city: { type: 'string' } },
+          required: ['city'],
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: 'object',
+          properties: { tempC: { type: 'number' } },
+          required: ['tempC'],
+          additionalProperties: false,
+        },
+        needsApproval: true,
+        strict: true,
+        inputExamples: [{ city: 'Paris' }],
+      },
+    },
+    toolChoice: { type: 'tool', toolName: 'lookupWeather' },
+    activeTools: ['lookupWeather'],
+  });
+
+  assert.equal(call.system[0].role, 'system');
+  assert.equal(call.messages.length, 4);
+  assert.equal(call.messages[0].role, 'user');
+  assert.equal(call.messages[0].content[0].type, 'text');
+  assert.equal(call.messages[0].content[1].type, 'file');
+  assert.equal(call.messages[0].content[1].data, 'https://example.com/cat.png');
+  assert.equal(call.messages[1].content[0].type, 'tool-call');
+  assert.equal(call.messages[2].content[0].type, 'tool-call');
+  assert.equal(call.messages[3].role, 'tool');
+  assert.equal(call.messages[3].content[0].type, 'tool-result');
+  assert.deepEqual(call.toolChoice, { type: 'tool', toolName: 'lookupWeather' });
+  assert.deepEqual(call.activeTools, ['lookupWeather']);
+  assert.equal(call.tools.lookupWeather.description, 'Look up the weather for a city.');
+  assert.ok(call.tools.lookupWeather.inputSchema);
+  assert.ok(call.tools.lookupWeather.outputSchema);
+});
+
+test('buildAiSdkRequest passes through model messages and sanitizes client headers', async () => {
+  const { call } = await buildApiCall({
+    provider: 'openai',
+    model: 'gpt-4o-mini',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
+    headers: {
+      authorization: 'Bearer client-key',
+      cookie: 'session=abc',
+      'x-api-key': 'client-secret',
+      'x-trace-id': 'trace-123',
+    },
+    timeout: { totalMs: 5000, chunkMs: 1000 },
+    maxRetries: 2,
+  });
+
+  assert.deepEqual(call.messages, [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }]);
+  assert.deepEqual(call.headers, { 'x-trace-id': 'trace-123' });
+  assert.deepEqual(call.timeout, { totalMs: 5000, chunkMs: 1000 });
+  assert.equal(call.maxRetries, 2);
+});
+
+test('buildAiSdkRequest rejects mixing UI messages and model messages', async () => {
+  await assert.rejects(
+    () =>
+      buildApiCall({
+        provider: 'openai',
+        model: 'gpt-4o-mini',
+        messages: [
+          { role: 'user', parts: [{ type: 'text', text: 'hi' }] },
+          { role: 'assistant', content: 'hello' },
+        ],
+      }),
+    /must contain either UI messages with `parts` or ModelMessages with `content`, not a mix/,
+  );
+});
+
+test('buildAiSdkRequest rejects legacy /api aliases', async () => {
+  await assert.rejects(
+    () => buildApiCall({ provider: 'openai', model: 'gpt-4o-mini', input: 'ping' }),
+    /`input` is not supported on `\/api` routes\. Use AI SDK field `prompt` instead\./,
+  );
+});
+
+test('buildAiSdkRequest rejects non-JSON AI SDK runtime options', async () => {
+  await assert.rejects(
+    () => buildApiCall({ provider: 'openai', model: 'gpt-4o-mini', prompt: 'ping', output: { type: 'object' } }),
+    /`output` is not supported on `\/api` routes because it requires non-JSON runtime behavior\./,
+  );
+});
+
+test('api stream returns an event stream for AI SDK routes', async () => {
+  const originalFetch = globalThis.fetch;
+  const encoder = new TextEncoder();
+
+  globalThis.fetch = async () => {
+    const chunks = [
+      'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{"role":"assistant","content":"pong"},"finish_reason":null}]}\n\n',
+      'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","created":0,"model":"gpt-4o-mini","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n',
+      'data: [DONE]\n\n',
+    ];
+
+    return new Response(
+      new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) {
+            controller.enqueue(encoder.encode(chunk));
+          }
+          controller.close();
+        },
+      }),
+      {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      },
+    );
+  };
+
+  try {
+    const response = await worker.fetch(
+      new Request('https://example.com/api/stream', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'openai', model: 'gpt-4o-mini', prompt: 'ping' }),
+      }),
+      baseEnv,
+    );
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type') || '', /text\/event-stream/i);
+    assert.equal(response.headers.get('x-gateway-provider'), 'openai');
+    assert.equal(response.headers.get('x-gateway-model'), 'gpt-4o-mini');
+
+    const body = await response.text();
+    assert.match(body, /data:/);
   } finally {
     globalThis.fetch = originalFetch;
   }

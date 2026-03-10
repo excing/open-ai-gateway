@@ -4,6 +4,12 @@ compatibility_date = "2026-03-09"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = true
 
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "none"
+run_worker_first = ["/api/*", "/v1/*", "/healthz"]
+
 # The worker reads configuration from this single JSON environment variable only:
 #   npx wrangler secret put GATEWAY_CONFIG_JSON
 #
