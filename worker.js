@@ -4,7 +4,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { jsonSchema, tool } from '@ai-sdk/provider-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { convertToModelMessages, generateText, streamText } from 'ai';
-import { createFallback, defaultShouldRetryThisError } from 'ai-fallback';
+import { createFallback } from 'ai-fallback';
 import { createPollinations } from 'ai-sdk-pollinations';
 
 const CORS_HEADERS = {
@@ -12,6 +12,15 @@ const CORS_HEADERS = {
   'access-control-allow-methods': 'GET,HEAD,POST,PUT,PATCH,DELETE,OPTIONS',
   'access-control-allow-headers': 'authorization, content-type, x-provider, x-channel, x-admin-key',
 };
+
+const CALL_TYPES = Object.freeze({
+  CHAT: 'chat',
+  IMAGE_GEN: 'image_gen',
+  VIDEO_GEN: 'video_gen',
+  AUDIO_GEN: 'audio_gen',
+  EMBEDDING: 'embedding',
+  ASR: 'asr',
+});
 
 const DEFAULT_PROVIDER_CATALOG = {
   openai: { kind: 'openai', baseURL: 'https://api.openai.com/v1' },
@@ -471,6 +480,7 @@ function buildResolvedChannel(channel, modelCode) {
   const kind = inferProviderKind(firstString(channel?.kind) || providerInput);
   const defaults = DEFAULT_PROVIDER_CATALOG[providerInput] || DEFAULT_PROVIDER_CATALOG[kind] || {};
   const models = Array.isArray(channel?.models) ? channel.models : [];
+  const callType = firstString(models[0]?.callType) || CALL_TYPES.CHAT;
   const finalModel = firstString(modelCode) || firstString(models[0]?.code) || '';
   const key = firstString(channel?.key) || '';
   const name = firstString(channel?.name) || key;
@@ -482,6 +492,7 @@ function buildResolvedChannel(channel, modelCode) {
     key,
     provider: kind,
     model: finalModel,
+    callType,
     baseURL,
     apiKey,
     headers,
@@ -497,6 +508,7 @@ function buildResolvedChannel(channel, modelCode) {
               provider: kind,
               baseURL,
               apiKey,
+              callType,
               headers,
             },
             finalModel,
@@ -670,26 +682,89 @@ function instantiateLanguageModel(config, model) {
   const apiKey = config.apiKey || undefined;
   const baseURL = config.baseURL ? normalizeBaseURL(config.baseURL) : undefined;
   const headers = sanitizeHeaders(config.headers);
+  const callType = firstString(config.callType) || CALL_TYPES.CHAT;
+
+  const unsupportedCallType = () => {
+    throw new Error(`Provider \`${config.provider}\` does not support callType \`${callType}\` for model \`${model}\`.`);
+  };
 
   switch (config.provider) {
-    case 'google':
-      return createGoogleGenerativeAI({ apiKey, baseURL, headers }).chat(model);
+    case 'google': {
+      const provider = createGoogleGenerativeAI({ apiKey, baseURL, headers });
+      switch (callType) {
+        case CALL_TYPES.IMAGE_GEN:
+          return provider.image(model);
+        case CALL_TYPES.VIDEO_GEN:
+          return provider.video(model);
+        case CALL_TYPES.AUDIO_GEN:
+        case CALL_TYPES.CHAT:
+          return provider.chat(model);
+        case CALL_TYPES.EMBEDDING:
+          return provider.embedding(model);
+        default:
+          return unsupportedCallType();
+      }
+    }
 
-    case 'anthropic':
-      return createAnthropic({ apiKey, baseURL, headers }).chat(model);
+    case 'anthropic': {
+      const provider = createAnthropic({ apiKey, baseURL, headers });
+      switch (callType) {
+        case CALL_TYPES.CHAT:
+          return provider.chat(model);
+        case CALL_TYPES.EMBEDDING:
+          return provider.embedding(model);
+        default:
+          return unsupportedCallType();
+      }
+    }
 
-    case 'openrouter':
-      return createOpenRouter({ apiKey, baseURL, headers }).chat(model);
+    case 'openrouter': {
+      const provider = createOpenRouter({ apiKey, baseURL, headers });
+      switch (callType) {
+        case CALL_TYPES.IMAGE_GEN:
+          return provider.imageModel(model);
+        case CALL_TYPES.CHAT:
+          return provider.chat(model);
+        case CALL_TYPES.EMBEDDING:
+          return provider.textEmbeddingModel(model);
+        default:
+          return unsupportedCallType();
+      }
+    }
 
-    case 'pollinations':
-      return createPollinations({ apiKey, baseURL, headers, name: config.name }).chat(model);
+    case 'pollinations': {
+      const provider = createPollinations({ apiKey, baseURL, headers, name: config.name });
+      switch (callType) {
+        case CALL_TYPES.IMAGE_GEN:
+          return provider.image(model);
+        case CALL_TYPES.AUDIO_GEN:
+          return provider.audio(model);
+        case CALL_TYPES.CHAT:
+          return provider.chat(model);
+        default:
+          return unsupportedCallType();
+      }
+    }
 
     case 'openai':
-      return createOpenAI({ apiKey, baseURL, headers, name: config.name }).chat(model);
-
     case 'openai-compatible':
-    default:
-      return createOpenAI({ apiKey, baseURL, headers, name: config.name }).chat(model);
+    default: {
+      const provider = createOpenAI({ apiKey, baseURL, headers, name: config.name });
+      switch (callType) {
+        case CALL_TYPES.IMAGE_GEN:
+          return provider.image(model);
+        case CALL_TYPES.AUDIO_GEN:
+          return provider.speech(model);
+        case CALL_TYPES.CHAT:
+          return provider.chat(model);
+        case CALL_TYPES.EMBEDDING:
+          return provider.embedding(model);
+        case CALL_TYPES.ASR:
+          return provider.transcription(model);
+        default:
+          return unsupportedCallType();
+      }
+    }
   }
 }
 
