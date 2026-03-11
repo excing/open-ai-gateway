@@ -77,34 +77,6 @@ export default {
 async function api({ request, env, url }) {
   const path = url.pathname.replace(/^\/api/, '') || '/';
 
-  if (request.method === 'POST' && path === '/resolve') {
-    const body = await safeReadJson(request);
-    try {
-      const resolved = resolveModel({
-        env,
-        model: body?.model || url.searchParams.get('model'),
-      });
-
-      return jsonResponse({
-        channel: resolved.channel,
-        channelName: resolved.channelName,
-        provider: resolved.provider,
-        sdkProvider: resolved.kind,
-        model: resolved.model || null,
-        baseURL: resolved.baseURL || null,
-        supportsModels: resolved.models,
-        supportsGatewayProxy: resolved.supportsGatewayProxy,
-        supportsTextGeneration: Boolean(resolved.languageModel),
-        hasApiKey: Boolean(resolved.apiKey),
-        headers: Object.keys(resolved.headers || {}),
-        failoverEnabled: resolved.failoverEnabled,
-        candidates: resolved.candidates,
-      });
-    } catch (error) {
-      return jsonResponse({ error: { message: error instanceof Error ? error.message : 'Bad Request' } }, 400);
-    }
-  }
-
   if (request.method === 'POST' && path === '/generate') {
     const body = await safeReadJson(request);
     return handleGenerateRequest({ body, env, request, url });
@@ -161,7 +133,7 @@ async function v1({ request, env, url }) {
   const upstreamResponse = await fetch(upstreamUrl, {
     method: request.method,
     headers: buildUpstreamHeaders(request.headers, resolved),
-    body: canHaveRequestBody(request.method) ? request.body : undefined,
+    body: buildUpstreamRequestBody(request, body, resolved),
     redirect: 'follow',
   });
 
@@ -494,39 +466,38 @@ function rejectUnsupportedAiSdkOptions(body) {
   }
 }
 
-function createModelFromChannel(channel, model, env, channels) {
-  const catalog = typeof channel === 'string' ? channels || getChannels(env) : null;
-  const config = typeof channel === 'string' ? catalog.find((item) => item.key === channel) : channel;
-
-  if (!config) {
-    throw new Error(`Channel not configured: ${typeof channel === 'string' ? channel : 'unknown'}`);
-  }
-
-  const finalModel = model || config.models?.[0] || '';
-  const kind = config.kind || config.provider;
+function buildResolvedChannel(channel, modelCode) {
+  const providerInput = String(firstString(channel?.provider) || '').toLowerCase();
+  const kind = inferProviderKind(firstString(channel?.kind) || providerInput);
+  const defaults = DEFAULT_PROVIDER_CATALOG[providerInput] || DEFAULT_PROVIDER_CATALOG[kind] || {};
+  const models = Array.isArray(channel?.models) ? channel.models : [];
+  const finalModel = firstString(modelCode) || firstString(models[0]?.code) || '';
+  const key = firstString(channel?.key) || '';
+  const name = firstString(channel?.name) || key;
+  const baseURL = normalizeBaseURL(firstString(channel?.baseURL) || defaults.baseURL || '');
+  const apiKey = firstString(channel?.apiKey) || '';
+  const headers = sanitizeHeaders(channel?.headers);
 
   return {
-    key: config.key,
-    name: config.name,
-    channel: config.key,
-    channelName: config.name,
-    provider: config.provider,
-    kind,
+    key,
+    provider: kind,
     model: finalModel,
-    baseURL: normalizeBaseURL(config.baseURL),
-    apiKey: config.apiKey || '',
-    headers: config.headers || {},
-    models: config.models || [],
+    baseURL,
+    apiKey,
+    headers,
     supportsGatewayProxy: supportsGatewayProxy(kind),
     languageModel: finalModel
       ? createGatewayLanguageModel({
-          channelKey: config.key,
+          channelKey: key,
           model: finalModel,
           languageModel: instantiateLanguageModel(
             {
-              ...config,
-              name: config.name,
-              kind,
+              ...channel,
+              name,
+              provider: kind,
+              baseURL,
+              apiKey,
+              headers,
             },
             finalModel,
           ),
@@ -536,70 +507,10 @@ function createModelFromChannel(channel, model, env, channels) {
 }
 
 function resolveModel({ env, model, random = Math.random, allowFailover = true }) {
-  const orderedCandidates = resolveChannelsForModel({ env, model, random });
-  const candidates = allowFailover ? orderedCandidates : orderedCandidates.slice(0, 1);
-  const primary = candidates[0];
-
-  if (!primary) {
-    throw new Error(`Could not resolve a channel for model \`${model}\`.`);
-  }
-
-  const languageModel = buildLanguageModelWithFailover(candidates);
-  const candidateMetadata = candidates.map((candidate) => ({
-    channel: candidate.key,
-    channelName: candidate.name,
-    provider: candidate.provider,
-    sdkProvider: candidate.kind,
-    model: candidate.model || null,
-    baseURL: candidate.baseURL || null,
-    supportsGatewayProxy: candidate.supportsGatewayProxy,
-    supportsTextGeneration: Boolean(candidate.languageModel),
-  }));
-
-  return {
-    requestedModel: model || null,
-    primaryChannel: primary.key,
-    primaryProvider: primary.provider,
-    primaryModel: primary.model || null,
-    failoverEnabled: candidates.filter((candidate) => candidate.languageModel).length > 1,
-    candidates: candidateMetadata,
-    languageModel,
-    get channel() {
-      return getActiveResolvedCandidate(candidates, languageModel)?.key || primary.key;
-    },
-    get channelName() {
-      return getActiveResolvedCandidate(candidates, languageModel)?.name || primary.name;
-    },
-    get provider() {
-      return getActiveResolvedCandidate(candidates, languageModel)?.provider || primary.provider;
-    },
-    get kind() {
-      return getActiveResolvedCandidate(candidates, languageModel)?.kind || primary.kind;
-    },
-    get model() {
-      return getActiveResolvedCandidate(candidates, languageModel)?.model || primary.model;
-    },
-    get baseURL() {
-      return getActiveResolvedCandidate(candidates, languageModel)?.baseURL || primary.baseURL;
-    },
-    get apiKey() {
-      return getActiveResolvedCandidate(candidates, languageModel)?.apiKey || primary.apiKey;
-    },
-    get headers() {
-      return getActiveResolvedCandidate(candidates, languageModel)?.headers || primary.headers;
-    },
-    get models() {
-      return getActiveResolvedCandidate(candidates, languageModel)?.models || primary.models;
-    },
-    get supportsGatewayProxy() {
-      return getActiveResolvedCandidate(candidates, languageModel)?.supportsGatewayProxy ?? primary.supportsGatewayProxy;
-    },
-  };
-}
-
-function resolveChannelsForModel({ env, model, random = Math.random }) {
   const requestedModel = firstString(model);
-  const channels = getChannels(env);
+  const gatewayConfig = getGatewayConfig(env);
+  const channels = Array.isArray(gatewayConfig?.channels) ? gatewayConfig.channels : [];
+  const requestedId = lowerCaseModelId(requestedModel);
 
   if (!requestedModel) {
     throw new Error('`model` is required.');
@@ -609,15 +520,60 @@ function resolveChannelsForModel({ env, model, random = Math.random }) {
     throw new Error('No channels configured in `GATEWAY_CONFIG_JSON`.');
   }
 
-  const matches = channels.filter((channel) =>
-    channel.models.some((candidateModel) => normalizeModelId(candidateModel) === normalizeModelId(requestedModel)),
+  const orderedCandidates = shuffleArray(
+    channels.flatMap((channel) => {
+      const matchedModel = (Array.isArray(channel?.models) ? channel.models : []).find((candidate) => {
+        const code = firstString(candidate?.code);
+        if (!code) return false;
+
+        return [code, ...(Array.isArray(candidate?.aliases) ? candidate.aliases : [])].some(
+          (value) => lowerCaseModelId(value) === requestedId,
+        );
+      });
+
+      return matchedModel ? [buildResolvedChannel(channel, firstString(matchedModel.code))] : [];
+    }),
+    random,
   );
 
-  if (matches.length === 0) {
+  if (orderedCandidates.length === 0) {
     throw new Error(`No channel supports model \`${requestedModel}\`.`);
   }
 
-  return shuffleArray(matches, random).map((channel) => createModelFromChannel(channel, requestedModel));
+  const candidates = allowFailover ? orderedCandidates : orderedCandidates.slice(0, 1);
+  const primary = candidates[0];
+
+  if (!primary) {
+    throw new Error(`Could not resolve a channel for model \`${model}\`.`);
+  }
+
+  const languageModel = buildLanguageModelWithFailover(candidates);
+  const getActiveCandidate = () => getActiveResolvedCandidate(candidates, languageModel) || primary;
+
+  return {
+    languageModel,
+    get channel() {
+      return getActiveCandidate().key;
+    },
+    get provider() {
+      return getActiveCandidate().provider;
+    },
+    get model() {
+      return getActiveCandidate().model;
+    },
+    get baseURL() {
+      return getActiveCandidate().baseURL;
+    },
+    get apiKey() {
+      return getActiveCandidate().apiKey;
+    },
+    get headers() {
+      return getActiveCandidate().headers;
+    },
+    get supportsGatewayProxy() {
+      return getActiveCandidate().supportsGatewayProxy;
+    },
+  };
 }
 
 function createGatewayLanguageModel({ channelKey, model, languageModel }) {
@@ -659,16 +615,19 @@ function buildLanguageModelWithFailover(candidates) {
     return languageModels[0];
   }
 
-  return createFallback({
+  let fallback;
+  fallback = createFallback({
     models: languageModels,
-    shouldRetryThisError: defaultShouldRetryThisError,
+    shouldRetryThisError: () => true,
     onError(error, modelId) {
       console.warn('Language model failover triggered', {
+        channel: fallback.provider,
         modelId,
         message: error instanceof Error ? error.message : String(error),
       });
     },
   });
+  return fallback;
 }
 
 function getActiveResolvedCandidate(candidates, languageModel) {
@@ -712,7 +671,7 @@ function instantiateLanguageModel(config, model) {
   const baseURL = config.baseURL ? normalizeBaseURL(config.baseURL) : undefined;
   const headers = sanitizeHeaders(config.headers);
 
-  switch (config.kind) {
+  switch (config.provider) {
     case 'google':
       return createGoogleGenerativeAI({ apiKey, baseURL, headers }).chat(model);
 
@@ -734,10 +693,6 @@ function instantiateLanguageModel(config, model) {
   }
 }
 
-function getChannels(env) {
-  return getGatewayConfig(env).channels.map((channel) => ({ ...channel, headers: { ...channel.headers }, models: [...channel.models] }));
-}
-
 function getGatewayConfig(env) {
   const rawConfig = firstString(env?.GATEWAY_CONFIG_JSON);
 
@@ -745,39 +700,27 @@ function getGatewayConfig(env) {
     throw new Error('Missing `GATEWAY_CONFIG_JSON`. Set the complete gateway configuration JSON in this environment variable.');
   }
 
-  return parseGatewayConfig(rawConfig);
-}
-
-function parseGatewayConfig(value) {
-  let parsed;
-
   try {
-    parsed = JSON.parse(value);
+    return JSON.parse(rawConfig);
   } catch {
     throw new Error('`GATEWAY_CONFIG_JSON` must be valid JSON.');
   }
-
-  if (!isPlainObject(parsed)) {
-    throw new Error('`GATEWAY_CONFIG_JSON` must be a JSON object.');
-  }
-
-  return {
-    source: 'GATEWAY_CONFIG_JSON',
-    channels: normalizeChannelEntries(parsed.channels),
-  };
 }
 
 function buildModelList(env) {
-  const channels = getChannels(env);
+  const gatewayConfig = getGatewayConfig(env);
+  const channels = Array.isArray(gatewayConfig?.channels) ? gatewayConfig.channels : [];
   const data = [];
   const seen = new Set();
 
   for (const channel of channels) {
-    for (const id of channel.models) {
-      if (seen.has(id)) continue;
-      seen.add(id);
+    for (const model of Array.isArray(channel?.models) ? channel.models : []) {
+      const code = firstString(model?.code);
+      const key = lowerCaseModelId(code);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
       data.push({
-        id,
+        id: code,
         object: 'model',
         owned_by: 'gateway',
       });
@@ -789,12 +732,12 @@ function buildModelList(env) {
 
 function buildHealth(env) {
   const gatewayConfig = getGatewayConfig(env);
-  const channels = gatewayConfig.channels;
+  const channels = Array.isArray(gatewayConfig?.channels) ? gatewayConfig.channels : [];
   return {
     ok: channels.length > 0,
     timestamp: new Date().toISOString(),
     channelCount: channels.length,
-    providerTypes: [...new Set(channels.map((channel) => channel.provider))],
+    providerTypes: [...new Set(channels.map((channel) => firstString(channel?.provider)).filter(Boolean))],
   };
 }
 
@@ -834,6 +777,22 @@ function buildUpstreamHeaders(requestHeaders, resolved) {
   return headers;
 }
 
+function buildUpstreamRequestBody(request, body, resolved) {
+  if (!canHaveRequestBody(request.method)) {
+    return undefined;
+  }
+
+  if (!isPlainObject(body) || !Object.prototype.hasOwnProperty.call(body, 'model') || !resolved.model) {
+    return request.body;
+  }
+
+  if (body.model === resolved.model) {
+    return request.body;
+  }
+
+  return JSON.stringify({ ...body, model: resolved.model });
+}
+
 function inferProviderKind(name) {
   switch (String(name || '').toLowerCase()) {
     case 'openai':
@@ -857,77 +816,7 @@ function supportsGatewayProxy(kind) {
   return ['openai', 'openai-compatible', 'openrouter'].includes(kind);
 }
 
-function normalizeChannelEntries(value) {
-  if (!Array.isArray(value)) {
-    throw new Error('`GATEWAY_CONFIG_JSON.channels` must be an array.');
-  }
-
-  const channels = value.map((channel, index) => normalizeChannelConfig(channel, index));
-  const seen = new Set();
-
-  for (const channel of channels) {
-    if (seen.has(channel.key)) {
-      throw new Error(`Duplicate channel key: ${channel.key}`);
-    }
-    seen.add(channel.key);
-  }
-
-  return channels;
-}
-
-function normalizeChannelConfig(config, index) {
-  if (!isPlainObject(config)) {
-    throw new Error(`Channel at index ${index} must be an object.`);
-  }
-
-  const key = firstString(config.key);
-  const name = firstString(config.name);
-  const providerInput = String(firstString(config.provider) || '').toLowerCase();
-  const provider = inferProviderKind(providerInput);
-  const defaults = DEFAULT_PROVIDER_CATALOG[providerInput] || DEFAULT_PROVIDER_CATALOG[provider] || {};
-  const models = normalizeModelList(config.models);
-
-  if (!key) {
-    throw new Error(`Channel at index ${index} must include a non-empty \`key\`.`);
-  }
-
-  if (!name) {
-    throw new Error(`Channel \`${key}\` must include a non-empty \`name\`.`);
-  }
-
-  if (!providerInput) {
-    throw new Error(`Channel \`${key}\` must include a non-empty \`provider\`.`);
-  }
-
-  if (models.length === 0) {
-    throw new Error(`Channel \`${key}\` must include at least one model in \`models\`.`);
-  }
-
-  return {
-    key,
-    name,
-    provider,
-    kind: provider,
-    baseURL: normalizeBaseURL(firstString(config.baseURL) || defaults.baseURL || ''),
-    apiKey: firstString(config.apiKey) || '',
-    models,
-    headers: sanitizeHeaders(config.headers),
-  };
-}
-
-function normalizeModelList(value) {
-  if (Array.isArray(value)) {
-    return value.map((item) => String(item).trim()).filter(Boolean);
-  }
-
-  if (typeof value === 'string') {
-    return parseStringList(value);
-  }
-
-  return [];
-}
-
-function normalizeModelId(value) {
+function lowerCaseModelId(value) {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
@@ -1036,20 +925,6 @@ function toInteger(value) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
-function parseStringList(value) {
-  if (!value) return [];
-  const trimmed = value.trim();
-
-  if (!trimmed) return [];
-
-  if (trimmed.startsWith('[')) {
-    const parsed = JSON.parse(trimmed);
-    return Array.isArray(parsed) ? parsed.map(String) : [];
-  }
-
-  return trimmed.split(',').map((item) => item.trim()).filter(Boolean);
-}
-
 async function safeReadJson(request) {
   const contentType = request.headers.get('content-type') || '';
   if (!contentType.includes('application/json') || !canHaveRequestBody(request.method)) {
@@ -1092,4 +967,4 @@ function withCors(response) {
 }
 
 
-export { api, buildAiSdkRequest, buildModelList, createModelFromChannel, getChannels, resolveModel, v1 };
+export { api, buildAiSdkRequest, buildModelList, resolveModel, v1 };

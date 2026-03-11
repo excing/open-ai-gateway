@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import worker, { buildAiSdkRequest, createModelFromChannel, getChannels, resolveModel } from './worker.js';
+import worker, { buildAiSdkRequest, resolveModel } from './worker.js';
 
 const indexHtml = readFileSync(new URL('./public/index.html', import.meta.url), 'utf8');
 
@@ -16,7 +16,7 @@ const baseConfig = {
       provider: 'openai',
       apiKey: 'sk-openai',
       baseURL: 'https://api.openai.com/v1',
-      models: ['gpt-4o-mini', 'gpt-4.1-mini'],
+      models: [{ code: 'gpt-4o-mini' }, { code: 'gpt-4.1-mini' }],
       headers: {},
     },
     {
@@ -25,7 +25,7 @@ const baseConfig = {
       provider: 'groq',
       apiKey: 'groq-key',
       baseURL: 'https://api.groq.com/openai/v1',
-      models: ['gpt-4o-mini'],
+      models: [{ code: 'gpt-4o-mini' }],
       headers: { 'x-channel-source': 'groq' },
     },
     {
@@ -34,7 +34,7 @@ const baseConfig = {
       provider: 'google',
       apiKey: 'google-key',
       baseURL: 'https://generativelanguage.googleapis.com/v1beta',
-      models: ['gemini-2.5-flash'],
+      models: [{ code: 'gemini-2.5-flash' }],
       headers: {},
     },
     {
@@ -43,7 +43,7 @@ const baseConfig = {
       provider: 'anthropic',
       apiKey: 'anthropic-key',
       baseURL: 'https://api.anthropic.com/v1',
-      models: ['claude-3-5-sonnet-latest'],
+      models: [{ code: 'claude-3-5-sonnet-latest' }],
       headers: {},
     },
     {
@@ -52,7 +52,7 @@ const baseConfig = {
       provider: 'openrouter',
       apiKey: 'openrouter-key',
       baseURL: 'https://openrouter.ai/api/v1',
-      models: ['openai/gpt-4o-mini'],
+      models: [{ code: 'openai/gpt-4o-mini' }],
       headers: {},
     },
     {
@@ -61,7 +61,7 @@ const baseConfig = {
       provider: 'pollinations',
       apiKey: 'pollinations-key',
       baseURL: 'https://text.pollinations.ai/openai',
-      models: ['openai'],
+      models: [{ code: 'openai' }],
       headers: {},
     },
   ],
@@ -112,28 +112,17 @@ async function withMockedRandom(randomValue, callback) {
   }
 }
 
-test('getChannels returns configured channels', () => {
-  const channels = getChannels(baseEnv);
-
-  assert.deepEqual(channels.map((channel) => channel.key), [
-    'openai-main',
-    'groq-gpt4o-mini',
-    'google-gemini',
-    'anthropic-claude',
-    'openrouter',
-    'pollinations',
-  ]);
-  assert.equal('compatibility' in channels[4], false);
-  assert.equal('referrer' in channels[5], false);
-});
-
-test('createModelFromChannel returns a language model instance', () => {
-  const resolved = createModelFromChannel('openai-main', 'gpt-4o-mini', baseEnv);
+test('resolveModel returns the request target callers need', () => {
+  const resolved = resolveModel({
+    env: baseEnv,
+    model: 'gpt-4.1-mini',
+    random: () => 0,
+    allowFailover: false,
+  });
 
   assert.equal(resolved.channel, 'openai-main');
   assert.equal(resolved.provider, 'openai');
-  assert.equal(resolved.kind, 'openai');
-  assert.equal(resolved.model, 'gpt-4o-mini');
+  assert.equal(resolved.model, 'gpt-4.1-mini');
   assert.equal(typeof resolved.languageModel?.doGenerate, 'function');
 });
 
@@ -144,9 +133,6 @@ test('resolveModel randomizes same-model channels into failover order', () => {
     random: () => 0,
   });
 
-  assert.equal(resolved.failoverEnabled, true);
-  assert.deepEqual(resolved.candidates.map((candidate) => candidate.channel), ['groq-gpt4o-mini', 'openai-main']);
-  assert.equal(resolved.primaryChannel, 'groq-gpt4o-mini');
   assert.equal(resolved.channel, 'groq-gpt4o-mini');
   assert.equal(resolved.languageModel?.provider, 'groq-gpt4o-mini');
   assert.equal(resolved.languageModel?.modelId, 'gpt-4o-mini');
@@ -160,9 +146,9 @@ test('resolveModel keeps a single candidate when allowFailover is false', () => 
     allowFailover: false,
   });
 
-  assert.equal(resolved.failoverEnabled, false);
-  assert.deepEqual(resolved.candidates.map((candidate) => candidate.channel), ['groq-gpt4o-mini']);
   assert.equal(resolved.channel, 'groq-gpt4o-mini');
+  assert.equal(resolved.languageModel?.provider, 'groq-gpt4o-mini');
+  assert.equal(resolved.languageModel?.modelId, 'gpt-4o-mini');
 });
 
 test('resolveModel matches model names case-insensitively across channels', () => {
@@ -174,7 +160,7 @@ test('resolveModel matches model names case-insensitively across channels', () =
         provider: 'openai',
         apiKey: 'sk-lower',
         baseURL: 'https://api.openai.com/v1',
-        models: ['gpt-4o-mini'],
+        models: [{ code: 'gpt-4o-mini' }],
         headers: {},
       },
       {
@@ -183,7 +169,7 @@ test('resolveModel matches model names case-insensitively across channels', () =
         provider: 'openai',
         apiKey: 'sk-upper',
         baseURL: 'https://api.openai.com/v1',
-        models: ['GPT-4O-MINI'],
+        models: [{ code: 'GPT-4O-MINI' }],
         headers: {},
       },
       {
@@ -192,7 +178,7 @@ test('resolveModel matches model names case-insensitively across channels', () =
         provider: 'openai',
         apiKey: 'sk-mixed',
         baseURL: 'https://api.openai.com/v1',
-        models: ['GpT-4O-MiNi'],
+        models: [{ code: 'GpT-4O-MiNi' }],
         headers: {},
       },
       {
@@ -201,7 +187,7 @@ test('resolveModel matches model names case-insensitively across channels', () =
         provider: 'openai',
         apiKey: 'sk-other',
         baseURL: 'https://api.openai.com/v1',
-        models: ['gpt-4.1-mini'],
+        models: [{ code: 'gpt-4.1-mini' }],
         headers: {},
       },
     ],
@@ -213,12 +199,43 @@ test('resolveModel matches model names case-insensitively across channels', () =
     random: () => 0,
   });
 
-  assert.equal(resolved.candidates.length, 3);
-  assert.deepEqual(
-    resolved.candidates.map((candidate) => candidate.channel).sort(),
-    ['model-lower', 'model-mixed', 'model-upper'],
-  );
-  assert.equal(resolved.model, 'gPt-4o-MiNi');
+  assert.ok(['model-lower', 'model-upper', 'model-mixed'].includes(resolved.channel));
+  assert.equal(resolved.provider, 'openai');
+  assert.equal(resolved.model.toLowerCase(), 'gpt-4o-mini');
+});
+
+test('resolveModel matches aliases case-insensitively and normalizes to model code', () => {
+  const env = envWithConfig({
+    channels: [
+      {
+        name: 'Aliased Model',
+        key: 'aliased-model',
+        provider: 'openai',
+        apiKey: 'sk-aliased',
+        baseURL: 'https://api.openai.com/v1',
+        models: [{ code: 'gpt-4o-mini', name: 'GPT-4o Mini', desc: 'OpenAI compatible model', aliases: ['openai-gpt-4o-mini'] }],
+        headers: {},
+      },
+      {
+        name: 'Other Model',
+        key: 'other-model',
+        provider: 'openai',
+        apiKey: 'sk-other',
+        baseURL: 'https://api.openai.com/v1',
+        models: [{ code: 'gpt-4.1-mini' }],
+        headers: {},
+      },
+    ],
+  });
+
+  const resolved = resolveModel({
+    env,
+    model: 'OPENAI-GPT-4O-MINI',
+    random: () => 0,
+  });
+
+  assert.equal(resolved.model, 'gpt-4o-mini');
+  assert.equal(resolved.channel, 'aliased-model');
 });
 
 test('resolveModel requires model', () => {
@@ -234,7 +251,7 @@ test('buildAiSdkRequest ignores incoming provider and channel', async () => {
         provider: 'openai',
         apiKey: 'sk-openai',
         baseURL: 'https://api.openai.com/v1',
-        models: ['gpt-4o-mini'],
+        models: [{ code: 'gpt-4o-mini' }],
         headers: {},
       },
     ],
@@ -255,34 +272,35 @@ test('buildAiSdkRequest ignores incoming provider and channel', async () => {
   assert.equal(resolved.model, 'gpt-4o-mini');
 });
 
-test('api resolve exposes channel metadata', async () => {
-  await withMockedRandom(0, async () => {
-    const response = await worker.fetch(
-      authedRequest('https://example.com/api/resolve', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ provider: 'ignored', channel: 'ignored', model: 'gpt-4o-mini' }),
-      }),
-      baseEnv,
-    );
-
-    assert.equal(response.status, 200);
-    const data = await response.json();
-    assert.equal(data.channel, 'groq-gpt4o-mini');
-    assert.equal(data.channelName, 'Groq GPT-4o Mini');
-    assert.equal(data.provider, 'openai-compatible');
-    assert.equal(data.sdkProvider, 'openai-compatible');
-    assert.equal(data.supportsTextGeneration, true);
-    assert.equal(data.failoverEnabled, true);
-    assert.deepEqual(
-      data.candidates.map((candidate) => candidate.channel),
-      ['groq-gpt4o-mini', 'openai-main'],
-    );
+test('buildAiSdkRequest normalizes alias matches to canonical upstream model code', async () => {
+  const env = envWithConfig({
+    channels: [
+      {
+        name: 'Aliased OpenAI',
+        key: 'aliased-openai',
+        provider: 'openai',
+        apiKey: 'sk-openai',
+        baseURL: 'https://api.openai.com/v1',
+        models: [{ code: 'gpt-4o-mini', aliases: ['openai-gpt-4o-mini'] }],
+        headers: {},
+      },
+    ],
   });
+
+  const { call, resolved } = await buildApiCall(
+    {
+      model: 'openai-gpt-4o-mini',
+      prompt: 'ping',
+    },
+    { env },
+  );
+
+  assert.equal(resolved.model, 'gpt-4o-mini');
+  assert.equal(call.model.modelId, 'gpt-4o-mini');
 });
 
 test('removed metadata api routes return 404', async () => {
-  for (const path of ['/api', '/api/config', '/api/models', '/api/health']) {
+  for (const path of ['/api', '/api/config', '/api/models', '/api/health', '/api/resolve']) {
     const response = await worker.fetch(authedRequest(`https://example.com${path}`), baseEnv);
     assert.equal(response.status, 404);
   }
@@ -301,6 +319,7 @@ test('static index page renders model-only request forms for api and proxy route
   assert.equal(indexHtml.includes('id="generate-form"'), true);
   assert.equal(indexHtml.includes('id="stream-form"'), true);
   assert.equal(indexHtml.includes('id="chat-form"'), true);
+  assert.equal(indexHtml.includes('id="chat-stream"'), true);
   assert.equal(indexHtml.includes('发送到 /api/generate'), true);
   assert.equal(indexHtml.includes('发送到 /api/stream'), true);
   assert.equal(indexHtml.includes('发送到 /v1/chat/completions'), true);
@@ -310,9 +329,11 @@ test('static index page renders model-only request forms for api and proxy route
   assert.equal(indexHtml.includes('/v1/chat/completions?provider='), false);
   assert.equal(indexHtml.includes("const defaults={model:'moonshotai/kimi-k2-instruct-0905',proxyModel:'moonshotai/kimi-k2-instruct-0905'};"), true);
   assert.equal(indexHtml.includes('由后端决定走哪条 channel'), true);
-  assert.equal(indexHtml.includes('OpenAI Chat Completions 流式透明代理'), true);
-  assert.equal(indexHtml.includes('右侧会按流式增量做打字机预览。'), true);
-  assert.equal(indexHtml.includes("payload: { model: value('chat-model', defaults.proxyModel), messages: [{ role: 'user', content: value('chat-prompt', '你好，请按 OpenAI Chat Completions 风格回复一句话，并给出一句建议。') }], stream: true }"), true);
+  assert.equal(indexHtml.includes('OpenAI Chat Completions 透明代理（支持流式开关）'), true);
+  assert.equal(indexHtml.includes('流式响应（stream）'), true);
+  assert.equal(indexHtml.includes('开启后按 SSE 增量预览；关闭后展示最终 JSON 响应。'), true);
+  assert.equal(indexHtml.includes('const stream = isChatStreamEnabled();'), true);
+  assert.equal(indexHtml.includes("payload: { model: value('chat-model', defaults.proxyModel), messages: [{ role: 'user', content: value('chat-prompt', '你好，请按 OpenAI Chat Completions 风格回复一句话，并给出一句建议。') }], stream }"), true);
   assert.equal(indexHtml.includes('网关状态'), false);
   assert.equal(indexHtml.includes('公开配置'), false);
   assert.equal(indexHtml.includes('已暴露模型'), false);
@@ -379,6 +400,42 @@ test('v1 models returns deduped logical catalog', async () => {
   assert.equal(data.data.filter((model) => model.id === 'gpt-4o-mini').length, 1);
 });
 
+test('v1 models returns canonical codes without exposing aliases as separate models', async () => {
+  const env = envWithConfig({
+    channels: [
+      {
+        name: 'Groq Alias',
+        key: 'groq-alias',
+        provider: 'groq',
+        apiKey: 'groq-key',
+        baseURL: 'https://api.groq.com/openai/v1',
+        models: [{ code: 'gpt-4o-mini', aliases: ['openai-gpt-4o-mini'] }],
+        headers: {},
+      },
+      {
+        name: 'OpenAI Alias',
+        key: 'openai-alias',
+        provider: 'openai',
+        apiKey: 'sk-openai',
+        baseURL: 'https://api.openai.com/v1',
+        models: [
+          { code: 'GPT-4O-MINI', aliases: ['OPENAI-GPT-4O-MINI'] },
+          { code: 'gpt-4.1-mini', aliases: ['openai-gpt-4.1-mini'] },
+        ],
+        headers: {},
+      },
+    ],
+  });
+
+  const response = await worker.fetch(authedRequest('https://example.com/v1/models'), env);
+
+  assert.equal(response.status, 200);
+  const data = await response.json();
+  const ids = data.data.map((model) => model.id).sort();
+  assert.deepEqual(ids, ['gpt-4.1-mini', 'gpt-4o-mini']);
+  assert.equal(ids.includes('openai-gpt-4o-mini'), false);
+});
+
 test('v1 chat completions proxies directly to upstream without local reformatting', async () => {
   const originalFetch = globalThis.fetch;
   const upstreamCalls = [];
@@ -434,6 +491,63 @@ test('v1 chat completions proxies directly to upstream without local reformattin
       const data = await response.json();
       assert.equal(data.id, 'chatcmpl-upstream');
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('v1 chat completions normalizes alias model to code upstream', async () => {
+  const env = envWithConfig({
+    channels: [
+      {
+        name: 'Groq Alias',
+        key: 'groq-alias',
+        provider: 'groq',
+        apiKey: 'groq-key',
+        baseURL: 'https://api.groq.com/openai/v1',
+        models: [{ code: 'gpt-4o-mini', aliases: ['openai-gpt-4o-mini'] }],
+        headers: {},
+      },
+    ],
+  });
+  const originalFetch = globalThis.fetch;
+  const upstreamCalls = [];
+  const requestBody = {
+    model: 'openai-gpt-4o-mini',
+    messages: [{ role: 'user', content: 'hello gateway' }],
+    stream: false,
+  };
+
+  globalThis.fetch = async (url, init = {}) => {
+    upstreamCalls.push({
+      url: String(url),
+      method: init.method,
+      headers: new Headers(init.headers),
+      body: init.body ? await new Response(init.body).text() : '',
+    });
+
+    return new Response(JSON.stringify({ id: 'chatcmpl-upstream' }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    });
+  };
+
+  try {
+    const response = await worker.fetch(
+      authedRequest('https://example.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(requestBody),
+      }),
+      env,
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(upstreamCalls.length, 1);
+    assert.equal(upstreamCalls[0].url, 'https://api.groq.com/openai/v1/chat/completions');
+    assert.equal(upstreamCalls[0].headers.get('authorization'), 'Bearer groq-key');
+    assert.equal(upstreamCalls[0].body, JSON.stringify({ ...requestBody, model: 'gpt-4o-mini' }));
+    assert.equal(response.headers.get('x-gateway-model'), 'gpt-4o-mini');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -670,6 +784,81 @@ test('api generate returns stable json for successful text generation', async ()
       assert.equal(data.usage.totalTokens, 2);
       assert.equal(data.usage.reasoningTokens, 0);
       assert.equal(data.usage.cachedInputTokens, 0);
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('api generate fails over when the first channel returns 404', async () => {
+  const originalFetch = globalThis.fetch;
+  const upstreamCalls = [];
+
+  globalThis.fetch = async (url, init = {}) => {
+    upstreamCalls.push({
+      url: String(url),
+      method: init.method,
+      headers: new Headers(init.headers),
+      body: init.body ? await new Response(init.body).text() : '',
+    });
+
+    if (String(url) === 'https://api.groq.com/openai/v1/chat/completions') {
+      return new Response(JSON.stringify({ error: { message: 'model not found' } }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+
+    return new Response(
+      JSON.stringify({
+        id: 'chatcmpl-generate-failover-1',
+        object: 'chat.completion',
+        created: 0,
+        model: 'gpt-4o-mini',
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: 'fallback pong' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: 1,
+          completion_tokens: 2,
+          total_tokens: 3,
+        },
+      }),
+      {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      },
+    );
+  };
+
+  try {
+    await withMockedRandom(0, async () => {
+      const response = await worker.fetch(
+        authedRequest('https://example.com/api/generate', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model: 'gpt-4o-mini', prompt: 'ping' }),
+        }),
+        baseEnv,
+      );
+
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get('x-gateway-channel'), 'openai-main');
+      assert.equal(response.headers.get('x-gateway-provider'), 'openai');
+      assert.equal(response.headers.get('x-gateway-model'), 'gpt-4o-mini');
+      assert.equal(upstreamCalls.length, 2);
+      assert.equal(upstreamCalls[0].url, 'https://api.groq.com/openai/v1/chat/completions');
+      assert.equal(upstreamCalls[1].url, 'https://api.openai.com/v1/chat/completions');
+
+      const data = await response.json();
+      assert.equal(data.content[0]?.text, 'fallback pong');
+      assert.equal(data.usage.inputTokens, 1);
+      assert.equal(data.usage.outputTokens, 2);
+      assert.equal(data.usage.totalTokens, 3);
     });
   } finally {
     globalThis.fetch = originalFetch;
