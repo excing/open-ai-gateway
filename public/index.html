@@ -5,56 +5,669 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Open AI Gateway</title>
   <style>
-    body{font-family:ui-sans-serif,system-ui,sans-serif;margin:0;background:#0b1020;color:#e5e7eb}main{max-width:960px;margin:0 auto;padding:32px 20px 48px}h1,h2{margin:0 0 12px}p{color:#cbd5e1}.grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}.card{background:#11182d;border:1px solid #23304f;border-radius:12px;padding:16px}code,pre{font-family:ui-monospace,SFMono-Regular,monospace}pre{white-space:pre-wrap;word-break:break-word;background:#0f172a;border-radius:10px;padding:12px;overflow:auto}.muted{color:#94a3b8;font-size:14px}.request-form{display:grid;gap:12px}.field-row{display:grid;gap:12px;grid-template-columns:repeat(2,minmax(0,1fr))}label{display:grid;gap:6px;font-size:14px;color:#cbd5e1}input,textarea,button{font:inherit;border-radius:10px;border:1px solid #31415f}input,textarea{width:100%;box-sizing:border-box;background:#0f172a;color:#e5e7eb;padding:10px 12px}textarea{min-height:110px;resize:vertical}button{background:#2563eb;color:#eff6ff;padding:10px 14px;cursor:pointer}button:disabled{opacity:.7;cursor:wait}
+    :root{color-scheme:dark;--bg:#07111f;--card:#101b2d;--line:#22324d;--text:#ecf3ff;--muted:#98a7be;--blue:#5aa2ff;--blue-2:#2563eb;--green:#22c55e;--amber:#f59e0b;--red:#ef4444;--shadow:0 20px 50px rgba(0,0,0,.28)}*{box-sizing:border-box}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:radial-gradient(circle at top,#15325f 0%,#09111e 36%,#050a14 100%);color:var(--text)}main{max-width:1240px;margin:0 auto;padding:40px 20px 56px}.hero{display:grid;gap:20px;grid-template-columns:minmax(0,1.25fr) minmax(280px,.75fr);align-items:start;margin-bottom:24px}.eyebrow{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid rgba(90,162,255,.26);border-radius:999px;background:rgba(90,162,255,.12);font-size:12px;color:#cfe2ff;letter-spacing:.04em;text-transform:uppercase}.hero h1{margin:14px 0 12px;font-size:clamp(32px,5vw,56px);line-height:1.02}.hero p{margin:0;color:#c7d4e6;font-size:16px;line-height:1.7}.card{background:linear-gradient(180deg,rgba(16,27,45,.96),rgba(10,20,35,.96));border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow)}.hero-note{padding:20px}.hero-note h2,.section-header h2{margin:0 0 10px;font-size:18px}.hero-note ul{margin:0;padding-left:18px;color:#cfe0f6;line-height:1.75}.layout{display:grid;gap:20px;grid-template-columns:minmax(0,1.1fr) minmax(320px,.9fr);align-items:start}.workspace,.response,.example{padding:18px}.section-header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.section-header p{margin:4px 0 0;color:var(--muted);font-size:14px;line-height:1.6}.tabs{display:flex;gap:10px;flex-wrap:wrap;padding:6px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);border-radius:16px;margin-bottom:18px}.tab{appearance:none;border:0;border-radius:12px;padding:11px 14px;background:transparent;color:#bed0ea;font:inherit;font-weight:600;cursor:pointer;transition:.2s}.tab:hover{background:rgba(255,255,255,.05);color:var(--text)}.tab.active{background:linear-gradient(180deg,rgba(90,162,255,.24),rgba(37,99,235,.24));color:#fff;box-shadow:inset 0 0 0 1px rgba(90,162,255,.3)}.panel{display:none;padding:18px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05);border-radius:18px}.panel.active{display:block}.panel-meta{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px}.pill{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;background:rgba(90,162,255,.12);border:1px solid rgba(90,162,255,.2);color:#dceaff;font-size:12px;font-weight:700;letter-spacing:.02em}.hint{color:var(--muted);font-size:13px;line-height:1.6}.request-form{display:grid;gap:14px}.field{display:grid;gap:7px}.field label{font-size:13px;font-weight:700;color:#d7e5f9}.field small{color:var(--muted);font-size:12px}.input,textarea{width:100%;border-radius:14px;border:1px solid #324663;background:#0b1423;color:var(--text);padding:12px 14px;font:inherit;transition:border-color .2s,box-shadow .2s}.input:focus,textarea:focus{outline:none;border-color:rgba(90,162,255,.8);box-shadow:0 0 0 4px rgba(90,162,255,.15)}textarea{min-height:148px;resize:vertical}.actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}.button{appearance:none;border:0;border-radius:14px;padding:12px 16px;font:inherit;font-weight:700;cursor:pointer;transition:transform .15s ease,opacity .2s ease,background .2s ease}.button:disabled{opacity:.6;cursor:wait;transform:none}.button.primary{background:linear-gradient(180deg,#5aa2ff,#2563eb);color:#fff}.button.primary:hover:not(:disabled){transform:translateY(-1px)}.button.ghost{background:rgba(255,255,255,.04);color:#d7e5f9;border:1px solid rgba(255,255,255,.08)}.button.ghost:hover:not(:disabled){background:rgba(255,255,255,.08)}.mini-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:16px}.mini-card{padding:14px;border-radius:16px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05)}.mini-card strong{display:block;margin-bottom:6px;font-size:13px}.mini-card span{display:block;color:var(--muted);font-size:12px;line-height:1.5}.stack{display:grid;gap:20px}.status{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:14px;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.03);color:#d9e7fb;font-size:14px;margin:14px 0 16px}.status::before{content:'';width:10px;height:10px;border-radius:999px;background:#6b7f99;flex:0 0 auto}.status.success::before{background:var(--green)}.status.working::before{background:var(--amber)}.status.error::before{background:var(--red)}.preview{padding:16px;border-radius:18px;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.06)}.preview.empty{color:var(--muted)}.preview h3{margin:0 0 12px;font-size:15px}.stats{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));margin-bottom:14px}.stat{padding:12px;border-radius:14px;background:rgba(7,17,31,.5);border:1px solid rgba(255,255,255,.05)}.stat span{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}.stat strong{font-size:14px;word-break:break-word}.preview-body{white-space:pre-wrap;word-break:break-word;line-height:1.7;color:#edf4ff}.preview-body.typing::after{content:' ▍';color:var(--blue);animation:blink 1s steps(1,end) infinite}@keyframes blink{50%{opacity:0}}.code-card{margin-top:16px;padding:10px 14px 14px;border-radius:18px;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.06)}.code-card summary{cursor:pointer;color:#dbe8fb;font-weight:700;user-select:none}.code-card pre,.example pre{margin:12px 0 0;white-space:pre-wrap;word-break:break-word;overflow:auto;background:#071120;border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:14px;color:#dbe8fb;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.7}.example-note{margin:12px 0 0;color:var(--muted);font-size:13px;line-height:1.6}@media (max-width:960px){.hero,.layout{grid-template-columns:1fr}main{padding:24px 16px 40px}.hero h1{font-size:40px}}@media (max-width:640px){.actions,.section-header{flex-direction:column;align-items:stretch}.tabs{display:grid;grid-template-columns:1fr}.button{width:100%}}
   </style>
 </head>
 <body>
   <main>
-    <h1>Open AI Gateway</h1>
-    <p>这是一个运行在 Cloudflare Workers 上的 Vercel AI SDK 网关，已接入 OpenAI、Google Gemini、Claude、OpenRouter、Pollinations，并保留了管理页和 OpenAI 风格接口。</p>
-    <section class="card" style="margin-top:16px;">
-      <h2>快速请求表单</h2>
-      <p class="muted">下面三组表单分别对应 AI SDK JSON 子集的 <code>/api/*</code> 路由，以及 OpenAI 风格透传的 <code>/v1/chat/completions</code>。默认值是静态乐观值，请按你的实际网关配置修改。</p>
-      <div class="grid">
-        <form id="generate-form" class="card request-form">
-          <h2>/api/generate</h2>
-          <div class="field-row"><label>provider<input id="generate-provider" value="openai" /></label><label>model<input id="generate-model" value="gpt-4o-mini" /></label></div>
-          <label>prompt<textarea id="generate-prompt">你好，介绍一下你自己。</textarea></label>
-          <button type="submit">发送到 /api/generate</button><pre id="generate-output">尚未请求</pre>
-        </form>
-        <form id="stream-form" class="card request-form">
-          <h2>/api/stream</h2>
-          <div class="field-row"><label>provider<input id="stream-provider" value="openai" /></label><label>model<input id="stream-model" value="gpt-4o-mini" /></label></div>
-          <label>prompt<textarea id="stream-prompt">请用三句话介绍一下流式输出。</textarea></label>
-          <button type="submit">发送到 /api/stream</button><pre id="stream-output">尚未请求</pre>
-        </form>
-        <form id="chat-form" class="card request-form">
-          <h2>/v1/chat/completions</h2>
-          <div class="field-row"><label>provider<input id="chat-provider" value="openai" /></label><label>model<input id="chat-model" value="gpt-4o-mini" /></label></div>
-          <label>messages[0].content<textarea id="chat-prompt">你好，请按 OpenAI Chat Completions 风格回复一句话。</textarea></label>
-          <button type="submit">发送到 /v1/chat/completions</button><pre id="chat-output">尚未请求</pre>
-        </form>
+    <section class="hero">
+      <div>
+        <span class="eyebrow">Cloudflare Workers · AI Gateway</span>
+        <h1>Open AI Gateway</h1>
+        <p>一个更顺手的调试首页：左边组织请求，右边统一查看响应和原始结果。请求侧只表达目标 <code>model</code>，由后端决定走哪条 channel。</p>
+      </div>
+      <aside class="card hero-note">
+        <h2>当前路由分工</h2>
+        <ul>
+          <li><code>/api/generate</code>：非流式 AI SDK JSON 子集</li>
+          <li><code>/api/stream</code>：流式 AI SDK 响应</li>
+          <li><code>/v1/chat/completions</code>：OpenAI 风格透明代理</li>
+        </ul>
+      </aside>
+    </section>
+
+    <section class="layout">
+      <section class="card workspace">
+        <div class="section-header">
+          <div>
+            <h2>请求工作台</h2>
+            <p>先选路由，再填写 <code>model</code> 和输入内容。当前首页不会自动请求任何后端接口。</p>
+          </div>
+        </div>
+
+        <div class="field" style="margin-bottom:18px">
+          <label for="admin-key">Admin Key</label>
+          <input class="input" id="admin-key" type="password" placeholder="输入网关 Admin Key" autocomplete="off" />
+          <small>页面本身可直接打开，但发往 <code>/api/*</code>、<code>/v1/*</code>、<code>/healthz</code> 的请求需要带上这个 key。</small>
+        </div>
+
+        <div class="tabs" role="tablist" aria-label="请求类型切换">
+          <button class="tab active" type="button" role="tab" data-tab="generate">/api/generate</button>
+          <button class="tab" type="button" role="tab" data-tab="stream">/api/stream</button>
+          <button class="tab" type="button" role="tab" data-tab="chat">/v1/chat/completions</button>
+        </div>
+
+        <section class="panel active" data-panel="generate">
+          <div class="panel-meta">
+            <span class="pill">返回 JSON</span>
+            <span class="hint">适合快速验证 <code>content / finishReason / usage</code> 结构。</span>
+          </div>
+          <form id="generate-form" class="request-form">
+            <div class="field">
+              <label for="generate-model">model</label>
+              <input class="input" id="generate-model" value="moonshotai/kimi-k2-instruct-0905" />
+              <small>后端会按模型自动选 channel。</small>
+            </div>
+            <div class="field">
+              <label for="generate-prompt">prompt</label>
+              <textarea id="generate-prompt">你好，介绍一下你自己，并用三点说明这个网关适合什么场景。</textarea>
+            </div>
+            <div class="actions">
+              <button class="button primary" type="submit">发送到 /api/generate</button>
+              <span class="hint">用于看最终结果，不处理 SSE。</span>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel" data-panel="stream">
+          <div class="panel-meta">
+            <span class="pill">返回流</span>
+            <span class="hint">适合观察流式增量输出和事件流原文。</span>
+          </div>
+          <form id="stream-form" class="request-form">
+            <div class="field">
+              <label for="stream-model">model</label>
+              <input class="input" id="stream-model" value="moonshotai/kimi-k2-instruct-0905" />
+              <small>仍然只表达模型，由后端决定具体上游。</small>
+            </div>
+            <div class="field">
+              <label for="stream-prompt">prompt</label>
+              <textarea id="stream-prompt">请用三句话介绍一下流式输出，并在最后给一个简短总结。</textarea>
+            </div>
+            <div class="actions">
+              <button class="button primary" type="submit">发送到 /api/stream</button>
+              <span class="hint">右侧会实时刷新流内容和原始响应。</span>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel" data-panel="chat">
+          <div class="panel-meta">
+            <span class="pill">透明代理</span>
+            <span class="hint">保留 OpenAI Chat Completions 风格请求体。</span>
+          </div>
+          <form id="chat-form" class="request-form">
+            <div class="field">
+              <label for="chat-model">model</label>
+              <input class="input" id="chat-model" value="moonshotai/kimi-k2-instruct-0905" />
+              <small>适合验证 OpenAI 兼容客户端接入。</small>
+            </div>
+            <div class="field">
+              <label for="chat-prompt">messages[0].content</label>
+              <textarea id="chat-prompt">你好，请给我一些有创意的想法或灵感</textarea>
+            </div>
+            <div class="actions">
+              <button class="button primary" type="submit">发送到 /v1/chat/completions</button>
+              <span class="hint">右侧会按流式增量做打字机预览。</span>
+            </div>
+          </form>
+        </section>
+
+        <div class="mini-grid">
+          <div class="mini-card">
+            <strong>只填 model</strong>
+            <span>前端不需要传 <code>provider</code> / <code>channel</code>。</span>
+          </div>
+          <div class="mini-card">
+            <strong>更清晰的结果</strong>
+            <span>右侧同时展示可读预览和原始响应，排查更轻松。</span>
+          </div>
+          <div class="mini-card">
+            <strong>零首屏请求</strong>
+            <span>页面初始化不主动请求后端，避免额外 Worker 调用。</span>
+          </div>
+        </div>
+      </section>
+
+      <div class="stack">
+        <section class="card response">
+          <div class="section-header">
+            <div>
+              <h2>响应面板</h2>
+              <p id="response-endpoint">当前目标：/api/generate</p>
+            </div>
+          </div>
+          <div id="response-status" class="status">准备就绪，尚未发起请求。</div>
+          <div id="response-preview" class="preview empty">提交请求后，这里会展示更适合阅读的结果预览。</div>
+          <details class="code-card" open>
+            <summary>原始响应</summary>
+            <pre id="response-output">尚未请求</pre>
+          </details>
+        </section>
+
+        <section class="card example">
+          <div class="section-header">
+            <div>
+              <h2>调用示例</h2>
+              <p>示例会跟随当前 Tab 与输入内容变化，并始终使用 <code>location.origin</code>。</p>
+            </div>
+            <button id="copy-example" class="button ghost" type="button">复制 curl</button>
+          </div>
+          <pre id="example">loading...</pre>
+          <p class="example-note">如果你在做客户端接入，推荐先用这里的请求样例跑通，再迁移到正式代码。</p>
+        </section>
       </div>
     </section>
-    <section class="card" style="margin-top:16px;"><h2>调用示例</h2><pre id="example">loading...</pre><p class="muted">流式输出请调用 <code>/api/stream</code>；如果要使用 OpenAI 风格请求体，可继续调用 <code>/v1/chat/completions</code>。</p></section>
   </main>
+
   <script>
-    const defaults={provider:'openai',model:'gpt-4o-mini',proxyProvider:'openai',proxyModel:'gpt-4o-mini'};
-    const $=id=>document.getElementById(id);const text=(id,value)=>{$(id).textContent=value};
-    const ids=['generate-provider','generate-model','stream-provider','stream-model','chat-provider','chat-model'];
-    const value=(id,fallback)=>($(id)?.value||'').trim()||fallback;
-    function renderExample(){text('example',`curl \\
+    const defaults={model:'moonshotai/kimi-k2-instruct-0905',proxyModel:'moonshotai/kimi-k2-instruct-0905'};
+    const adminKeyStorageKey='open-ai-gateway.adminKey';
+    const $ = (id) => document.getElementById(id);
+    const endpoints = { generate: '/api/generate', stream: '/api/stream', chat: '/v1/chat/completions' };
+    const endpointNotes = {
+      generate: 'AI SDK 非流式 JSON 请求',
+      stream: 'AI SDK 流式请求',
+      chat: 'OpenAI Chat Completions 流式透明代理',
+    };
+    let activeTab = 'generate';
+
+    const value = (id, fallback) => ($(id)?.value || '').trim() || fallback;
+    const escapeHtml = (input) => String(input)
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#39;');
+
+    function getAdminKey() {
+      return ($('admin-key')?.value || '').trim();
+    }
+
+    function readStoredAdminKey() {
+      try {
+        return localStorage.getItem(adminKeyStorageKey) || '';
+      } catch {
+        return '';
+      }
+    }
+
+    function writeStoredAdminKey(input) {
+      try {
+        if (input) localStorage.setItem(adminKeyStorageKey, input);
+        else localStorage.removeItem(adminKeyStorageKey);
+      } catch {}
+    }
+
+    function buildGatewayHeaders() {
+      const adminKey = getAdminKey();
+      return {
+        'content-type': 'application/json',
+        ...(adminKey ? { 'x-admin-key': adminKey } : {}),
+      };
+    }
+
+    function setStatus(message, tone = '') {
+      const el = $('response-status');
+      if (!el) return;
+      el.className = `status ${tone}`.trim();
+      el.textContent = message;
+    }
+
+    function setRawOutput(content) {
+      const el = $('response-output');
+      if (el) el.textContent = content;
+    }
+
+    function setPreview(title, body, stats = [], options = {}) {
+      const el = $('response-preview');
+      if (!el) return;
+      const statsHtml = stats.map((item) => `
+        <div class="stat">
+          <span>${escapeHtml(item.label)}</span>
+          <strong>${escapeHtml(item.value)}</strong>
+        </div>
+      `).join('');
+      const previewBodyClass = ['preview-body', options.typing ? 'typing' : ''].filter(Boolean).join(' ');
+      el.classList.remove('empty');
+      el.innerHTML = `
+        <h3>${escapeHtml(title)}</h3>
+        ${statsHtml ? `<div class="stats">${statsHtml}</div>` : ''}
+        <div class="${previewBodyClass}">${escapeHtml(body || '（无可读预览）')}</div>
+      `;
+    }
+
+    function extractGenerateText(data) {
+      if (!Array.isArray(data?.content)) return '';
+      return data.content.filter((part) => part?.type === 'text').map((part) => part.text || '').join('\n\n').trim();
+    }
+
+    function extractChatText(data) {
+      const content = data?.choices?.[0]?.message?.content;
+      if (typeof content === 'string') return content;
+      if (Array.isArray(content)) {
+        return content.map((part) => typeof part?.text === 'string' ? part.text : JSON.stringify(part)).join('\n\n');
+      }
+      return '';
+    }
+
+    function extractTextFromContent(content) {
+      if (typeof content === 'string') return content;
+      if (!Array.isArray(content)) return '';
+      return content.map((part) => {
+        if (typeof part === 'string') return part;
+        if (typeof part?.text === 'string') return part.text;
+        return '';
+      }).join('');
+    }
+
+    function readSseDataEvents(raw, allowTrailing = false) {
+      const normalized = String(raw || '').replace(/\r\n/g, '\n');
+      if (!normalized) return [];
+      const blocks = normalized.split('\n\n');
+      const completeBlocks = allowTrailing || normalized.endsWith('\n\n') ? blocks : blocks.slice(0, -1);
+      return completeBlocks.map((block) => block.split('\n')
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trimStart())
+        .join('\n'))
+        .filter(Boolean);
+    }
+
+    function extractStreamTextPayload(payload) {
+      if (!payload || typeof payload !== 'object') return '';
+      if (payload?.type === 'text-delta' && typeof payload.delta === 'string') {
+        return payload.delta;
+      }
+      if (payload?.type === 'text' && typeof payload.text === 'string') {
+        return payload.text;
+      }
+      const choices = Array.isArray(payload?.choices) ? payload.choices : [];
+      return choices.map((choice) => extractTextFromContent(choice?.delta?.content ?? choice?.message?.content)).join('');
+    }
+
+    function formatToolPreview(tool) {
+      const name = tool.title || tool.name || tool.id || 'unknown';
+      const inputHint = tool.inputChars > 0 ? `（输入流 ${tool.inputChars} 字）` : '';
+      return `工具 ${name}：${tool.status}${inputHint}`;
+    }
+
+    function buildStreamPreviewBody(summary, fallbackText, finished) {
+      const sections = [];
+      const reasoning = summary.reasoning.trim();
+      const text = summary.text.trim();
+      const notes = [...summary.fileNotes, ...summary.sourceNotes, ...summary.toolNotes];
+
+      if (reasoning) {
+        sections.push(`${finished ? '思考过程' : '思考中'}：\n${reasoning}`);
+      }
+      if (text) {
+        sections.push(`${finished ? '输出结果' : '当前输出'}：\n${text}`);
+      }
+      if (notes.length) {
+        sections.push(`附加事件：\n${notes.map((note) => `- ${note}`).join('\n')}`);
+      }
+
+      return sections.join('\n\n') || fallbackText;
+    }
+
+    function summarizeStreamPreview(raw, allowTrailing = false) {
+      const events = readSseDataEvents(raw, allowTrailing);
+      let text = '';
+      let textChunks = 0;
+      let reasoning = '';
+      let reasoningChunks = 0;
+      const fileNotes = [];
+      const sourceNotes = [];
+      const tools = new Map();
+      for (const eventData of events) {
+        if (eventData === '[DONE]') continue;
+        try {
+          const payload = JSON.parse(eventData);
+          if (!payload || typeof payload !== 'object') continue;
+
+          if (payload?.type === 'text-delta' && typeof payload.delta === 'string') {
+            text += payload.delta;
+            textChunks += 1;
+            continue;
+          }
+
+          if (payload?.type === 'reasoning-delta' && typeof payload.delta === 'string') {
+            reasoning += payload.delta;
+            reasoningChunks += 1;
+            continue;
+          }
+
+          if (payload?.type === 'file') {
+            fileNotes.push(`文件输出：${payload.mediaType || 'unknown'}（详见原始响应）`);
+            continue;
+          }
+
+          if (payload?.type === 'source-url') {
+            sourceNotes.push(`来源链接：${payload.title || payload.url || payload.sourceId || '未命名链接'}`);
+            continue;
+          }
+
+          if (payload?.type === 'source-document') {
+            sourceNotes.push(`来源文档：${payload.title || payload.filename || payload.sourceId || '未命名文档'}${payload.filename ? `（${payload.filename}）` : ''}`);
+            continue;
+          }
+
+          if (payload?.type === 'tool-input-start' || payload?.type === 'tool-call') {
+            const id = payload.toolCallId || 'unknown';
+            const current = tools.get(id) || { id, inputChars: 0 };
+            tools.set(id, {
+              ...current,
+              id,
+              name: payload.toolName || current.name,
+              title: payload.title || current.title,
+              status: '正在准备输入',
+            });
+            continue;
+          }
+
+          if (payload?.type === 'tool-input-delta') {
+            const id = payload.toolCallId || 'unknown';
+            const current = tools.get(id) || { id, inputChars: 0 };
+            tools.set(id, {
+              ...current,
+              id,
+              status: '正在传输输入',
+              inputChars: (current.inputChars || 0) + String(payload.inputTextDelta || '').length,
+            });
+            continue;
+          }
+
+          if (payload?.type === 'tool-input-available') {
+            const id = payload.toolCallId || 'unknown';
+            const current = tools.get(id) || { id, inputChars: 0 };
+            tools.set(id, {
+              ...current,
+              id,
+              name: payload.toolName || current.name,
+              title: payload.title || current.title,
+              status: '输入已就绪',
+            });
+            continue;
+          }
+
+          if (payload?.type === 'tool-input-error') {
+            const id = payload.toolCallId || 'unknown';
+            const current = tools.get(id) || { id, inputChars: 0 };
+            tools.set(id, {
+              ...current,
+              id,
+              name: payload.toolName || current.name,
+              title: payload.title || current.title,
+              status: '输入解析失败',
+            });
+            continue;
+          }
+
+          if (payload?.type === 'tool-approval-request') {
+            const id = payload.toolCallId || 'unknown';
+            const current = tools.get(id) || { id, inputChars: 0 };
+            tools.set(id, {
+              ...current,
+              id,
+              status: '等待批准',
+            });
+            continue;
+          }
+
+          if (payload?.type === 'tool-output-available' || payload?.type === 'tool-result') {
+            const id = payload.toolCallId || 'unknown';
+            const current = tools.get(id) || { id, inputChars: 0 };
+            tools.set(id, {
+              ...current,
+              id,
+              name: payload.toolName || current.name,
+              title: payload.title || current.title,
+              status: payload.preliminary ? '已返回中间结果' : '已返回结果',
+            });
+            continue;
+          }
+
+          if (payload?.type === 'tool-output-error' || payload?.type === 'tool-error') {
+            const id = payload.toolCallId || 'unknown';
+            const current = tools.get(id) || { id, inputChars: 0 };
+            tools.set(id, {
+              ...current,
+              id,
+              name: payload.toolName || current.name,
+              title: payload.title || current.title,
+              status: '执行失败',
+            });
+            continue;
+          }
+
+          if (payload?.type === 'tool-output-denied') {
+            const id = payload.toolCallId || 'unknown';
+            const current = tools.get(id) || { id, inputChars: 0 };
+            tools.set(id, {
+              ...current,
+              id,
+              status: '已被拒绝',
+            });
+            continue;
+          }
+
+          const delta = extractStreamTextPayload(payload);
+          if (!delta) continue;
+          text += delta;
+          textChunks += 1;
+        } catch {
+          // Ignore non-JSON or incomplete data events in preview mode.
+        }
+      }
+      return {
+        text,
+        reasoning,
+        eventCount: events.length,
+        textChunks,
+        reasoningChunks,
+        fileNotes,
+        sourceNotes,
+        toolNotes: Array.from(tools.values()).map(formatToolPreview),
+        extraNotesCount: fileNotes.length + sourceNotes.length + tools.size,
+        hasSse: events.length > 0,
+      };
+    }
+
+    function renderPreviewForJson(path, data, response) {
+      if (path === '/api/generate') {
+        const content = Array.isArray(data?.content) ? data.content : [];
+        const fileCount = content.filter((part) => part?.type === 'file').length;
+        setPreview('Generate 结果预览', extractGenerateText(data), [
+          { label: 'finish reason', value: data?.finishReason || 'unknown' },
+          { label: 'total tokens', value: String(data?.usage?.totalTokens ?? '-') },
+          { label: 'file parts', value: String(fileCount) },
+        ]);
+        return;
+      }
+      if (path === '/v1/chat/completions') {
+        setPreview('Chat Completions 预览', extractChatText(data), [
+          { label: 'model', value: data?.model || '-' },
+          { label: 'finish reason', value: data?.choices?.[0]?.finish_reason || '-' },
+          { label: 'status', value: `${response.status} ${response.statusText}`.trim() },
+        ]);
+        return;
+      }
+      setPreview('JSON 响应预览', JSON.stringify(data, null, 2), [{ label: 'status', value: `${response.status}` }]);
+    }
+
+    function renderStreamPreview(raw, response, finished = false) {
+      const contentType = response.headers.get('content-type') || '';
+      const summary = summarizeStreamPreview(raw, finished);
+      const compact = raw.trim();
+      const isEventStream = /text\/event-stream/i.test(contentType) || summary.hasSse;
+      const fallbackText = isEventStream
+        ? (finished ? '（流已结束，但没有可显示内容）' : '正在等待模型开始输出…')
+        : (compact || (finished ? '（响应为空）' : '正在等待响应体…'));
+      const previewBody = buildStreamPreviewBody(summary, fallbackText, finished);
+      setPreview('流式预览', previewBody, [
+        { label: 'status', value: `${response.status} ${response.statusText}`.trim() },
+        { label: 'events', value: String(summary.eventCount) },
+        { label: 'chunks', value: String(summary.textChunks) },
+        { label: 'reasoning', value: String(summary.reasoningChunks) },
+        { label: 'notes', value: String(summary.extraNotesCount) },
+        { label: 'mode', value: isEventStream ? 'typewriter' : (contentType || 'stream') },
+      ], {
+        typing: response.ok && !finished && isEventStream,
+      });
+    }
+
+    function buildPayload(tab) {
+      if (tab === 'stream') {
+        return {
+          path: endpoints.stream,
+          payload: { model: value('stream-model', defaults.model), prompt: value('stream-prompt', '请用三句话介绍一下流式输出，并在最后给一个简短总结。') },
+          stream: true,
+        };
+      }
+      if (tab === 'chat') {
+        return {
+          path: endpoints.chat,
+          payload: { model: value('chat-model', defaults.proxyModel), messages: [{ role: 'user', content: value('chat-prompt', '你好，请按 OpenAI Chat Completions 风格回复一句话，并给出一句建议。') }], stream: true },
+          stream: true,
+        };
+      }
+      return {
+        path: endpoints.generate,
+        payload: { model: value('generate-model', defaults.model), prompt: value('generate-prompt', '你好，介绍一下你自己，并用三点说明这个网关适合什么场景。') },
+        stream: false,
+      };
+    }
+
+    function renderExample() {
+      const request = buildPayload(activeTab);
+      const el = $('example');
+      if (!el) return;
+      const adminKey = getAdminKey();
+      el.textContent = `curl \\
   -X POST \\
   -H "Content-Type: application/json" \\
-  "${location.origin}/api/generate" \\
-  -d '{"provider":"${value('generate-provider',defaults.provider)}","model":"${value('generate-model',defaults.model)}","prompt":"你好，介绍一下你自己。"}'`)}
-    async function readJsonOrText(response){const raw=await response.text();try{return JSON.stringify(JSON.parse(raw),null,2)}catch{return raw||'(empty response)'}}
-    async function sendJsonRequest(path,payload,outputId,options={}){text(outputId,'POST '+path+'\n\n'+JSON.stringify(payload,null,2)+'\n\nloading...');const response=await fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(payload)});if(options.stream&&response.body){const reader=response.body.getReader();const decoder=new TextDecoder();const header='HTTP '+response.status+' '+response.statusText+'\n\n';let body='';text(outputId,header);for(;;){const {value,done}=await reader.read();if(done) break;body+=decoder.decode(value,{stream:true});text(outputId,header+body)}body+=decoder.decode();text(outputId,header+(body||'(empty response)'));return}text(outputId,'HTTP '+response.status+' '+response.statusText+'\n\n'+await readJsonOrText(response))}
-    function attachForm(formId,outputId,buildRequest,options){const form=$(formId);if(!form) return;form.addEventListener('submit',async event=>{event.preventDefault();const button=form.querySelector('button[type="submit"]');if(button) button.disabled=true;try{const request=buildRequest();await sendJsonRequest(request.path,request.payload,outputId,options)}catch(error){text(outputId,error instanceof Error?error.message:String(error))}finally{if(button) button.disabled=false}})}
-    attachForm('generate-form','generate-output',()=>({path:'/api/generate',payload:{provider:value('generate-provider',defaults.provider),model:value('generate-model',defaults.model),prompt:value('generate-prompt','你好，介绍一下你自己。')}}));
-    attachForm('stream-form','stream-output',()=>({path:'/api/stream',payload:{provider:value('stream-provider',defaults.provider),model:value('stream-model',defaults.model),prompt:value('stream-prompt','请用三句话介绍一下流式输出。')}}),{stream:true});
-    attachForm('chat-form','chat-output',()=>({path:'/v1/chat/completions?provider='+encodeURIComponent(value('chat-provider',defaults.proxyProvider)),payload:{model:value('chat-model',defaults.proxyModel),messages:[{role:'user',content:value('chat-prompt','你好，请按 OpenAI Chat Completions 风格回复一句话。')}]}}));
-    ids.forEach(id=>$(id)?.addEventListener('input',renderExample));renderExample();
+  -H "x-admin-key: ${adminKey || 'replace-with-admin-key'}" \\
+  "${location.origin}${request.path}" \\
+  -d '${JSON.stringify(request.payload)}'`;
+    }
+
+    function switchTab(tab) {
+      activeTab = tab;
+      document.querySelectorAll('.tab').forEach((button) => button.classList.toggle('active', button.dataset.tab === tab));
+      document.querySelectorAll('.panel').forEach((panel) => panel.classList.toggle('active', panel.dataset.panel === tab));
+      const endpoint = $('response-endpoint');
+      if (endpoint) endpoint.textContent = `当前目标：${endpoints[tab]} · ${endpointNotes[tab]}`;
+      renderExample();
+    }
+
+    async function readJsonOrText(response) {
+      const raw = await response.text();
+      try {
+        const data = JSON.parse(raw);
+        return { raw: JSON.stringify(data, null, 2), data };
+      } catch {
+        return { raw: raw || '(empty response)', data: null };
+      }
+    }
+
+    async function sendRequest({ path, payload, stream }) {
+      const preview = $('response-preview');
+      setStatus(`正在请求 ${path} ...`, 'working');
+      setRawOutput(`POST ${path}\n\n${JSON.stringify(payload, null, 2)}\n\nwaiting...`);
+      if (preview) {
+        preview.classList.add('empty');
+        preview.textContent = '请求已发出，等待响应中...';
+      }
+
+      const response = await fetch(path, {
+        method: 'POST',
+        headers: buildGatewayHeaders(),
+        body: JSON.stringify(payload),
+      });
+
+      if (stream && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let body = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          body += decoder.decode(value, { stream: true });
+          setRawOutput(`HTTP ${response.status} ${response.statusText}\n\n${body}`);
+          renderStreamPreview(body, response, false);
+        }
+        body += decoder.decode();
+        setRawOutput(`HTTP ${response.status} ${response.statusText}\n\n${body || '(empty response)'}`);
+        renderStreamPreview(body, response, true);
+        setStatus(response.ok ? `流式请求完成：${path}` : `流式请求失败：${path}`, response.ok ? 'success' : 'error');
+        return;
+      }
+
+      const { raw, data } = await readJsonOrText(response);
+      setRawOutput(`HTTP ${response.status} ${response.statusText}\n\n${raw}`);
+      if (data) {
+        renderPreviewForJson(path, data, response);
+      } else {
+        setPreview('文本响应预览', raw, [{ label: 'status', value: `${response.status} ${response.statusText}`.trim() }]);
+      }
+      setStatus(response.ok ? `请求成功：${path}` : `请求失败：${path}`, response.ok ? 'success' : 'error');
+    }
+
+    document.querySelectorAll('.tab').forEach((button) => {
+      button.addEventListener('click', () => switchTab(button.dataset.tab || 'generate'));
+    });
+
+    const forms = {
+      'generate-form': () => buildPayload('generate'),
+      'stream-form': () => buildPayload('stream'),
+      'chat-form': () => buildPayload('chat'),
+    };
+
+    Object.entries(forms).forEach(([formId, builder]) => {
+      const form = $(formId);
+      if (!form) return;
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const button = form.querySelector('button[type="submit"]');
+        if (button) button.disabled = true;
+        try {
+          await sendRequest(builder());
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          setStatus(message, 'error');
+          setPreview('请求异常', message, [{ label: 'status', value: 'client error' }]);
+          setRawOutput(error instanceof Error ? error.stack || error.message : String(error));
+        } finally {
+          if (button) button.disabled = false;
+        }
+      });
+    });
+
+    const storedAdminKey = readStoredAdminKey();
+    if (storedAdminKey && $('admin-key')) {
+      $('admin-key').value = storedAdminKey;
+    }
+
+    $('admin-key')?.addEventListener('input', (event) => {
+      writeStoredAdminKey(event.target.value.trim());
+      renderExample();
+    });
+
+    ['generate-model','generate-prompt','stream-model','stream-prompt','chat-model','chat-prompt'].forEach((id) => {
+      $(id)?.addEventListener('input', renderExample);
+    });
+
+    $('copy-example')?.addEventListener('click', async () => {
+      const content = $('example')?.textContent || '';
+      try {
+        await navigator.clipboard.writeText(content);
+        setStatus('curl 示例已复制到剪贴板。', 'success');
+      } catch {
+        setStatus('复制失败，请手动复制右侧 curl 示例。', 'error');
+      }
+    });
+
+    switchTab(activeTab);
   </script>
 </body>
 </html>
