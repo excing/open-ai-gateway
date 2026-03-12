@@ -161,19 +161,21 @@ async function buildAiSdkRequest({ body, env, url }) {
     throw new Error('Request body must be a JSON object.');
   }
 
-  rejectLegacyApiAliases(body);
   rejectUnsupportedAiSdkOptions(body);
 
-  const resolved = resolveModel({
+  const orderedCandidates = resolveChannels({
     env,
-    model: body?.model || url.searchParams.get('model'),
+    model: body?.model || url.searchParams.get('model')
   });
-  const tools = buildDeclarativeTools(body.tools);
-  const promptInput = await normalizeAiSdkPromptInput(body, tools);
+
+  const resolved = buildActiveModelCandidate(...orderedCandidates);
 
   if (!resolved.languageModel || !resolved.model) {
     throw new Error(`No AI SDK channel resolved for model \`${resolved.model || 'unknown'}\`.`);
   }
+
+  const tools = buildDeclarativeTools(body.tools);
+  const promptInput = await normalizeAiSdkPromptInput(body, tools);
 
   return {
     resolved,
@@ -188,12 +190,12 @@ async function buildAiSdkRequest({ body, env, url }) {
       headers: isPlainObject(body?.headers) ? sanitizeRequestHeaders(body.headers) : undefined,
       providerOptions: isPlainObject(body?.providerOptions) ? body.providerOptions : undefined,
       temperature: toNumber(body?.temperature),
-      topP: toNumber(body?.topP),
-      topK: toInteger(body?.topK),
-      maxOutputTokens: toInteger(body?.maxOutputTokens),
-      presencePenalty: toNumber(body?.presencePenalty),
-      frequencyPenalty: toNumber(body?.frequencyPenalty),
-      stopSequences: normalizeStopSequences(body?.stopSequences),
+      topP: toNumber(body?.topP ?? body?.top_p),
+      topK: toInteger(body?.topK ?? body?.top_k),
+      maxOutputTokens: toInteger(body?.maxOutputTokens ?? body?.max_tokens ?? body?.maxTokens),
+      presencePenalty: toNumber(body?.presencePenalty ?? body?.presence_penalty),
+      frequencyPenalty: toNumber(body?.frequencyPenalty ?? body?.frequency_penalty),
+      stopSequences: normalizeStopSequences(body?.stopSequences ?? body?.stop),
       seed: toInteger(body?.seed),
       maxRetries: toInteger(body?.maxRetries),
       timeout: normalizeTimeout(body?.timeout),
@@ -202,7 +204,8 @@ async function buildAiSdkRequest({ body, env, url }) {
 }
 
 async function normalizeAiSdkPromptInput(body, tools) {
-  const prompt = body.prompt == null ? undefined : await normalizePromptValue(body.prompt, tools);
+  const promptValue = body.prompt ?? body.input;
+  const prompt = promptValue == null ? undefined : await normalizePromptValue(promptValue, tools);
   const messages = body.messages == null ? undefined : await normalizeMessageInput(body.messages, '`messages`', tools);
   const system = body.system == null ? undefined : normalizeSystemInput(body.system);
 
@@ -399,25 +402,6 @@ function normalizeTimeout(value) {
   return timeout;
 }
 
-function rejectLegacyApiAliases(body) {
-  const legacyAliases = {
-    input: 'prompt',
-    top_p: 'topP',
-    top_k: 'topK',
-    max_tokens: 'maxOutputTokens',
-    maxTokens: 'maxOutputTokens',
-    presence_penalty: 'presencePenalty',
-    frequency_penalty: 'frequencyPenalty',
-    stop: 'stopSequences',
-  };
-
-  for (const [legacyKey, replacement] of Object.entries(legacyAliases)) {
-    if (legacyKey in body) {
-      throw new Error(`\`${legacyKey}\` is not supported on \`/api\` routes. Use AI SDK field \`${replacement}\` instead.`);
-    }
-  }
-}
-
 function rejectUnsupportedAiSdkOptions(body) {
   const unsupportedOptions = ['output', 'experimental_output', 'stopWhen', 'prepareStep', 'experimental_prepareStep', 'experimental_download', 'abortSignal'];
 
@@ -488,15 +472,7 @@ function resolveChannels({ env, model, random = Math.random }) {
   return orderedCandidates;
 }
 
-function resolveModel({ env, model, random = Math.random, allowFailover = true }) {
-  const orderedCandidates = resolveChannels({ env, model, random });
-
-  const candidates = allowFailover ? orderedCandidates : orderedCandidates.slice(0, 1);
-
-  return buildActiveModelCandidate(candidates)
-}
-
-function buildActiveModelCandidate(candidates) {
+function buildActiveModelCandidate(...candidates) {
   if (!Array.isArray(candidates) || candidates.length === 0) {
     throw new Error(`No candidates provided.`);
   }
@@ -893,4 +869,4 @@ function withCors(response) {
 }
 
 
-export { api, buildAiSdkRequest, buildModelList, resolveModel, v1 };
+export { api, buildAiSdkRequest, buildModelList, v1 };

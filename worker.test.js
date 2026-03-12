@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
-import worker, { buildAiSdkRequest, resolveModel } from './worker.js';
+import worker, { buildAiSdkRequest } from './worker.js';
 
 const indexHtml = readFileSync(new URL('./public/index.html', import.meta.url), 'utf8');
 
@@ -111,136 +111,6 @@ async function withMockedRandom(randomValue, callback) {
     Math.random = originalRandom;
   }
 }
-
-test('resolveModel returns the request target callers need', () => {
-  const resolved = resolveModel({
-    env: baseEnv,
-    model: 'gpt-4.1-mini',
-    random: () => 0,
-    allowFailover: false,
-  });
-
-  assert.equal(resolved.channel, 'openai-main');
-  assert.equal(resolved.provider, 'openai');
-  assert.equal(resolved.model, 'gpt-4.1-mini');
-  assert.equal(typeof resolved.languageModel?.doGenerate, 'function');
-});
-
-test('resolveModel randomizes same-model channels into failover order', () => {
-  const resolved = resolveModel({
-    env: baseEnv,
-    model: 'gpt-4o-mini',
-    random: () => 0,
-  });
-
-  assert.equal(resolved.channel, 'groq-gpt4o-mini');
-  assert.equal(resolved.languageModel?.provider, 'groq-gpt4o-mini');
-  assert.equal(resolved.languageModel?.modelId, 'gpt-4o-mini');
-});
-
-test('resolveModel keeps a single candidate when allowFailover is false', () => {
-  const resolved = resolveModel({
-    env: baseEnv,
-    model: 'gpt-4o-mini',
-    random: () => 0,
-    allowFailover: false,
-  });
-
-  assert.equal(resolved.channel, 'groq-gpt4o-mini');
-  assert.equal(resolved.languageModel?.provider, 'groq-gpt4o-mini');
-  assert.equal(resolved.languageModel?.modelId, 'gpt-4o-mini');
-});
-
-test('resolveModel matches model names case-insensitively across channels', () => {
-  const env = envWithConfig({
-    channels: [
-      {
-        name: 'Model Lower',
-        key: 'model-lower',
-        provider: 'openai',
-        apiKey: 'sk-lower',
-        baseURL: 'https://api.openai.com/v1',
-        models: [{ code: 'gpt-4o-mini' }],
-        headers: {},
-      },
-      {
-        name: 'Model Upper',
-        key: 'model-upper',
-        provider: 'openai',
-        apiKey: 'sk-upper',
-        baseURL: 'https://api.openai.com/v1',
-        models: [{ code: 'GPT-4O-MINI' }],
-        headers: {},
-      },
-      {
-        name: 'Model Mixed',
-        key: 'model-mixed',
-        provider: 'openai',
-        apiKey: 'sk-mixed',
-        baseURL: 'https://api.openai.com/v1',
-        models: [{ code: 'GpT-4O-MiNi' }],
-        headers: {},
-      },
-      {
-        name: 'Other Model',
-        key: 'other-model',
-        provider: 'openai',
-        apiKey: 'sk-other',
-        baseURL: 'https://api.openai.com/v1',
-        models: [{ code: 'gpt-4.1-mini' }],
-        headers: {},
-      },
-    ],
-  });
-
-  const resolved = resolveModel({
-    env,
-    model: 'gPt-4o-MiNi',
-    random: () => 0,
-  });
-
-  assert.ok(['model-lower', 'model-upper', 'model-mixed'].includes(resolved.channel));
-  assert.equal(resolved.provider, 'openai');
-  assert.equal(resolved.model.toLowerCase(), 'gpt-4o-mini');
-});
-
-test('resolveModel matches aliases case-insensitively and normalizes to model code', () => {
-  const env = envWithConfig({
-    channels: [
-      {
-        name: 'Aliased Model',
-        key: 'aliased-model',
-        provider: 'openai',
-        apiKey: 'sk-aliased',
-        baseURL: 'https://api.openai.com/v1',
-        models: [{ code: 'gpt-4o-mini', name: 'GPT-4o Mini', desc: 'OpenAI compatible model', aliases: ['openai-gpt-4o-mini'] }],
-        headers: {},
-      },
-      {
-        name: 'Other Model',
-        key: 'other-model',
-        provider: 'openai',
-        apiKey: 'sk-other',
-        baseURL: 'https://api.openai.com/v1',
-        models: [{ code: 'gpt-4.1-mini' }],
-        headers: {},
-      },
-    ],
-  });
-
-  const resolved = resolveModel({
-    env,
-    model: 'OPENAI-GPT-4O-MINI',
-    random: () => 0,
-  });
-
-  assert.equal(resolved.model, 'gpt-4o-mini');
-  assert.equal(resolved.channel, 'aliased-model');
-});
-
-test('resolveModel requires model', () => {
-  assert.throws(() => resolveModel({ env: baseEnv }), /`model` is required\./);
-});
 
 test('buildAiSdkRequest ignores incoming provider and channel', async () => {
   const env = envWithConfig({
@@ -549,11 +419,41 @@ test('buildAiSdkRequest rejects mixing UI messages and model messages', async ()
   );
 });
 
-test('buildAiSdkRequest rejects legacy /api aliases', async () => {
-  await assert.rejects(
-    () => buildApiCall({ model: 'gpt-4o-mini', input: 'ping' }),
-    /`input` is not supported on `\/api` routes\. Use AI SDK field `prompt` instead\./,
-  );
+test('buildAiSdkRequest accepts legacy /api aliases and normalizes them', async () => {
+  const { call } = await buildApiCall({
+    model: 'gpt-4o-mini',
+    input: 'ping',
+    top_p: '0.5',
+    top_k: '20',
+    max_tokens: '128',
+    presence_penalty: '0.1',
+    frequency_penalty: '0.2',
+    stop: ['DONE'],
+  });
+
+  assert.equal(call.prompt, 'ping');
+  assert.equal(call.topP, 0.5);
+  assert.equal(call.topK, 20);
+  assert.equal(call.maxOutputTokens, 128);
+  assert.equal(call.presencePenalty, 0.1);
+  assert.equal(call.frequencyPenalty, 0.2);
+  assert.deepEqual(call.stopSequences, ['DONE']);
+});
+
+test('buildAiSdkRequest prefers canonical AI SDK fields over legacy aliases', async () => {
+  const { call } = await buildApiCall({
+    model: 'gpt-4o-mini',
+    prompt: 'canonical',
+    input: 'legacy',
+    topP: 0.9,
+    top_p: 0.5,
+    maxOutputTokens: 256,
+    max_tokens: 128,
+  });
+
+  assert.equal(call.prompt, 'canonical');
+  assert.equal(call.topP, 0.9);
+  assert.equal(call.maxOutputTokens, 256);
 });
 
 test('buildAiSdkRequest rejects non-JSON AI SDK runtime options', async () => {
@@ -780,7 +680,10 @@ test('api generate validates missing prompt or messages', async () => {
 });
 
 test('missing GATEWAY_CONFIG_JSON returns a clear error', () => {
-  assert.throws(() => resolveModel({ env: {} }), /Missing `GATEWAY_CONFIG_JSON`/);
+  assert.rejects(
+    () => buildApiCall({ model: 'gpt-4o-mini', prompt: 'ping' }, { env: {} }),
+    /Missing `GATEWAY_CONFIG_JSON`/,
+  );
 });
 
 test('missing ADMIN_KEY returns a clear error on protected routes', async () => {
