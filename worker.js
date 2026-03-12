@@ -428,45 +428,28 @@ function rejectUnsupportedAiSdkOptions(body) {
   }
 }
 
-function buildResolvedChannel(channel, modelCode) {
+function buildResolvedChannel(channel, model) {
+  console.info(channel, model);
   const provider = String(firstString(channel?.provider) || '').toLowerCase();
-  const defaults = DEFAULT_PROVIDER_CATALOG[provider] || DEFAULT_PROVIDER_CATALOG[kind] || {};
-  const models = Array.isArray(channel?.models) ? channel.models : [];
-  const callType = firstString(models[0]?.callType) || CALL_TYPES.CHAT;
-  const finalModel = firstString(modelCode) || firstString(models[0]?.code) || '';
+  const defaults = DEFAULT_PROVIDER_CATALOG[provider] || DEFAULT_PROVIDER_CATALOG[provider] || {};
+  const callType = firstString(model?.callType) || CALL_TYPES.CHAT;
+  const finalModelCode = firstString(model.code) || '';
   const key = firstString(channel?.key) || '';
-  const name = firstString(channel?.name) || key;
   const baseURL = normalizeBaseURL(firstString(channel?.baseURL) || defaults.baseURL || '');
   const apiKey = firstString(channel?.apiKey) || '';
   const headers = sanitizeHeaders(channel?.headers);
+  const languageModel = finalModelCode
+    ? createGatewayLanguageModel({
+      channelKey: key,
+      model: finalModelCode,
+      languageModel: instantiateLanguageModel(
+        { provider, baseURL, apiKey, callType, headers, },
+        finalModelCode,
+      ),
+    })
+    : null;
 
-  return {
-    key,
-    provider,
-    model: finalModel,
-    callType,
-    baseURL,
-    apiKey,
-    headers,
-    languageModel: finalModel
-      ? createGatewayLanguageModel({
-        channelKey: key,
-        model: finalModel,
-        languageModel: instantiateLanguageModel(
-          {
-            ...channel,
-            name,
-            provider,
-            baseURL,
-            apiKey,
-            callType,
-            headers,
-          },
-          finalModel,
-        ),
-      })
-      : null,
-  };
+  return { key, provider, model: finalModelCode, callType, baseURL, apiKey, headers, languageModel, };
 }
 
 function resolveChannels({ env, model, random = Math.random }) {
@@ -494,7 +477,7 @@ function resolveChannels({ env, model, random = Math.random }) {
         );
       });
 
-      return matchedModel ? [buildResolvedChannel(channel, firstString(matchedModel.code))] : [];
+      return matchedModel ? [buildResolvedChannel(channel, matchedModel)] : [];
     }),
     random,
   );
@@ -606,21 +589,7 @@ function getActiveResolvedCandidate(candidates, languageModel) {
   const activeChannel = firstString(languageModel?.provider);
   const activeModel = firstString(languageModel?.modelId);
 
-  if (activeChannel && activeModel) {
-    const exactMatch = candidates.find((candidate) => candidate.key === activeChannel && candidate.model === activeModel);
-    if (exactMatch) {
-      return exactMatch;
-    }
-  }
-
-  if (activeChannel) {
-    const channelMatch = candidates.find((candidate) => candidate.key === activeChannel);
-    if (channelMatch) {
-      return channelMatch;
-    }
-  }
-
-  return candidates[0];
+  return candidates.find((candidate) => candidate.key === activeChannel && candidate.model === activeModel);
 }
 
 function shuffleArray(items, random = Math.random) {
