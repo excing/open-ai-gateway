@@ -315,25 +315,26 @@ test('static index page uses location.origin without frontend metadata loading',
   assert.equal(indexHtml.includes('gatewayBaseUrl'), false);
 });
 
-test('static index page renders model-only request forms for api and proxy routes', () => {
+test('static index page renders model-only request forms for current api routes', () => {
   assert.equal(indexHtml.includes('id="generate-form"'), true);
   assert.equal(indexHtml.includes('id="stream-form"'), true);
-  assert.equal(indexHtml.includes('id="chat-form"'), true);
-  assert.equal(indexHtml.includes('id="chat-stream"'), true);
+  assert.equal(indexHtml.includes('id="chat-form"'), false);
+  assert.equal(indexHtml.includes('id="chat-stream"'), false);
   assert.equal(indexHtml.includes('发送到 /api/generate'), true);
   assert.equal(indexHtml.includes('发送到 /api/stream'), true);
-  assert.equal(indexHtml.includes('发送到 /v1/chat/completions'), true);
+  assert.equal(indexHtml.includes('发送到 /v1/chat/completions'), false);
   assert.equal(indexHtml.includes('generate-provider'), false);
   assert.equal(indexHtml.includes('stream-provider'), false);
   assert.equal(indexHtml.includes('chat-provider'), false);
   assert.equal(indexHtml.includes('/v1/chat/completions?provider='), false);
-  assert.equal(indexHtml.includes("const defaults={model:'moonshotai/kimi-k2-instruct-0905',proxyModel:'moonshotai/kimi-k2-instruct-0905'};"), true);
+  assert.equal(indexHtml.includes("const defaults={model:'moonshotai/kimi-k2-instruct-0905'};"), true);
   assert.equal(indexHtml.includes('由后端决定走哪条 channel'), true);
-  assert.equal(indexHtml.includes('OpenAI Chat Completions 透明代理（支持流式开关）'), true);
-  assert.equal(indexHtml.includes('流式响应（stream）'), true);
-  assert.equal(indexHtml.includes('开启后按 SSE 增量预览；关闭后展示最终 JSON 响应。'), true);
-  assert.equal(indexHtml.includes('const stream = isChatStreamEnabled();'), true);
-  assert.equal(indexHtml.includes("payload: { model: value('chat-model', defaults.proxyModel), messages: [{ role: 'user', content: value('chat-prompt', '你好，请按 OpenAI Chat Completions 风格回复一句话，并给出一句建议。') }], stream }"), true);
+  assert.equal(indexHtml.includes('/v1/models'), true);
+  assert.equal(indexHtml.includes('OpenAI Chat Completions 透明代理（支持流式开关）'), false);
+  assert.equal(indexHtml.includes('流式响应（stream）'), false);
+  assert.equal(indexHtml.includes('开启后按 SSE 增量预览；关闭后展示最终 JSON 响应。'), false);
+  assert.equal(indexHtml.includes('const stream = isChatStreamEnabled();'), false);
+  assert.equal(indexHtml.includes('proxyModel'), false);
   assert.equal(indexHtml.includes('网关状态'), false);
   assert.equal(indexHtml.includes('公开配置'), false);
   assert.equal(indexHtml.includes('已暴露模型'), false);
@@ -436,121 +437,19 @@ test('v1 models returns canonical codes without exposing aliases as separate mod
   assert.equal(ids.includes('openai-gpt-4o-mini'), false);
 });
 
-test('v1 chat completions proxies directly to upstream without local reformatting', async () => {
-  const originalFetch = globalThis.fetch;
-  const upstreamCalls = [];
-  const requestBody = {
-    model: 'gpt-4o-mini',
-    messages: [{ role: 'user', content: 'hello gateway' }],
-    stream: true,
-  };
-
-  globalThis.fetch = async (url, init = {}) => {
-    upstreamCalls.push({
-      url: String(url),
-      method: init.method,
-      headers: new Headers(init.headers),
-      body: init.body ? await new Response(init.body).text() : '',
-    });
-
-    return new Response(JSON.stringify({ id: 'chatcmpl-upstream' }), {
-      status: 200,
-      headers: { 'content-type': 'application/json', 'x-upstream': '1' },
-    });
-  };
-
-  try {
-    await withMockedRandom(0, async () => {
-      const response = await worker.fetch(
-        authedRequest('https://example.com/v1/chat/completions?provider=ignored&channel=ignored', {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-            authorization: 'Bearer client-key',
-            'x-provider': 'ignored',
-            'x-channel': 'ignored',
-          },
-          body: JSON.stringify(requestBody),
-        }),
-        baseEnv,
-      );
-
-      assert.equal(response.status, 200);
-      assert.equal(upstreamCalls.length, 1);
-      assert.equal(upstreamCalls[0].url, 'https://api.groq.com/openai/v1/chat/completions');
-      assert.equal(upstreamCalls[0].method, 'POST');
-      assert.equal(upstreamCalls[0].headers.get('authorization'), 'Bearer groq-key');
-      assert.equal(upstreamCalls[0].headers.get('x-provider'), null);
-      assert.equal(upstreamCalls[0].headers.get('x-channel'), null);
-      assert.equal(upstreamCalls[0].headers.get('x-admin-key'), null);
-      assert.equal(upstreamCalls[0].body, JSON.stringify(requestBody));
-      assert.equal(response.headers.get('x-gateway-channel'), 'groq-gpt4o-mini');
-      assert.equal(response.headers.get('x-gateway-provider'), 'openai-compatible');
-      assert.equal(response.headers.get('x-gateway-model'), 'gpt-4o-mini');
-
-      const data = await response.json();
-      assert.equal(data.id, 'chatcmpl-upstream');
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test('v1 chat completions normalizes alias model to code upstream', async () => {
-  const env = envWithConfig({
-    channels: [
-      {
-        name: 'Groq Alias',
-        key: 'groq-alias',
-        provider: 'groq',
-        apiKey: 'groq-key',
-        baseURL: 'https://api.groq.com/openai/v1',
-        models: [{ code: 'gpt-4o-mini', aliases: ['openai-gpt-4o-mini'] }],
-        headers: {},
-      },
-    ],
-  });
-  const originalFetch = globalThis.fetch;
-  const upstreamCalls = [];
-  const requestBody = {
-    model: 'openai-gpt-4o-mini',
-    messages: [{ role: 'user', content: 'hello gateway' }],
-    stream: false,
-  };
-
-  globalThis.fetch = async (url, init = {}) => {
-    upstreamCalls.push({
-      url: String(url),
-      method: init.method,
-      headers: new Headers(init.headers),
-      body: init.body ? await new Response(init.body).text() : '',
-    });
-
-    return new Response(JSON.stringify({ id: 'chatcmpl-upstream' }), {
-      status: 200,
+test('v1 routes other than models return 404', async () => {
+  const response = await worker.fetch(
+    authedRequest('https://example.com/v1/chat/completions', {
+      method: 'POST',
       headers: { 'content-type': 'application/json' },
-    });
-  };
+      body: JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: 'hello gateway' }] }),
+    }),
+    baseEnv,
+  );
 
-  try {
-    const response = await worker.fetch(
-      authedRequest('https://example.com/v1/chat/completions', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      }),
-      env,
-    );
-
-    assert.equal(response.status, 200);
-    assert.equal(upstreamCalls.length, 1);
-    assert.equal(upstreamCalls[0].url, 'https://api.groq.com/openai/v1/chat/completions');
-    assert.equal(upstreamCalls[0].headers.get('authorization'), 'Bearer groq-key');
-    assert.equal(upstreamCalls[0].body, JSON.stringify({ ...requestBody, model: 'gpt-4o-mini' }));
-    assert.equal(response.headers.get('x-gateway-model'), 'gpt-4o-mini');
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
+  assert.equal(response.status, 404);
+  const data = await response.json();
+  assert.match(data?.error?.message || '', /Unsupported API route: \/v1\/chat\/completions/);
 });
 
 test('buildAiSdkRequest converts UI messages via convertToModelMessages and keeps declarative tools', async () => {
@@ -705,7 +604,7 @@ test('api stream returns an event stream for AI SDK routes', async () => {
       assert.equal(response.status, 200);
       assert.match(response.headers.get('content-type') || '', /text\/event-stream/i);
       assert.equal(response.headers.get('x-gateway-channel'), 'groq-gpt4o-mini');
-      assert.equal(response.headers.get('x-gateway-provider'), 'openai-compatible');
+      assert.equal(response.headers.get('x-gateway-provider'), 'groq');
       assert.equal(response.headers.get('x-gateway-model'), 'gpt-4o-mini');
 
       const body = await response.text();
@@ -768,7 +667,7 @@ test('api generate returns stable json for successful text generation', async ()
       assert.equal(response.status, 200);
       assert.match(response.headers.get('content-type') || '', /application\/json/i);
       assert.equal(response.headers.get('x-gateway-channel'), 'groq-gpt4o-mini');
-      assert.equal(response.headers.get('x-gateway-provider'), 'openai-compatible');
+      assert.equal(response.headers.get('x-gateway-provider'), 'groq');
       assert.equal(response.headers.get('x-gateway-model'), 'gpt-4o-mini');
       assert.equal(upstreamCalls.length, 1);
       assert.equal(upstreamCalls[0].url, 'https://api.groq.com/openai/v1/chat/completions');

@@ -103,7 +103,7 @@ async function v1({ request, env, url }) {
   if (request.method === 'GET' && url.pathname === '/v1/models') {
     return jsonResponse({ object: 'list', data: buildModelList(env) });
   }
-  return jsonResponse({ error: { message: `Unsupported API route: ${path}` } }, 404);
+  return jsonResponse({ error: { message: `Unsupported API route: ${url.pathname}` } }, 404);
 }
 
 async function handleGenerateRequest({ body, env, url }) {
@@ -429,7 +429,6 @@ function rejectUnsupportedAiSdkOptions(body) {
 }
 
 function buildResolvedChannel(channel, model) {
-  console.info(channel, model);
   const provider = String(firstString(channel?.provider) || '').toLowerCase();
   const defaults = DEFAULT_PROVIDER_CATALOG[provider] || DEFAULT_PROVIDER_CATALOG[provider] || {};
   const callType = firstString(model?.callType) || CALL_TYPES.CHAT;

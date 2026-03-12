@@ -21,7 +21,7 @@
         <ul>
           <li><code>/api/generate</code>：非流式 AI SDK JSON 子集</li>
           <li><code>/api/stream</code>：流式 AI SDK 响应</li>
-          <li><code>/v1/chat/completions</code>：OpenAI 风格透明代理</li>
+          <li><code>/v1/models</code>：兼容 OpenAI 风格的模型列表查询</li>
         </ul>
       </aside>
     </section>
@@ -38,13 +38,12 @@
         <div class="field" style="margin-bottom:18px">
           <label for="admin-key">Admin Key</label>
           <input class="input" id="admin-key" type="password" placeholder="输入网关 Admin Key" autocomplete="off" />
-          <small>页面本身可直接打开，但发往 <code>/api/*</code>、<code>/v1/*</code>、<code>/healthz</code> 的请求需要带上这个 key。</small>
+          <small>页面本身可直接打开，但发往 <code>/api/*</code>、<code>/v1/models</code>、<code>/healthz</code> 的请求需要带上这个 key。</small>
         </div>
 
         <div class="tabs" role="tablist" aria-label="请求类型切换">
           <button class="tab active" type="button" role="tab" data-tab="generate">/api/generate</button>
           <button class="tab" type="button" role="tab" data-tab="stream">/api/stream</button>
-          <button class="tab" type="button" role="tab" data-tab="chat">/v1/chat/completions</button>
         </div>
 
         <section class="panel active" data-panel="generate">
@@ -87,35 +86,6 @@
             <div class="actions">
               <button class="button primary" type="submit">发送到 /api/stream</button>
               <span class="hint">右侧会实时刷新流内容和原始响应。</span>
-            </div>
-          </form>
-        </section>
-
-        <section class="panel" data-panel="chat">
-          <div class="panel-meta">
-            <span class="pill">透明代理</span>
-            <span class="hint">保留 OpenAI Chat Completions 风格请求体，并支持切换是否流式返回。</span>
-          </div>
-          <form id="chat-form" class="request-form">
-            <div class="field">
-              <label for="chat-model">model</label>
-              <input class="input" id="chat-model" value="moonshotai/kimi-k2-instruct-0905" />
-              <small>适合验证 OpenAI 兼容客户端接入。</small>
-            </div>
-            <div class="field">
-              <label for="chat-prompt">messages[0].content</label>
-              <textarea id="chat-prompt">你好，请给我一些有创意的想法或灵感</textarea>
-            </div>
-            <div class="field">
-              <label class="checkbox-field" for="chat-stream">
-                <input id="chat-stream" type="checkbox" checked />
-                <span>流式响应（stream）</span>
-              </label>
-              <small>开启后按 SSE 增量预览；关闭后展示最终 JSON 响应。</small>
-            </div>
-            <div class="actions">
-              <button class="button primary" type="submit">发送到 /v1/chat/completions</button>
-              <span class="hint">保持透明代理；只切换请求体里的 <code>stream</code>。</span>
             </div>
           </form>
         </section>
@@ -168,14 +138,13 @@
   </main>
 
   <script>
-    const defaults={model:'moonshotai/kimi-k2-instruct-0905',proxyModel:'moonshotai/kimi-k2-instruct-0905'};
+    const defaults={model:'moonshotai/kimi-k2-instruct-0905'};
     const adminKeyStorageKey='open-ai-gateway.adminKey';
     const $ = (id) => document.getElementById(id);
-    const endpoints = { generate: '/api/generate', stream: '/api/stream', chat: '/v1/chat/completions' };
+    const endpoints = { generate: '/api/generate', stream: '/api/stream' };
     const endpointNotes = {
       generate: 'AI SDK 非流式 JSON 请求',
       stream: 'AI SDK 流式请求',
-      chat: 'OpenAI Chat Completions 透明代理（支持流式开关）',
     };
     let activeTab = 'generate';
 
@@ -189,10 +158,6 @@
 
     function getAdminKey() {
       return ($('admin-key')?.value || '').trim();
-    }
-
-    function isChatStreamEnabled() {
-      return $('chat-stream')?.checked ?? true;
     }
 
     function readStoredAdminKey() {
@@ -251,15 +216,6 @@
     function extractGenerateText(data) {
       if (!Array.isArray(data?.content)) return '';
       return data.content.filter((part) => part?.type === 'text').map((part) => part.text || '').join('\n\n').trim();
-    }
-
-    function extractChatText(data) {
-      const content = data?.choices?.[0]?.message?.content;
-      if (typeof content === 'string') return content;
-      if (Array.isArray(content)) {
-        return content.map((part) => typeof part?.text === 'string' ? part.text : JSON.stringify(part)).join('\n\n');
-      }
-      return '';
     }
 
     function extractTextFromContent(content) {
@@ -495,14 +451,6 @@
         ]);
         return;
       }
-      if (path === '/v1/chat/completions') {
-        setPreview('Chat Completions 预览', extractChatText(data), [
-          { label: 'model', value: data?.model || '-' },
-          { label: 'finish reason', value: data?.choices?.[0]?.finish_reason || '-' },
-          { label: 'status', value: `${response.status} ${response.statusText}`.trim() },
-        ]);
-        return;
-      }
       setPreview('JSON 响应预览', JSON.stringify(data, null, 2), [{ label: 'status', value: `${response.status}` }]);
     }
 
@@ -533,14 +481,6 @@
           path: endpoints.stream,
           payload: { model: value('stream-model', defaults.model), prompt: value('stream-prompt', '请用三句话介绍一下流式输出，并在最后给一个简短总结。') },
           stream: true,
-        };
-      }
-      if (tab === 'chat') {
-        const stream = isChatStreamEnabled();
-        return {
-          path: endpoints.chat,
-          payload: { model: value('chat-model', defaults.proxyModel), messages: [{ role: 'user', content: value('chat-prompt', '你好，请按 OpenAI Chat Completions 风格回复一句话，并给出一句建议。') }], stream },
-          stream,
         };
       }
       return {
@@ -632,7 +572,6 @@
     const forms = {
       'generate-form': () => buildPayload('generate'),
       'stream-form': () => buildPayload('stream'),
-      'chat-form': () => buildPayload('chat'),
     };
 
     Object.entries(forms).forEach(([formId, builder]) => {
@@ -665,7 +604,7 @@
       renderExample();
     });
 
-    ['generate-model','generate-prompt','stream-model','stream-prompt','chat-model','chat-prompt','chat-stream'].forEach((id) => {
+    ['generate-model','generate-prompt','stream-model','stream-prompt'].forEach((id) => {
       $(id)?.addEventListener('input', renderExample);
     });
 
