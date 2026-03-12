@@ -197,6 +197,11 @@ async function handleStreamRequest({ body, env, url }) {
         'x-gateway-provider': resolved.provider,
         'x-gateway-model': resolved.model || '',
       },
+      messageMetadata: ({ part }) => {
+        if (part.type === 'finish') {
+          return { usage: part.totalUsage, finishReason: part.finishReason };
+        }
+      },
     });
   } catch (error) {
     return jsonResponse({ error: { message: error instanceof Error ? error.message : 'Bad Request' } }, 400);
@@ -499,26 +504,26 @@ function buildResolvedChannel(channel, modelCode) {
     supportsGatewayProxy: supportsGatewayProxy(kind),
     languageModel: finalModel
       ? createGatewayLanguageModel({
-          channelKey: key,
-          model: finalModel,
-          languageModel: instantiateLanguageModel(
-            {
-              ...channel,
-              name,
-              provider: kind,
-              baseURL,
-              apiKey,
-              callType,
-              headers,
-            },
-            finalModel,
-          ),
-        })
+        channelKey: key,
+        model: finalModel,
+        languageModel: instantiateLanguageModel(
+          {
+            ...channel,
+            name,
+            provider: kind,
+            baseURL,
+            apiKey,
+            callType,
+            headers,
+          },
+          finalModel,
+        ),
+      })
       : null,
   };
 }
 
-function resolveModel({ env, model, random = Math.random, allowFailover = true }) {
+function resolveChannels({ env, model, random = Math.random }) {
   const requestedModel = firstString(model);
   const gatewayConfig = getGatewayConfig(env);
   const channels = Array.isArray(gatewayConfig?.channels) ? gatewayConfig.channels : [];
@@ -552,15 +557,23 @@ function resolveModel({ env, model, random = Math.random, allowFailover = true }
     throw new Error(`No channel supports model \`${requestedModel}\`.`);
   }
 
+  return orderedCandidates;
+}
+
+function resolveModel({ env, model, random = Math.random, allowFailover = true }) {
+  const orderedCandidates = resolveChannels({ env, model, random });
+
   const candidates = allowFailover ? orderedCandidates : orderedCandidates.slice(0, 1);
-  const primary = candidates[0];
 
-  if (!primary) {
-    throw new Error(`Could not resolve a channel for model \`${model}\`.`);
+  return buildActiveModelCandidate(candidates)
+}
+
+function buildActiveModelCandidate(candidates) {
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    throw new Error(`No candidates provided.`);
   }
-
   const languageModel = buildLanguageModelWithFailover(candidates);
-  const getActiveCandidate = () => getActiveResolvedCandidate(candidates, languageModel) || primary;
+  const getActiveCandidate = () => getActiveResolvedCandidate(candidates, languageModel);
 
   return {
     languageModel,
