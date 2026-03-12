@@ -103,59 +103,7 @@ async function v1({ request, env, url }) {
   if (request.method === 'GET' && url.pathname === '/v1/models') {
     return jsonResponse({ object: 'list', data: buildModelList(env) });
   }
-
-  const body = await safeReadJson(request);
-  let resolved;
-
-  try {
-    resolved = resolveModel({
-      env,
-      model: body?.model || url.searchParams.get('model'),
-      allowFailover: false,
-    });
-  } catch (error) {
-    return jsonResponse({ error: { message: error instanceof Error ? error.message : 'Bad Request' } }, 400);
-  }
-
-  if (!resolved.supportsGatewayProxy) {
-    return jsonResponse(
-      {
-        error: {
-          message: `Model \`${resolved.model}\` resolved to channel \`${resolved.channel}\` using provider \`${resolved.provider}\`, which only supports local AI SDK routes in this worker. Use /api/generate or /api/stream.`,
-        },
-      },
-      400,
-    );
-  }
-
-  const upstreamUrl = buildUpstreamUrl(resolved.baseURL, url);
-
-  console.info('Proxying request', {
-    method: request.method,
-    path: url.pathname,
-    channel: resolved.channel,
-    provider: resolved.provider,
-    model: resolved.model,
-    upstreamUrl,
-  });
-
-  const upstreamResponse = await fetch(upstreamUrl, {
-    method: request.method,
-    headers: buildUpstreamHeaders(request.headers, resolved),
-    body: buildUpstreamRequestBody(request, body, resolved),
-    redirect: 'follow',
-  });
-
-  const responseHeaders = new Headers(upstreamResponse.headers);
-  responseHeaders.set('x-gateway-channel', resolved.channel);
-  responseHeaders.set('x-gateway-provider', resolved.provider);
-  responseHeaders.set('x-gateway-model', resolved.model || '');
-
-  return new Response(upstreamResponse.body, {
-    status: upstreamResponse.status,
-    statusText: upstreamResponse.statusText,
-    headers: responseHeaders,
-  });
+  return jsonResponse({ error: { message: `Unsupported API route: ${path}` } }, 404);
 }
 
 async function handleGenerateRequest({ body, env, url }) {
@@ -481,9 +429,8 @@ function rejectUnsupportedAiSdkOptions(body) {
 }
 
 function buildResolvedChannel(channel, modelCode) {
-  const providerInput = String(firstString(channel?.provider) || '').toLowerCase();
-  const kind = inferProviderKind(firstString(channel?.kind) || providerInput);
-  const defaults = DEFAULT_PROVIDER_CATALOG[providerInput] || DEFAULT_PROVIDER_CATALOG[kind] || {};
+  const provider = String(firstString(channel?.provider) || '').toLowerCase();
+  const defaults = DEFAULT_PROVIDER_CATALOG[provider] || DEFAULT_PROVIDER_CATALOG[kind] || {};
   const models = Array.isArray(channel?.models) ? channel.models : [];
   const callType = firstString(models[0]?.callType) || CALL_TYPES.CHAT;
   const finalModel = firstString(modelCode) || firstString(models[0]?.code) || '';
@@ -495,13 +442,12 @@ function buildResolvedChannel(channel, modelCode) {
 
   return {
     key,
-    provider: kind,
+    provider,
     model: finalModel,
     callType,
     baseURL,
     apiKey,
     headers,
-    supportsGatewayProxy: supportsGatewayProxy(kind),
     languageModel: finalModel
       ? createGatewayLanguageModel({
         channelKey: key,
@@ -510,7 +456,7 @@ function buildResolvedChannel(channel, modelCode) {
           {
             ...channel,
             name,
-            provider: kind,
+            provider,
             baseURL,
             apiKey,
             callType,
@@ -594,9 +540,6 @@ function buildActiveModelCandidate(candidates) {
     },
     get headers() {
       return getActiveCandidate().headers;
-    },
-    get supportsGatewayProxy() {
-      return getActiveCandidate().supportsGatewayProxy;
     },
   };
 }
@@ -702,6 +645,7 @@ function instantiateLanguageModel(config, model) {
   };
 
   switch (config.provider) {
+    case 'gemini':
     case 'google': {
       const provider = createGoogleGenerativeAI({ apiKey, baseURL, headers });
       switch (callType) {
@@ -719,6 +663,7 @@ function instantiateLanguageModel(config, model) {
       }
     }
 
+    case 'claude':
     case 'anthropic': {
       const provider = createAnthropic({ apiKey, baseURL, headers });
       switch (callType) {
@@ -827,81 +772,6 @@ function buildHealth(env) {
     channelCount: channels.length,
     providerTypes: [...new Set(channels.map((channel) => firstString(channel?.provider)).filter(Boolean))],
   };
-}
-
-function buildUpstreamUrl(baseURL, url) {
-  const normalizedBaseURL = normalizeBaseURL(baseURL);
-  const upstreamPath = url.pathname.replace(/^\/v1/, '') || '/models';
-  const upstreamUrl = new URL(`${normalizedBaseURL}${upstreamPath}`);
-  upstreamUrl.search = url.search;
-  upstreamUrl.searchParams.delete('provider');
-  upstreamUrl.searchParams.delete('channel');
-  return upstreamUrl.toString();
-}
-
-function buildUpstreamHeaders(requestHeaders, resolved) {
-  const headers = new Headers(requestHeaders);
-
-  headers.delete('host');
-  headers.delete('content-length');
-  headers.delete('cf-connecting-ip');
-  headers.delete('cf-ipcountry');
-  headers.delete('cf-ray');
-  headers.delete('x-forwarded-proto');
-  headers.delete('authorization');
-  headers.delete('x-provider');
-  headers.delete('x-channel');
-  headers.delete('x-admin-key');
-  headers.delete('x-admin-token');
-
-  if (resolved.apiKey) {
-    headers.set('authorization', `Bearer ${resolved.apiKey}`);
-  }
-
-  for (const [key, value] of Object.entries(resolved.headers || {})) {
-    headers.set(key, value);
-  }
-
-  return headers;
-}
-
-function buildUpstreamRequestBody(request, body, resolved) {
-  if (!canHaveRequestBody(request.method)) {
-    return undefined;
-  }
-
-  if (!isPlainObject(body) || !Object.prototype.hasOwnProperty.call(body, 'model') || !resolved.model) {
-    return request.body;
-  }
-
-  if (body.model === resolved.model) {
-    return request.body;
-  }
-
-  return JSON.stringify({ ...body, model: resolved.model });
-}
-
-function inferProviderKind(name) {
-  switch (String(name || '').toLowerCase()) {
-    case 'openai':
-      return 'openai';
-    case 'openrouter':
-      return 'openrouter';
-    case 'google':
-    case 'gemini':
-      return 'google';
-    case 'anthropic':
-    case 'claude':
-      return 'anthropic';
-    case 'pollinations':
-      return 'pollinations';
-    default:
-      return 'openai-compatible';
-  }
-}
-
-function supportsGatewayProxy(kind) {
-  return ['openai', 'openai-compatible', 'openrouter'].includes(kind);
 }
 
 function lowerCaseModelId(value) {
