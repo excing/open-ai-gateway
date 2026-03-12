@@ -84,15 +84,21 @@ export default {
 };
 
 async function api({ request, env, url }) {
+  const body = await safeReadJson(request);
+
+  if (!isPlainObject(body)) {
+    throw new Error('Request body must be a JSON object.');
+  }
+
+  rejectUnsupportedAiSdkOptions(body);
+
   const path = url.pathname.replace(/^\/api/, '') || '/';
 
   if (request.method === 'POST' && path === '/generate') {
-    const body = await safeReadJson(request);
     return handleGenerateRequest({ body, env, request, url });
   }
 
   if (request.method === 'POST' && path === '/stream') {
-    const body = await safeReadJson(request);
     return handleStreamRequest({ body, env, request, url });
   }
 
@@ -108,8 +114,19 @@ async function v1({ request, env, url }) {
 
 async function handleGenerateRequest({ body, env, url }) {
   try {
-    const { call, resolved } = await buildAiSdkRequest({ body, env, url });
-    const result = await generateText(call);
+    const orderedCandidates = resolveChannels({
+      env,
+      model: body?.model || url.searchParams.get('model')
+    });
+
+    const resolved = buildActiveModelCandidate(...orderedCandidates);
+
+    if (!resolved.languageModel || !resolved.model) {
+      throw new Error(`No AI SDK channel resolved for model \`${resolved.model || 'unknown'}\`.`);
+    }
+
+    const call = await buildAiSdkRequest(body);
+    const result = await generateText({ model: resolved.languageModel, ...call });
     return new Response(
       JSON.stringify(
         {
@@ -137,8 +154,20 @@ async function handleGenerateRequest({ body, env, url }) {
 
 async function handleStreamRequest({ body, env, url }) {
   try {
-    const { call, resolved } = await buildAiSdkRequest({ body, env, url });
-    const result = streamText(call);
+    const orderedCandidates = resolveChannels({
+      env,
+      model: body?.model || url.searchParams.get('model')
+    });
+
+    const resolved = buildActiveModelCandidate(...orderedCandidates);
+
+    if (!resolved.languageModel || !resolved.model) {
+      throw new Error(`No AI SDK channel resolved for model \`${resolved.model || 'unknown'}\`.`);
+    }
+
+    const call = await buildAiSdkRequest(body);
+
+    const result = streamText({ model: resolved.languageModel, ...call });
     return result.toUIMessageStreamResponse({
       headers: {
         'x-gateway-channel': resolved.channel,
@@ -156,148 +185,29 @@ async function handleStreamRequest({ body, env, url }) {
   }
 }
 
-async function buildAiSdkRequest({ body, env, url }) {
-  if (!isPlainObject(body)) {
-    throw new Error('Request body must be a JSON object.');
-  }
-
-  rejectUnsupportedAiSdkOptions(body);
-
-  const orderedCandidates = resolveChannels({
-    env,
-    model: body?.model || url.searchParams.get('model')
-  });
-
-  const resolved = buildActiveModelCandidate(...orderedCandidates);
-
-  if (!resolved.languageModel || !resolved.model) {
-    throw new Error(`No AI SDK channel resolved for model \`${resolved.model || 'unknown'}\`.`);
-  }
-
+async function buildAiSdkRequest(body) {
   const tools = buildDeclarativeTools(body.tools);
-  const promptInput = await normalizeAiSdkPromptInput(body, tools);
-
-  return {
-    resolved,
-    call: compactObject({
-      model: resolved.languageModel,
-      system: promptInput.system,
-      prompt: promptInput.prompt,
-      messages: promptInput.messages,
-      tools,
-      toolChoice: normalizeToolChoice(body.toolChoice),
-      activeTools: normalizeActiveTools(body.activeTools),
-      headers: isPlainObject(body?.headers) ? sanitizeRequestHeaders(body.headers) : undefined,
-      providerOptions: isPlainObject(body?.providerOptions) ? body.providerOptions : undefined,
-      temperature: toNumber(body?.temperature),
-      topP: toNumber(body?.topP ?? body?.top_p),
-      topK: toInteger(body?.topK ?? body?.top_k),
-      maxOutputTokens: toInteger(body?.maxOutputTokens ?? body?.max_tokens ?? body?.maxTokens),
-      presencePenalty: toNumber(body?.presencePenalty ?? body?.presence_penalty),
-      frequencyPenalty: toNumber(body?.frequencyPenalty ?? body?.frequency_penalty),
-      stopSequences: normalizeStopSequences(body?.stopSequences ?? body?.stop),
-      seed: toInteger(body?.seed),
-      maxRetries: toInteger(body?.maxRetries),
-      timeout: normalizeTimeout(body?.timeout),
-    }),
-  };
-}
-
-async function normalizeAiSdkPromptInput(body, tools) {
-  const promptValue = body.prompt ?? body.input;
-  const prompt = promptValue == null ? undefined : await normalizePromptValue(promptValue, tools);
-  const messages = body.messages == null ? undefined : await normalizeMessageInput(body.messages, '`messages`', tools);
-  const system = body.system == null ? undefined : normalizeSystemInput(body.system);
-
-  if (prompt !== undefined && messages !== undefined) {
-    throw new Error('Use either `prompt` or `messages`, not both.');
-  }
-
-  if (prompt === undefined && messages === undefined) {
-    throw new Error('Request body must include either `prompt` or `messages`.');
-  }
-
-  return { prompt, messages, system };
-}
-
-async function normalizePromptValue(value, tools) {
-  if (typeof value === 'string') {
-    return value;
-  }
-
-  return normalizeMessageInput(value, '`prompt`', tools);
-}
-
-function normalizeSystemInput(value) {
-  if (typeof value === 'string') {
-    return value;
-  }
-
-  if (isPlainObject(value)) {
-    return normalizeSystemMessage(value);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((message) => normalizeSystemMessage(message));
-  }
-
-  throw new Error('`system` must be a string, a system message object, or an array of system message objects.');
-}
-
-function normalizeSystemMessage(message) {
-  if (!isPlainObject(message)) {
-    throw new Error('Each `system` message must be an object.');
-  }
-
-  if (message.role != null && message.role !== 'system') {
-    throw new Error('`system` message objects must use role `system`.');
-  }
-
-  if (typeof message.content !== 'string') {
-    throw new Error('`system` message content must be a string.');
-  }
 
   return compactObject({
-    role: 'system',
-    content: message.content,
-    providerOptions: isPlainObject(message.providerOptions) ? message.providerOptions : undefined,
+    system: body.system,
+    prompt: body.prompt ?? body.input,
+    messages: body.messages ? convertToModelMessages(body.messages, { tools }) : undefined,
+    tools,
+    toolChoice: normalizeToolChoice(body.toolChoice),
+    activeTools: normalizeActiveTools(body.activeTools),
+    headers: isPlainObject(body?.headers) ? sanitizeRequestHeaders(body.headers) : undefined,
+    providerOptions: isPlainObject(body?.providerOptions) ? body.providerOptions : undefined,
+    temperature: toNumber(body?.temperature),
+    topP: toNumber(body?.topP ?? body?.top_p),
+    topK: toInteger(body?.topK ?? body?.top_k),
+    maxOutputTokens: toInteger(body?.maxOutputTokens ?? body?.max_tokens ?? body?.maxTokens),
+    presencePenalty: toNumber(body?.presencePenalty ?? body?.presence_penalty),
+    frequencyPenalty: toNumber(body?.frequencyPenalty ?? body?.frequency_penalty),
+    stopSequences: normalizeStopSequences(body?.stopSequences ?? body?.stop),
+    seed: toInteger(body?.seed),
+    maxRetries: toInteger(body?.maxRetries),
+    timeout: normalizeTimeout(body?.timeout),
   });
-}
-
-async function normalizeMessageInput(messages, label, tools) {
-  if (!Array.isArray(messages)) {
-    throw new Error(`${label} must be an array of AI SDK UI messages or ModelMessages.`);
-  }
-
-  const normalized = messages.map((message) => {
-    if (!isPlainObject(message)) {
-      throw new Error(`Each ${label} entry must be an object.`);
-    }
-
-    return message;
-  });
-
-  const usesUiMessages = normalized.some((message) => Array.isArray(message.parts));
-  const usesModelMessages = normalized.some((message) => 'content' in message);
-
-  if (usesUiMessages && usesModelMessages) {
-    throw new Error(`${label} must contain either UI messages with \`parts\` or ModelMessages with \`content\`, not a mix.`);
-  }
-
-  if (usesUiMessages) {
-    return convertToModelMessages(normalized.map(stripUiMessageId), { tools });
-  }
-
-  if (usesModelMessages) {
-    return normalized;
-  }
-
-  throw new Error(`${label} messages must use either \`parts\` (UI messages) or \`content\` (ModelMessages).`);
-}
-
-function stripUiMessageId(message) {
-  const { id: _id, ...rest } = message;
-  return rest;
 }
 
 function buildDeclarativeTools(value) {

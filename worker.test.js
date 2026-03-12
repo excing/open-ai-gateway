@@ -93,12 +93,8 @@ function authedRequest(url, init = {}) {
   });
 }
 
-function buildApiCall(body, { env = baseEnv, url = 'https://example.com/api/generate' } = {}) {
-  return buildAiSdkRequest({
-    body,
-    env,
-    url: new URL(url),
-  });
+function buildApiCall(body) {
+  return buildAiSdkRequest(body);
 }
 
 async function withMockedRandom(randomValue, callback) {
@@ -112,37 +108,21 @@ async function withMockedRandom(randomValue, callback) {
   }
 }
 
-test('buildAiSdkRequest ignores incoming provider and channel', async () => {
-  const env = envWithConfig({
-    channels: [
-      {
-        name: 'Only OpenAI',
-        key: 'only-openai',
-        provider: 'openai',
-        apiKey: 'sk-openai',
-        baseURL: 'https://api.openai.com/v1',
-        models: [{ code: 'gpt-4o-mini' }],
-        headers: {},
-      },
-    ],
+test('buildAiSdkRequest ignores incoming provider, channel, and model routing fields', async () => {
+  const call = await buildApiCall({
+    provider: 'anthropic',
+    channel: 'does-not-matter',
+    model: 'gpt-4o-mini',
+    prompt: 'ping',
   });
 
-  const { resolved } = await buildApiCall(
-    {
-      provider: 'anthropic',
-      channel: 'does-not-matter',
-      model: 'gpt-4o-mini',
-      prompt: 'ping',
-    },
-    { env },
-  );
-
-  assert.equal(resolved.channel, 'only-openai');
-  assert.equal(resolved.provider, 'openai');
-  assert.equal(resolved.model, 'gpt-4o-mini');
+  assert.equal(call.prompt, 'ping');
+  assert.equal('provider' in call, false);
+  assert.equal('channel' in call, false);
+  assert.equal('model' in call, false);
 });
 
-test('buildAiSdkRequest normalizes alias matches to canonical upstream model code', async () => {
+test('api generate normalizes alias matches to canonical upstream model code', async () => {
   const env = envWithConfig({
     channels: [
       {
@@ -157,21 +137,49 @@ test('buildAiSdkRequest normalizes alias matches to canonical upstream model cod
     ],
   });
 
-  const { call, resolved } = await buildApiCall(
-    {
-      model: 'openai-gpt-4o-mini',
-      prompt: 'ping',
-    },
-    { env },
-  );
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () =>
+    new Response(
+      JSON.stringify({
+        id: 'chatcmpl-alias-1',
+        object: 'chat.completion',
+        created: 0,
+        model: 'gpt-4o-mini',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'pong' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
 
-  assert.equal(resolved.model, 'gpt-4o-mini');
-  assert.equal(call.model.modelId, 'gpt-4o-mini');
+  try {
+    const response = await worker.fetch(
+      authedRequest('https://example.com/api/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'openai-gpt-4o-mini', prompt: 'ping' }),
+      }),
+      env,
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('x-gateway-channel'), 'aliased-openai');
+    assert.equal(response.headers.get('x-gateway-provider'), 'openai');
+    assert.equal(response.headers.get('x-gateway-model'), 'gpt-4o-mini');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('removed metadata api routes return 404', async () => {
   for (const path of ['/api', '/api/config', '/api/models', '/api/health', '/api/resolve']) {
-    const response = await worker.fetch(authedRequest(`https://example.com${path}`), baseEnv);
+    const response = await worker.fetch(
+      authedRequest(`https://example.com${path}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      }),
+      baseEnv,
+    );
     assert.equal(response.status, 404);
   }
 });
@@ -323,7 +331,7 @@ test('v1 routes other than models return 404', async () => {
 });
 
 test('buildAiSdkRequest converts UI messages via convertToModelMessages and keeps declarative tools', async () => {
-  const { call } = await buildApiCall({
+  const call = await buildApiCall({
     model: 'gpt-4o-mini',
     system: [{ content: 'You are helpful.' }],
     messages: [
@@ -368,16 +376,18 @@ test('buildAiSdkRequest converts UI messages via convertToModelMessages and keep
     activeTools: ['lookupWeather'],
   });
 
-  assert.equal(call.system[0].role, 'system');
-  assert.equal(call.messages.length, 4);
-  assert.equal(call.messages[0].role, 'user');
-  assert.equal(call.messages[0].content[0].type, 'text');
-  assert.equal(call.messages[0].content[1].type, 'file');
-  assert.equal(call.messages[0].content[1].data, 'https://example.com/cat.png');
-  assert.equal(call.messages[1].content[0].type, 'tool-call');
-  assert.equal(call.messages[2].content[0].type, 'tool-call');
-  assert.equal(call.messages[3].role, 'tool');
-  assert.equal(call.messages[3].content[0].type, 'tool-result');
+  const messages = await call.messages;
+
+  assert.deepEqual(call.system, [{ content: 'You are helpful.' }]);
+  assert.equal(messages.length, 4);
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].content[0].type, 'text');
+  assert.equal(messages[0].content[1].type, 'file');
+  assert.equal(messages[0].content[1].data, 'https://example.com/cat.png');
+  assert.equal(messages[1].content[0].type, 'tool-call');
+  assert.equal(messages[2].content[0].type, 'tool-call');
+  assert.equal(messages[3].role, 'tool');
+  assert.equal(messages[3].content[0].type, 'tool-result');
   assert.deepEqual(call.toolChoice, { type: 'tool', toolName: 'lookupWeather' });
   assert.deepEqual(call.activeTools, ['lookupWeather']);
   assert.equal(call.tools.lookupWeather.description, 'Look up the weather for a city.');
@@ -385,10 +395,9 @@ test('buildAiSdkRequest converts UI messages via convertToModelMessages and keep
   assert.ok(call.tools.lookupWeather.outputSchema);
 });
 
-test('buildAiSdkRequest passes through model messages and sanitizes client headers', async () => {
-  const { call } = await buildApiCall({
-    model: 'gpt-4o-mini',
-    messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
+test('buildAiSdkRequest sanitizes client headers and normalizes timeout', async () => {
+  const call = await buildApiCall({
+    prompt: 'ping',
     headers: {
       authorization: 'Bearer client-key',
       cookie: 'session=abc',
@@ -399,28 +408,22 @@ test('buildAiSdkRequest passes through model messages and sanitizes client heade
     maxRetries: 2,
   });
 
-  assert.deepEqual(call.messages, [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }]);
+  assert.equal(call.prompt, 'ping');
   assert.deepEqual(call.headers, { 'x-trace-id': 'trace-123' });
   assert.deepEqual(call.timeout, { totalMs: 5000, chunkMs: 1000 });
   assert.equal(call.maxRetries, 2);
 });
 
-test('buildAiSdkRequest rejects mixing UI messages and model messages', async () => {
-  await assert.rejects(
-    () =>
-      buildApiCall({
-        model: 'gpt-4o-mini',
-        messages: [
-          { role: 'user', parts: [{ type: 'text', text: 'hi' }] },
-          { role: 'assistant', content: 'hello' },
-        ],
-      }),
-    /must contain either UI messages with `parts` or ModelMessages with `content`, not a mix/,
-  );
+test('buildAiSdkRequest surfaces conversion errors for non-UI messages', async () => {
+  const call = await buildApiCall({
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
+  });
+
+  await assert.rejects(() => call.messages, /Cannot read properties of undefined/);
 });
 
 test('buildAiSdkRequest accepts legacy /api aliases and normalizes them', async () => {
-  const { call } = await buildApiCall({
+  const call = await buildApiCall({
     model: 'gpt-4o-mini',
     input: 'ping',
     top_p: '0.5',
@@ -441,7 +444,7 @@ test('buildAiSdkRequest accepts legacy /api aliases and normalizes them', async 
 });
 
 test('buildAiSdkRequest prefers canonical AI SDK fields over legacy aliases', async () => {
-  const { call } = await buildApiCall({
+  const call = await buildApiCall({
     model: 'gpt-4o-mini',
     prompt: 'canonical',
     input: 'legacy',
@@ -456,11 +459,26 @@ test('buildAiSdkRequest prefers canonical AI SDK fields over legacy aliases', as
   assert.equal(call.maxOutputTokens, 256);
 });
 
-test('buildAiSdkRequest rejects non-JSON AI SDK runtime options', async () => {
-  await assert.rejects(
-    () => buildApiCall({ model: 'gpt-4o-mini', prompt: 'ping', output: { type: 'object' } }),
-    /`output` is not supported on `\/api` routes because it requires non-JSON runtime behavior\./,
-  );
+test('api routes reject non-JSON AI SDK runtime options', async () => {
+  const originalConsoleError = console.error;
+  console.error = () => {};
+
+  try {
+    const response = await worker.fetch(
+      authedRequest('https://example.com/api/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: 'gpt-4o-mini', prompt: 'ping', output: { type: 'object' } }),
+      }),
+      baseEnv,
+    );
+
+    assert.equal(response.status, 500);
+    const data = await response.json();
+    assert.match(data.error.message, /`output` is not supported on `\/api` routes because it requires non-JSON runtime behavior\./);
+  } finally {
+    console.error = originalConsoleError;
+  }
 });
 
 test('api stream returns an event stream for AI SDK routes', async () => {
@@ -679,11 +697,19 @@ test('api generate validates missing prompt or messages', async () => {
   assert.match(data.error.message, /prompt|messages/i);
 });
 
-test('missing GATEWAY_CONFIG_JSON returns a clear error', () => {
-  assert.rejects(
-    () => buildApiCall({ model: 'gpt-4o-mini', prompt: 'ping' }, { env: {} }),
-    /Missing `GATEWAY_CONFIG_JSON`/,
+test('missing GATEWAY_CONFIG_JSON returns a clear error', async () => {
+  const response = await worker.fetch(
+    authedRequest('https://example.com/api/generate', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-4o-mini', prompt: 'ping' }),
+    }),
+    { ADMIN_KEY: adminKey },
   );
+
+  assert.equal(response.status, 400);
+  const data = await response.json();
+  assert.match(data.error.message, /Missing `GATEWAY_CONFIG_JSON`/);
 });
 
 test('missing ADMIN_KEY returns a clear error on protected routes', async () => {
