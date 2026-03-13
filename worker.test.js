@@ -138,8 +138,14 @@ test('api generate normalizes alias matches to canonical upstream model code', a
   });
 
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () =>
-    new Response(
+  const upstreamCalls = [];
+  globalThis.fetch = async (url, init = {}) => {
+    upstreamCalls.push({
+      url: String(url),
+      body: init.body ? await new Response(init.body).text() : '',
+    });
+
+    return new Response(
       JSON.stringify({
         id: 'chatcmpl-alias-1',
         object: 'chat.completion',
@@ -150,6 +156,7 @@ test('api generate normalizes alias matches to canonical upstream model code', a
       }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     );
+  };
 
   try {
     const response = await worker.fetch(
@@ -162,9 +169,11 @@ test('api generate normalizes alias matches to canonical upstream model code', a
     );
 
     assert.equal(response.status, 200);
-    assert.equal(response.headers.get('x-gateway-channel'), 'aliased-openai');
-    assert.equal(response.headers.get('x-gateway-provider'), 'openai');
-    assert.equal(response.headers.get('x-gateway-model'), 'gpt-4o-mini');
+    assert.equal(upstreamCalls.length, 1);
+    assert.equal(upstreamCalls[0].url, 'https://api.openai.com/v1/chat/completions');
+    const upstreamBody = JSON.parse(upstreamCalls[0].body);
+    assert.equal(upstreamBody.model, 'gpt-4o-mini');
+    assert.equal(upstreamBody.messages[0]?.content, 'ping');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -414,6 +423,76 @@ test('buildAiSdkRequest sanitizes client headers and normalizes timeout', async 
   assert.equal(call.maxRetries, 2);
 });
 
+test('buildAiSdkRequest includes non-chat parameters for other call types', async () => {
+  const structuredPrompt = { image: 'data:image/png;base64,AAAA', text: 'animate this' };
+  const call = await buildApiCall({
+    prompt: structuredPrompt,
+    n: '2',
+    maxImagesPerCall: '3',
+    size: '1024x1024',
+    aspectRatio: '16:9',
+    maxVideosPerCall: '4',
+    resolution: '1280x720',
+    duration: '5',
+    fps: '24',
+    text: 'hello world',
+    voice: 'alloy',
+    outputFormat: 'mp3',
+    instructions: 'Speak slowly',
+    speed: '1.25',
+    language: 'en',
+    values: ['hello', 42],
+    maxParallelCalls: '8',
+    audio: 'https://example.com/audio.mp3',
+  });
+
+  assert.deepEqual(call.prompt, structuredPrompt);
+  assert.equal(call.n, 2);
+  assert.equal(call.maxImagesPerCall, 3);
+  assert.equal(call.size, '1024x1024');
+  assert.equal(call.aspectRatio, '16:9');
+  assert.equal(call.maxVideosPerCall, 4);
+  assert.equal(call.resolution, '1280x720');
+  assert.equal(call.duration, 5);
+  assert.equal(call.fps, 24);
+  assert.equal(call.text, 'hello world');
+  assert.equal(call.voice, 'alloy');
+  assert.equal(call.outputFormat, 'mp3');
+  assert.equal(call.instructions, 'Speak slowly');
+  assert.equal(call.speed, 1.25);
+  assert.equal(call.language, 'en');
+  assert.deepEqual(call.values, ['hello', '42']);
+  assert.equal(call.maxParallelCalls, 8);
+  assert.equal(String(call.audio), 'https://example.com/audio.mp3');
+});
+
+test('buildAiSdkRequest normalizes snake_case aliases for non-chat and shared options', async () => {
+  const call = await buildApiCall({
+    prompt: 'ping',
+    tool_choice: 'auto',
+    active_tools: ['lookupWeather'],
+    provider_options: { openai: { parallelToolCalls: false } },
+    stop_sequences: ['DONE'],
+    max_images_per_call: '3',
+    aspect_ratio: '16:9',
+    max_videos_per_call: '4',
+    output_format: 'mp3',
+    max_parallel_calls: '8',
+    max_retries: '2',
+  });
+
+  assert.equal(call.toolChoice, 'auto');
+  assert.deepEqual(call.activeTools, ['lookupWeather']);
+  assert.deepEqual(call.providerOptions, { openai: { parallelToolCalls: false } });
+  assert.deepEqual(call.stopSequences, ['DONE']);
+  assert.equal(call.maxImagesPerCall, 3);
+  assert.equal(call.aspectRatio, '16:9');
+  assert.equal(call.maxVideosPerCall, 4);
+  assert.equal(call.outputFormat, 'mp3');
+  assert.equal(call.maxParallelCalls, 8);
+  assert.equal(call.maxRetries, 2);
+});
+
 test('buildAiSdkRequest surfaces conversion errors for non-UI messages', async () => {
   const call = await buildApiCall({
     messages: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
@@ -584,23 +663,20 @@ test('api generate returns stable json for successful text generation', async ()
 
       assert.equal(response.status, 200);
       assert.match(response.headers.get('content-type') || '', /application\/json/i);
-      assert.equal(response.headers.get('x-gateway-channel'), 'groq-gpt4o-mini');
-      assert.equal(response.headers.get('x-gateway-provider'), 'groq');
-      assert.equal(response.headers.get('x-gateway-model'), 'gpt-4o-mini');
       assert.equal(upstreamCalls.length, 1);
       assert.equal(upstreamCalls[0].url, 'https://api.groq.com/openai/v1/chat/completions');
 
       const data = await response.json();
-      assert.deepEqual(Object.keys(data).sort(), ['content', 'finishReason', 'usage']);
-      assert.equal(Array.isArray(data.content), true);
-      assert.equal(data.content[0]?.type, 'text');
-      assert.equal(data.content[0]?.text, 'pong');
-      assert.equal(data.finishReason, 'stop');
-      assert.equal(data.usage.inputTokens, 1);
-      assert.equal(data.usage.outputTokens, 1);
-      assert.equal(data.usage.totalTokens, 2);
-      assert.equal(data.usage.reasoningTokens, 0);
-      assert.equal(data.usage.cachedInputTokens, 0);
+      assert.equal(Array.isArray(data.steps), true);
+      assert.equal(data.steps[0]?.content[0]?.type, 'text');
+      assert.equal(data.steps[0]?.content[0]?.text, 'pong');
+      assert.equal(data.steps[0]?.finishReason, 'stop');
+      assert.equal(data._output, 'pong');
+      assert.equal(data.totalUsage.inputTokens, 1);
+      assert.equal(data.totalUsage.outputTokens, 1);
+      assert.equal(data.totalUsage.totalTokens, 2);
+      assert.equal(data.totalUsage.reasoningTokens, 0);
+      assert.equal(data.totalUsage.cachedInputTokens, 0);
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -664,25 +740,23 @@ test('api generate fails over when the first channel returns 404', async () => {
       );
 
       assert.equal(response.status, 200);
-      assert.equal(response.headers.get('x-gateway-channel'), 'openai-main');
-      assert.equal(response.headers.get('x-gateway-provider'), 'openai');
-      assert.equal(response.headers.get('x-gateway-model'), 'gpt-4o-mini');
       assert.equal(upstreamCalls.length, 2);
       assert.equal(upstreamCalls[0].url, 'https://api.groq.com/openai/v1/chat/completions');
       assert.equal(upstreamCalls[1].url, 'https://api.openai.com/v1/chat/completions');
 
       const data = await response.json();
-      assert.equal(data.content[0]?.text, 'fallback pong');
-      assert.equal(data.usage.inputTokens, 1);
-      assert.equal(data.usage.outputTokens, 2);
-      assert.equal(data.usage.totalTokens, 3);
+      assert.equal(data.steps[0]?.content[0]?.text, 'fallback pong');
+      assert.equal(data._output, 'fallback pong');
+      assert.equal(data.totalUsage.inputTokens, 1);
+      assert.equal(data.totalUsage.outputTokens, 2);
+      assert.equal(data.totalUsage.totalTokens, 3);
     });
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test('api generate validates missing prompt or messages', async () => {
+test('api generate returns 500 when all chat candidates fail prompt validation', async () => {
   const response = await worker.fetch(
     authedRequest('https://example.com/api/generate', {
       method: 'POST',
@@ -692,9 +766,9 @@ test('api generate validates missing prompt or messages', async () => {
     baseEnv,
   );
 
-  assert.equal(response.status, 400);
+  assert.equal(response.status, 500);
   const data = await response.json();
-  assert.match(data.error.message, /prompt|messages/i);
+  assert.match(data.error.message, /Failed for model/);
 });
 
 test('missing GATEWAY_CONFIG_JSON returns a clear error', async () => {

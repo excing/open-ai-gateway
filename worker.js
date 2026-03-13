@@ -3,7 +3,10 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { jsonSchema, tool } from '@ai-sdk/provider-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { convertToModelMessages, generateText, streamText } from 'ai';
+import { convertToModelMessages, generateImage, generateText, streamText, embedMany } from 'ai';
+import { experimental_generateVideo as generateVideo } from 'ai';
+import { experimental_generateSpeech as generateSpeech } from 'ai';
+import { experimental_transcribe as transcribe } from 'ai';
 import { createFallback } from 'ai-fallback';
 import { createPollinations } from 'ai-sdk-pollinations';
 
@@ -19,7 +22,7 @@ const CALL_TYPES = Object.freeze({
   VIDEO_GEN: 'video_gen',
   AUDIO_GEN: 'audio_gen',
   EMBEDDING: 'embedding',
-  ASR: 'asr',
+  TRANSCRIBE: 'transcribe',
 });
 
 const DEFAULT_PROVIDER_CATALOG = {
@@ -119,34 +122,58 @@ async function handleGenerateRequest({ body, env, url }) {
       model: body?.model || url.searchParams.get('model')
     });
 
-    const resolved = buildActiveModelCandidate(...orderedCandidates);
-
-    if (!resolved.languageModel || !resolved.model) {
-      throw new Error(`No AI SDK channel resolved for model \`${resolved.model || 'unknown'}\`.`);
+    if (0 == orderedCandidates.length) {
+      return jsonResponse({ error: { message: `No channel supports model \`${body?.model || 'unknown'}\`.` } }, 400);
     }
 
     const call = await buildAiSdkRequest(body);
-    const result = await generateText({ model: resolved.languageModel, ...call });
-    return new Response(
-      JSON.stringify(
-        {
-          content: result.content,
-          finishReason: result.finishReason,
-          usage: result.usage,
-        },
-        null,
-        2,
-      ),
-      {
-        status: 200,
-        headers: {
-          'content-type': 'application/json; charset=UTF-8',
-          'x-gateway-channel': resolved.channel,
-          'x-gateway-provider': resolved.provider,
-          'x-gateway-model': resolved.model || '',
-        },
-      },
-    );
+
+    for (const candidate of orderedCandidates) {
+      try {
+        let result;
+        switch (candidate.callType) {
+          case CALL_TYPES.IMAGE_GEN:
+            result = await generateImage({ model: candidate.languageModel, ...call });
+            break;
+          case CALL_TYPES.VIDEO_GEN:
+            result = await generateVideo({ model: candidate.languageModel, ...call });
+            break;
+          case CALL_TYPES.AUDIO_GEN:
+            result = await generateSpeech({ model: candidate.languageModel, ...call });
+            break;
+          case CALL_TYPES.EMBEDDING:
+            result = await embedMany({ model: candidate.languageModel, ...call });
+            break;
+          case CALL_TYPES.TRANSCRIBE:
+            result = await transcribe({ model: candidate.languageModel, ...call });
+            break;
+          case CALL_TYPES.CHAT:
+          default:
+            result = await generateText({ model: candidate.languageModel, ...call });
+            break;
+        }
+        return new Response(
+          JSON.stringify(result),
+          {
+            status: 200,
+            headers: {
+              'content-type': 'application/json; charset=UTF-8',
+              'x-gateway-channel': candidate.key,
+              'x-gateway-provider': candidate.provider,
+              'x-gateway-model': candidate.model || '',
+            },
+          },
+        );
+      } catch (error) {
+        console.warn('Language model failover triggered', {
+          channel: candidate.provider,
+          modelId: candidate.model,
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return jsonResponse({ error: { message: `Failed for model \`${body?.model || 'unknown'}\`.` } }, 500);
   } catch (error) {
     return jsonResponse({ error: { message: error instanceof Error ? error.message : 'Bad Request' } }, 400);
   }
@@ -160,13 +187,10 @@ async function handleStreamRequest({ body, env, url }) {
     });
 
     const resolved = buildActiveModelCandidate(...orderedCandidates);
-
     if (!resolved.languageModel || !resolved.model) {
       throw new Error(`No AI SDK channel resolved for model \`${resolved.model || 'unknown'}\`.`);
     }
-
     const call = await buildAiSdkRequest(body);
-
     const result = streamText({ model: resolved.languageModel, ...call });
     return result.toUIMessageStreamResponse({
       headers: {
@@ -189,23 +213,42 @@ async function buildAiSdkRequest(body) {
   const tools = buildDeclarativeTools(body.tools);
 
   return compactObject({
-    system: body.system,
-    prompt: body.prompt ?? body.input,
+    system: body?.system,
+    prompt: body?.prompt ?? body?.input,
     messages: body.messages ? convertToModelMessages(body.messages, { tools }) : undefined,
     tools,
-    toolChoice: normalizeToolChoice(body.toolChoice),
-    activeTools: normalizeActiveTools(body.activeTools),
+    toolChoice: normalizeToolChoice(body.toolChoice ?? body?.tool_choice),
+    activeTools: normalizeActiveTools(body.activeTools ?? body?.active_tools),
     headers: isPlainObject(body?.headers) ? sanitizeRequestHeaders(body.headers) : undefined,
-    providerOptions: isPlainObject(body?.providerOptions) ? body.providerOptions : undefined,
+    providerOptions: isPlainObject(body?.providerOptions ?? body?.provider_options)
+      ? (body.providerOptions ?? body.provider_options)
+      : undefined,
     temperature: toNumber(body?.temperature),
     topP: toNumber(body?.topP ?? body?.top_p),
     topK: toInteger(body?.topK ?? body?.top_k),
     maxOutputTokens: toInteger(body?.maxOutputTokens ?? body?.max_tokens ?? body?.maxTokens),
     presencePenalty: toNumber(body?.presencePenalty ?? body?.presence_penalty),
     frequencyPenalty: toNumber(body?.frequencyPenalty ?? body?.frequency_penalty),
-    stopSequences: normalizeStopSequences(body?.stopSequences ?? body?.stop),
+    stopSequences: normalizeStopSequences(body?.stopSequences ?? body?.stop_sequences ?? body?.stop),
     seed: toInteger(body?.seed),
-    maxRetries: toInteger(body?.maxRetries),
+    n: toInteger(body?.n),
+    maxImagesPerCall: toInteger(body?.maxImagesPerCall ?? body?.max_images_per_call),
+    size: firstString(body?.size),
+    aspectRatio: firstString(body?.aspectRatio, body?.aspect_ratio),
+    maxVideosPerCall: toInteger(body?.maxVideosPerCall ?? body?.max_videos_per_call),
+    resolution: firstString(body?.resolution),
+    duration: toNumber(body?.duration),
+    fps: toNumber(body?.fps),
+    text: firstString(body?.text),
+    voice: firstString(body?.voice),
+    outputFormat: firstString(body?.outputFormat, body?.output_format),
+    instructions: firstString(body?.instructions),
+    speed: toNumber(body?.speed),
+    language: firstString(body?.language),
+    values: Array.isArray(body?.values) ? body.values.map((value) => String(value)) : undefined,
+    maxParallelCalls: toInteger(body?.maxParallelCalls ?? body?.max_parallel_calls),
+    audio: typeof body?.audio === 'string' ? new URL(body.audio) : body?.audio,
+    maxRetries: toInteger(body?.maxRetries ?? body?.max_retries),
     timeout: normalizeTimeout(body?.timeout),
   });
 }
@@ -332,14 +375,10 @@ function buildResolvedChannel(channel, model) {
   const apiKey = firstString(channel?.apiKey) || '';
   const headers = sanitizeHeaders(channel?.headers);
   const languageModel = finalModelCode
-    ? createGatewayLanguageModel({
-      channelKey: key,
-      model: finalModelCode,
-      languageModel: instantiateLanguageModel(
-        { provider, baseURL, apiKey, callType, headers, },
-        finalModelCode,
-      ),
-    })
+    ? instantiateLanguageModel(
+      { name: key, provider, baseURL, apiKey, callType, headers, },
+      finalModelCode,
+    )
     : null;
 
   return { key, provider, model: finalModelCode, callType, baseURL, apiKey, headers, languageModel, };
@@ -412,34 +451,6 @@ function buildActiveModelCandidate(...candidates) {
   };
 }
 
-function createGatewayLanguageModel({ channelKey, model, languageModel }) {
-  if (!languageModel) {
-    return null;
-  }
-
-  const doGenerate = languageModel.doGenerate.bind(languageModel);
-  const doStream = languageModel.doStream.bind(languageModel);
-
-  return {
-    specificationVersion: languageModel.specificationVersion,
-    get supportedUrls() {
-      return languageModel.supportedUrls;
-    },
-    get provider() {
-      return channelKey;
-    },
-    get modelId() {
-      return model;
-    },
-    doGenerate(options) {
-      return doGenerate(options);
-    },
-    doStream(options) {
-      return doStream(options);
-    },
-  };
-}
-
 function buildLanguageModelWithFailover(candidates) {
   const languageModels = candidates.map((candidate) => candidate.languageModel).filter(Boolean);
 
@@ -471,10 +482,10 @@ function getActiveResolvedCandidate(candidates, languageModel) {
     return null;
   }
 
-  const activeChannel = firstString(languageModel?.provider);
+  const provider = firstString(languageModel?.provider);
   const activeModel = firstString(languageModel?.modelId);
-
-  return candidates.find((candidate) => candidate.key === activeChannel && candidate.model === activeModel);
+  const channelKey = provider?.split(".")[0] || provider;
+  return candidates.find((candidate) => candidate.key === channelKey && candidate.model === activeModel);
 }
 
 function shuffleArray(items, random = Math.random) {
@@ -501,7 +512,7 @@ function instantiateLanguageModel(config, model) {
   switch (config.provider) {
     case 'gemini':
     case 'google': {
-      const provider = createGoogleGenerativeAI({ apiKey, baseURL, headers });
+      const provider = createGoogleGenerativeAI({ apiKey, baseURL, headers, name: config.name });
       switch (callType) {
         case CALL_TYPES.IMAGE_GEN:
           return provider.image(model);
@@ -519,19 +530,19 @@ function instantiateLanguageModel(config, model) {
 
     case 'claude':
     case 'anthropic': {
-      const provider = createAnthropic({ apiKey, baseURL, headers });
+      const provider = createAnthropic({ apiKey, baseURL, headers, name: config.name });
       switch (callType) {
         case CALL_TYPES.CHAT:
           return provider.chat(model);
         case CALL_TYPES.EMBEDDING:
-          return provider.embedding(model);
+          return provider.embeddingModel(model);
         default:
           return unsupportedCallType();
       }
     }
 
     case 'openrouter': {
-      const provider = createOpenRouter({ apiKey, baseURL, headers });
+      const provider = createOpenRouter({ apiKey, baseURL, headers, name: config.name });
       switch (callType) {
         case CALL_TYPES.IMAGE_GEN:
           return provider.imageModel(model);
@@ -571,7 +582,7 @@ function instantiateLanguageModel(config, model) {
           return provider.chat(model);
         case CALL_TYPES.EMBEDDING:
           return provider.embedding(model);
-        case CALL_TYPES.ASR:
+        case CALL_TYPES.TRANSCRIBE:
           return provider.transcription(model);
         default:
           return unsupportedCallType();
