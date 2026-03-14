@@ -93,8 +93,8 @@ function authedRequest(url, init = {}) {
   });
 }
 
-function buildApiCall(body) {
-  return buildAiSdkRequest(body);
+function buildApiCall(body, options) {
+  return buildAiSdkRequest(body, options);
 }
 
 async function withMockedRandom(randomValue, callback) {
@@ -402,6 +402,91 @@ test('buildAiSdkRequest converts UI messages via convertToModelMessages and keep
   assert.equal(call.tools.lookupWeather.description, 'Look up the weather for a city.');
   assert.ok(call.tools.lookupWeather.inputSchema);
   assert.ok(call.tools.lookupWeather.outputSchema);
+});
+
+test('buildAiSdkRequest injects a backend fetch tool even when body.tools is empty', async () => {
+  const originalFetch = globalThis.fetch;
+  const upstreamCalls = [];
+
+  globalThis.fetch = async (url, init = {}) => {
+    upstreamCalls.push({
+      url: String(url),
+      method: init.method,
+      headers: new Headers(init.headers),
+      body: init.body ? await new Response(init.body).text() : '',
+    });
+
+    return new Response(JSON.stringify({ ok: true, echoedMethod: init.method }), {
+      status: 201,
+      headers: { 'content-type': 'application/json', 'x-test-header': 'yes' },
+    });
+  };
+
+  try {
+    const call = await buildApiCall({}, { includeServerFetchTool: true });
+
+    assert.deepEqual(Object.keys(call.tools), ['fetch']);
+    assert.equal(typeof call.tools.fetch.execute, 'function');
+    assert.equal(typeof call.stopWhen, 'function');
+    assert.ok(call.tools.fetch.inputSchema);
+    assert.ok(call.tools.fetch.outputSchema);
+
+    const result = await call.tools.fetch.execute(
+      {
+        url: 'https://example.com/tool-endpoint',
+        method: 'post',
+        headers: { authorization: 'Bearer custom-token', 'x-trace-id': 'trace-123' },
+        body: { hello: 'world' },
+      },
+      { toolCallId: 'call_fetch_1', messages: [] },
+    );
+
+    assert.equal(upstreamCalls.length, 1);
+    assert.equal(upstreamCalls[0].url, 'https://example.com/tool-endpoint');
+    assert.equal(upstreamCalls[0].method, 'POST');
+    assert.equal(upstreamCalls[0].headers.get('authorization'), 'Bearer custom-token');
+    assert.equal(upstreamCalls[0].headers.get('x-trace-id'), 'trace-123');
+    assert.equal(upstreamCalls[0].headers.get('content-type'), 'application/json');
+    assert.equal(upstreamCalls[0].body, JSON.stringify({ hello: 'world' }));
+
+    assert.equal(result.status, 201);
+    assert.equal(result.ok, true);
+    assert.equal(result.headers['x-test-header'], 'yes');
+    assert.deepEqual(result.body, { ok: true, echoedMethod: 'POST' });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('buildAiSdkRequest does not add multi-step continuation without backend fetch tool', async () => {
+  const call = await buildApiCall({ prompt: 'ping' });
+
+  assert.equal(call.stopWhen, undefined);
+});
+
+test('buildAiSdkRequest keeps declarative tools and appends the backend fetch tool', async () => {
+  const call = await buildApiCall({
+    tools: {
+      lookupWeather: {
+        description: 'Look up the weather for a city.',
+        inputSchema: {
+          type: 'object',
+          properties: { city: { type: 'string' } },
+          required: ['city'],
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: 'object',
+          properties: { tempC: { type: 'number' } },
+          required: ['tempC'],
+          additionalProperties: false,
+        },
+      },
+    },
+  }, { includeServerFetchTool: true });
+
+  assert.equal(typeof call.tools.lookupWeather, 'object');
+  assert.equal(typeof call.tools.fetch.execute, 'function');
 });
 
 test('buildAiSdkRequest sanitizes client headers and normalizes timeout', async () => {

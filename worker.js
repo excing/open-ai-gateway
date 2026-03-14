@@ -3,7 +3,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { jsonSchema, tool } from '@ai-sdk/provider-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { convertToModelMessages, generateImage, generateText, streamText, embedMany } from 'ai';
+import { convertToModelMessages, generateImage, generateText, stepCountIs, streamText, embedMany } from 'ai';
 import { experimental_generateVideo as generateVideo } from 'ai';
 import { experimental_generateSpeech as generateSpeech } from 'ai';
 import { experimental_transcribe as transcribe } from 'ai';
@@ -111,6 +111,9 @@ async function api({ request, env, url }) {
 async function v1({ request, env, url }) {
   if (request.method === 'GET' && url.pathname === '/v1/models') {
     return jsonResponse({ object: 'list', data: buildModelList(env) });
+  } else if (request.method === 'POST' && url.pathname === '/v1/chat/completions') {
+    const body = await safeReadJson(request);
+    return handleStreamRequest({ body, env, request, url });
   }
   return jsonResponse({ error: { message: `Unsupported API route: ${url.pathname}` } }, 404);
 }
@@ -126,10 +129,14 @@ async function handleGenerateRequest({ body, env, url }) {
       return jsonResponse({ error: { message: `No channel supports model \`${body?.model || 'unknown'}\`.` } }, 400);
     }
 
-    const call = await buildAiSdkRequest(body);
+    let chatCall;
+    let nonChatCall;
 
     for (const candidate of orderedCandidates) {
       try {
+        const call = candidate.callType === CALL_TYPES.CHAT
+          ? (chatCall ??= await buildAiSdkRequest(body, { includeServerFetchTool: true }))
+          : (nonChatCall ??= await buildAiSdkRequest(body));
         let result;
         switch (candidate.callType) {
           case CALL_TYPES.IMAGE_GEN:
@@ -190,7 +197,7 @@ async function handleStreamRequest({ body, env, url }) {
     if (!resolved.languageModel || !resolved.model) {
       throw new Error(`No AI SDK channel resolved for model \`${resolved.model || 'unknown'}\`.`);
     }
-    const call = await buildAiSdkRequest(body);
+    const call = await buildAiSdkRequest(body, { includeServerFetchTool: true });
     const result = streamText({ model: resolved.languageModel, ...call });
     return result.toUIMessageStreamResponse({
       headers: {
@@ -209,14 +216,15 @@ async function handleStreamRequest({ body, env, url }) {
   }
 }
 
-async function buildAiSdkRequest(body) {
-  const tools = buildDeclarativeTools(body.tools);
+async function buildAiSdkRequest(body, options = {}) {
+  const tools = buildRequestTools(body?.tools, options);
 
   return compactObject({
     system: body?.system,
     prompt: body?.prompt ?? body?.input,
     messages: body.messages ? convertToModelMessages(body.messages, { tools }) : undefined,
     tools,
+    stopWhen: buildRequestStopWhen(options),
     toolChoice: normalizeToolChoice(body.toolChoice ?? body?.tool_choice),
     activeTools: normalizeActiveTools(body.activeTools ?? body?.active_tools),
     headers: isPlainObject(body?.headers) ? sanitizeRequestHeaders(body.headers) : undefined,
@@ -267,6 +275,64 @@ function buildDeclarativeTools(value) {
   );
 }
 
+function buildRequestTools(value, options = {}) {
+  const tools = buildDeclarativeTools(value);
+
+  if (!options.includeServerFetchTool) {
+    return tools;
+  }
+
+  return {
+    ...(tools || {}),
+    fetch: buildServerFetchTool(),
+  };
+}
+
+function buildRequestStopWhen(options = {}) {
+  if (!options.includeServerFetchTool) {
+    return undefined;
+  }
+
+  return stepCountIs(5);
+}
+
+function buildServerFetchTool() {
+  return tool({
+    description: 'Fetch an HTTP or HTTPS URL and return the response status, headers, and body.',
+    inputSchema: jsonSchema({
+      type: 'object',
+      properties: {
+        url: { type: 'string' },
+        method: { type: 'string' },
+        headers: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+        },
+        body: {},
+      },
+      required: ['url'],
+      additionalProperties: false,
+    }),
+    outputSchema: jsonSchema({
+      type: 'object',
+      properties: {
+        ok: { type: 'boolean' },
+        url: { type: 'string' },
+        status: { type: 'number' },
+        statusText: { type: 'string' },
+        headers: {
+          type: 'object',
+          additionalProperties: { type: 'string' },
+        },
+        body: {},
+      },
+      required: ['ok', 'url', 'status', 'statusText', 'headers', 'body'],
+      additionalProperties: false,
+    }),
+    execute: executeServerFetchTool,
+  });
+}
+
 function buildDeclarativeTool(name, definition) {
   if (!name.trim()) {
     throw new Error('Tool names must be non-empty strings.');
@@ -303,6 +369,72 @@ function normalizeJsonSchema(schema, label) {
   }
 
   throw new Error(`\`${label}\` must be a JSON schema object.`);
+}
+
+async function executeServerFetchTool(input, options = {}) {
+  if (!isPlainObject(input)) {
+    throw new Error('`tools.fetch` input must be a JSON object.');
+  }
+
+  const url = firstString(input.url);
+  if (!url) {
+    throw new Error('`tools.fetch.url` must be a non-empty string.');
+  }
+
+  const target = new URL(url);
+  if (!['http:', 'https:'].includes(target.protocol)) {
+    throw new Error('`tools.fetch.url` must use `http:` or `https:`.');
+  }
+
+  const method = String(firstString(input.method) || (input.body === undefined ? 'GET' : 'POST')).toUpperCase();
+  const headers = sanitizeHeaders(input.headers);
+  const init = {
+    method,
+    headers,
+    signal: options.abortSignal,
+  };
+
+  if (canHaveRequestBody(method) && input.body !== undefined) {
+    init.body = typeof input.body === 'string' ? input.body : JSON.stringify(input.body);
+    if (typeof input.body !== 'string' && headers['content-type'] == null) {
+      init.headers = { ...headers, 'content-type': 'application/json' };
+    }
+  }
+
+  try {
+    const response = await fetch(target, init);
+
+    return {
+      ok: response.ok,
+      url: response.url || target.toString(),
+      status: response.status,
+      statusText: response.statusText,
+      headers: Object.fromEntries(response.headers.entries()),
+      body: await readFetchToolResponseBody(response),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      url: target.toString(),
+      status: 404,
+      statusText: 'Failed',
+      headers: {},
+      body: String(error),
+    };
+  }
+}
+
+async function readFetchToolResponseBody(response) {
+  const contentType = response.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    try {
+      return await response.clone().json();
+    } catch {
+      // fall through to text body below.
+    }
+  }
+
+  return response.text();
 }
 
 function normalizeToolChoice(value) {

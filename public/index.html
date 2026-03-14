@@ -3,9 +3,25 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Open AI Gateway - AI 网关统一调试面板" />
+  <meta name="theme-color" content="#07111f" />
   <title>Open AI Gateway</title>
   <style>
     :root{color-scheme:dark;--bg:#07111f;--card:#101b2d;--line:#22324d;--text:#ecf3ff;--muted:#98a7be;--blue:#5aa2ff;--blue-2:#2563eb;--green:#22c55e;--amber:#f59e0b;--red:#ef4444;--shadow:0 20px 50px rgba(0,0,0,.28)}*{box-sizing:border-box}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:radial-gradient(circle at top,#15325f 0%,#09111e 36%,#050a14 100%);color:var(--text)}main{max-width:1240px;margin:0 auto;padding:40px 20px 56px}.hero{display:grid;gap:20px;grid-template-columns:minmax(0,1.25fr) minmax(280px,.75fr);align-items:start;margin-bottom:24px}.eyebrow{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid rgba(90,162,255,.26);border-radius:999px;background:rgba(90,162,255,.12);font-size:12px;color:#cfe2ff;letter-spacing:.04em;text-transform:uppercase}.hero h1{margin:14px 0 12px;font-size:clamp(32px,5vw,56px);line-height:1.02}.hero p{margin:0;color:#c7d4e6;font-size:16px;line-height:1.7}.card{background:linear-gradient(180deg,rgba(16,27,45,.96),rgba(10,20,35,.96));border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow)}.hero-note{padding:20px}.hero-note h2,.section-header h2{margin:0 0 10px;font-size:18px}.hero-note ul{margin:0;padding-left:18px;color:#cfe0f6;line-height:1.75}.layout{display:grid;gap:20px;grid-template-columns:minmax(0,1.1fr) minmax(320px,.9fr);align-items:start}.workspace,.response,.example{padding:18px}.section-header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.section-header p{margin:4px 0 0;color:var(--muted);font-size:14px;line-height:1.6}.tabs{display:flex;gap:10px;flex-wrap:wrap;padding:6px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);border-radius:16px;margin-bottom:18px}.tab{appearance:none;border:0;border-radius:12px;padding:11px 14px;background:transparent;color:#bed0ea;font:inherit;font-weight:600;cursor:pointer;transition:.2s}.tab:hover{background:rgba(255,255,255,.05);color:var(--text)}.tab.active{background:linear-gradient(180deg,rgba(90,162,255,.24),rgba(37,99,235,.24));color:#fff;box-shadow:inset 0 0 0 1px rgba(90,162,255,.3)}.panel{display:none;padding:18px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05);border-radius:18px}.panel.active{display:block}.panel-meta{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px}.pill{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;background:rgba(90,162,255,.12);border:1px solid rgba(90,162,255,.2);color:#dceaff;font-size:12px;font-weight:700;letter-spacing:.02em}.hint{color:var(--muted);font-size:13px;line-height:1.6}.request-form{display:grid;gap:14px}.field{display:grid;gap:7px}.field label{font-size:13px;font-weight:700;color:#d7e5f9}.field small{color:var(--muted);font-size:12px}.checkbox-field{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:14px;border:1px solid #324663;background:#0b1423;color:#d7e5f9;font-size:14px;font-weight:700}.checkbox-field input{margin:0;inline-size:16px;block-size:16px;accent-color:var(--blue)}.input,textarea{width:100%;border-radius:14px;border:1px solid #324663;background:#0b1423;color:var(--text);padding:12px 14px;font:inherit;transition:border-color .2s,box-shadow .2s}.input:focus,textarea:focus{outline:none;border-color:rgba(90,162,255,.8);box-shadow:0 0 0 4px rgba(90,162,255,.15)}textarea{min-height:148px;resize:vertical}.actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}.button{appearance:none;border:0;border-radius:14px;padding:12px 16px;font:inherit;font-weight:700;cursor:pointer;transition:transform .15s ease,opacity .2s ease,background .2s ease}.button:disabled{opacity:.6;cursor:wait;transform:none}.button.primary{background:linear-gradient(180deg,#5aa2ff,#2563eb);color:#fff}.button.primary:hover:not(:disabled){transform:translateY(-1px)}.button.ghost{background:rgba(255,255,255,.04);color:#d7e5f9;border:1px solid rgba(255,255,255,.08)}.button.ghost:hover:not(:disabled){background:rgba(255,255,255,.08)}.mini-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:16px}.mini-card{padding:14px;border-radius:16px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05)}.mini-card strong{display:block;margin-bottom:6px;font-size:13px}.mini-card span{display:block;color:var(--muted);font-size:12px;line-height:1.5}.stack{display:grid;gap:20px}.status{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:14px;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.03);color:#d9e7fb;font-size:14px;margin:14px 0 16px}.status::before{content:'';width:10px;height:10px;border-radius:999px;background:#6b7f99;flex:0 0 auto}.status.success::before{background:var(--green)}.status.working::before{background:var(--amber)}.status.error::before{background:var(--red)}.preview{padding:16px;border-radius:18px;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.06)}.preview.empty{color:var(--muted)}.preview h3{margin:0 0 12px;font-size:15px}.stats{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));margin-bottom:14px}.stat{padding:12px;border-radius:14px;background:rgba(7,17,31,.5);border:1px solid rgba(255,255,255,.05)}.stat span{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}.stat strong{font-size:14px;word-break:break-word}.preview-body{white-space:pre-wrap;word-break:break-word;line-height:1.7;color:#edf4ff}.preview-body.typing::after{content:' ▍';color:var(--blue);animation:blink 1s steps(1,end) infinite}@keyframes blink{50%{opacity:0}}.code-card{margin-top:16px;padding:10px 14px 14px;border-radius:18px;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.06)}.code-card summary{cursor:pointer;color:#dbe8fb;font-weight:700;user-select:none}.code-card pre,.example pre{margin:12px 0 0;white-space:pre-wrap;word-break:break-word;overflow:auto;background:#071120;border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:14px;color:#dbe8fb;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.7}.example-note{margin:12px 0 0;color:var(--muted);font-size:13px;line-height:1.6}@media (max-width:960px){.hero,.layout{grid-template-columns:1fr}main{padding:24px 16px 40px}.hero h1{font-size:40px}}@media (max-width:640px){.actions,.section-header{flex-direction:column;align-items:stretch}.tabs{display:grid;grid-template-columns:1fr}.button{width:100%}}
+    ::selection{background:rgba(90,162,255,.3);color:#fff}
+    html{scroll-behavior:smooth}
+    body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+    code{padding:2px 6px;border-radius:6px;background:rgba(90,162,255,.1);color:#a8d0ff;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em}
+    .hero h1{background:linear-gradient(180deg,#fff 0%,#a0c4ff 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+    ::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}::-webkit-scrollbar-thumb:hover{background:#3a5070}
+    .tab:focus-visible,.button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}.tab:focus:not(:focus-visible),.button:focus:not(:focus-visible){outline:none}
+    .button.primary:active:not(:disabled){transform:translateY(1px);filter:brightness(.92)}.button.ghost:active:not(:disabled){background:rgba(255,255,255,.12)}
+    .status::before{transition:background-color .3s ease}.status.working::before{animation:pulse 2s ease-in-out infinite}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+    .mini-card{transition:border-color .2s ease,transform .2s ease,background .2s ease}.mini-card:hover{border-color:rgba(90,162,255,.15);background:rgba(255,255,255,.05);transform:translateY(-2px)}
+    .card{transition:border-color .3s ease,box-shadow .3s ease}.card:hover{border-color:rgba(90,162,255,.1)}
+    .input::placeholder,textarea::placeholder{color:#4a6080}
+    main::after{content:'';display:block;height:1px;margin-top:40px;background:linear-gradient(90deg,transparent,var(--line),transparent)}
+    @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}html{scroll-behavior:auto}}
   </style>
 </head>
 <body>
@@ -42,11 +58,11 @@
         </div>
 
         <div class="tabs" role="tablist" aria-label="请求类型切换">
-          <button class="tab active" type="button" role="tab" data-tab="generate">/api/generate</button>
-          <button class="tab" type="button" role="tab" data-tab="stream">/api/stream</button>
+          <button class="tab active" type="button" role="tab" aria-selected="true" aria-controls="panel-generate" data-tab="generate">/api/generate</button>
+          <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="panel-stream" data-tab="stream">/api/stream</button>
         </div>
 
-        <section class="panel active" data-panel="generate">
+        <section class="panel active" id="panel-generate" role="tabpanel" data-panel="generate">
           <div class="panel-meta">
             <span class="pill">返回 JSON</span>
             <span class="hint">适合快速验证 <code>content / finishReason / usage</code> 结构。</span>
@@ -68,7 +84,7 @@
           </form>
         </section>
 
-        <section class="panel" data-panel="stream">
+        <section class="panel" id="panel-stream" role="tabpanel" data-panel="stream">
           <div class="panel-meta">
             <span class="pill">返回流</span>
             <span class="hint">适合观察流式增量输出和事件流原文。</span>
@@ -505,7 +521,11 @@
 
     function switchTab(tab) {
       activeTab = tab;
-      document.querySelectorAll('.tab').forEach((button) => button.classList.toggle('active', button.dataset.tab === tab));
+      document.querySelectorAll('.tab').forEach((button) => {
+        const isActive = button.dataset.tab === tab;
+        button.classList.toggle('active', isActive);
+        button.setAttribute('aria-selected', String(isActive));
+      });
       document.querySelectorAll('.panel').forEach((panel) => panel.classList.toggle('active', panel.dataset.panel === tab));
       const endpoint = $('response-endpoint');
       if (endpoint) endpoint.textContent = `当前目标：${endpoints[tab]} · ${endpointNotes[tab]}`;
@@ -569,6 +589,16 @@
       button.addEventListener('click', () => switchTab(button.dataset.tab || 'generate'));
     });
 
+    document.querySelector('.tabs')?.addEventListener('keydown', (e) => {
+      const tabs = [...document.querySelectorAll('.tab')];
+      const idx = tabs.indexOf(document.activeElement);
+      if (idx < 0) return;
+      let next = -1;
+      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (idx + 1) % tabs.length;
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (idx - 1 + tabs.length) % tabs.length;
+      if (next >= 0) { e.preventDefault(); tabs[next].focus(); tabs[next].click(); }
+    });
+
     const forms = {
       'generate-form': () => buildPayload('generate'),
       'stream-form': () => buildPayload('stream'),
@@ -609,9 +639,11 @@
     });
 
     $('copy-example')?.addEventListener('click', async () => {
+      const btn = $('copy-example');
       const content = $('example')?.textContent || '';
       try {
         await navigator.clipboard.writeText(content);
+        if (btn) { const orig = btn.textContent; btn.textContent = '已复制'; setTimeout(() => { btn.textContent = orig; }, 1500); }
         setStatus('curl 示例已复制到剪贴板。', 'success');
       } catch {
         setStatus('复制失败，请手动复制右侧 curl 示例。', 'error');
