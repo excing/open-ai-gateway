@@ -1,14 +1,14 @@
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
-import { jsonSchema, tool } from '@ai-sdk/provider-utils';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { convertToModelMessages, generateImage, generateText, stepCountIs, streamText, embedMany } from 'ai';
+import { generateImage, generateText, streamText, embedMany } from 'ai';
 import { experimental_generateVideo as generateVideo } from 'ai';
 import { experimental_generateSpeech as generateSpeech } from 'ai';
 import { experimental_transcribe as transcribe } from 'ai';
 import { createFallback } from 'ai-fallback';
 import { createPollinations } from 'ai-sdk-pollinations';
+import { extractMediaResources } from './media-utils.js';
 
 const CORS_HEADERS = {
   'access-control-allow-origin': '*',
@@ -50,10 +50,6 @@ export default {
     const url = new URL(request.url);
 
     try {
-      if (url.pathname === '/favicon.ico') {
-        return withCors(new Response(null, { status: 204 }));
-      }
-
       if (routeRequiresAdminAuth(url.pathname)) {
         const unauthorized = requireAdminAuth(request, env);
         if (unauthorized) {
@@ -62,22 +58,22 @@ export default {
       }
 
       if (url.pathname === '/healthz') {
-        return withCors(jsonResponse(buildHealth(env)));
-      }
-
-      if (url.pathname.startsWith('/api')) {
-        return withCors(await api({ request, env, url }));
+        return withCors(json(buildHealth(env)));
       }
 
       if (url.pathname.startsWith('/v1')) {
         return withCors(await v1({ request, env, url }));
       }
 
-      return withCors(jsonResponse({ error: { message: 'Not Found' } }, 404));
+      if (url.pathname.startsWith('/vercel')) {
+        return withCors(await vercel({ request, env, url }));
+      }
+
+      return withCors(json({ error: { message: 'Not Found' } }, 404));
     } catch (error) {
       console.error('Unhandled worker error', error);
       return withCors(
-        jsonResponse(
+        json(
           { error: { message: error instanceof Error ? error.message : 'Internal Server Error' } },
           500,
         ),
@@ -86,104 +82,63 @@ export default {
   },
 };
 
-async function api({ request, env, url }) {
-  const body = await safeReadJson(request);
-
-  if (!isPlainObject(body)) {
-    throw new Error('Request body must be a JSON object.');
-  }
-
-  rejectUnsupportedAiSdkOptions(body);
-
-  const path = url.pathname.replace(/^\/api/, '') || '/';
-
-  if (request.method === 'POST' && path === '/generate') {
-    return handleGenerateRequest({ body, env, request, url });
-  }
-
-  if (request.method === 'POST' && path === '/stream') {
-    return handleStreamRequest({ body, env, request, url });
-  }
-
-  return jsonResponse({ error: { message: `Unsupported API route: ${path}` } }, 404);
-}
-
 async function v1({ request, env, url }) {
   if (request.method === 'GET' && url.pathname === '/v1/models') {
-    return jsonResponse({ object: 'list', data: buildModelList(env) });
+    return json({ object: 'list', data: buildModelList(env) });
   } else if (request.method === 'POST' && url.pathname === '/v1/chat/completions') {
     const body = await safeReadJson(request);
     return handleStreamRequest({ body, env, request, url });
   }
-  return jsonResponse({ error: { message: `Unsupported API route: ${url.pathname}` } }, 404);
+  return json({ error: { message: `Unsupported API route: ${url.pathname}` } }, 404);
 }
 
-async function handleGenerateRequest({ body, env, url }) {
-  try {
-    const orderedCandidates = resolveChannels({
-      env,
-      model: body?.model || url.searchParams.get('model')
-    });
-
-    if (0 == orderedCandidates.length) {
-      return jsonResponse({ error: { message: `No channel supports model \`${body?.model || 'unknown'}\`.` } }, 400);
+async function vercel({ request, env, url }) {
+  if (request.method === 'GET' && url.pathname === '/vercel/models') {
+    return json({ object: 'list', data: buildModelList(env) });
+  } else if (request.method === 'POST') {
+    const body = await safeReadJson(request);
+    const model = body?.model || url.searchParams.get('model');
+    const orderedCandidates = resolveChannels({ env, model });
+    if (url.pathname === '/vercel/text') {
+      const result = await handleGenerateText({ orderedCandidates, params: body });
+      return json({
+        content: result.content,
+        finishReason: result.finishReason,
+        usage: result.usage,
+      });
+    } else if (url.pathname === '/vercel/image') {
+      const result = await handleGenerateImage({ orderedCandidates, params: body });
+      return json({
+        image: result.image,
+        images: result.images,
+        usage: result.usage,
+      });
+    } else if (url.pathname === '/vercel/audio') {
+      const result = await handleGenerateAudio({ orderedCandidates, params: body });
+      return json({
+        audio: result.audio,
+      });
+    } else if (url.pathname === '/vercel/video') {
+      const result = await handleGenerateVideo({ orderedCandidates, params: body });
+      return json({
+        video: result.video,
+        videos: result.videos,
+      });
+    } else if (url.pathname === '/vercel/transcribe') {
+      const result = await handleGenerateTranscribe({ orderedCandidates, params: body });
+      return json({
+        text: result.text,
+      });
+    } else if (url.pathname === '/vercel/embedding') {
+      const result = await handleGenerateEmbedding({ orderedCandidates, params: body });
+      return json({
+        values: result.values,
+        embeddings: result.embeddings,
+        usage: result.usage,
+      });
     }
-
-    let chatCall;
-    let nonChatCall;
-
-    for (const candidate of orderedCandidates) {
-      try {
-        const call = candidate.callType === CALL_TYPES.CHAT
-          ? (chatCall ??= await buildAiSdkRequest(body, { includeServerFetchTool: true }))
-          : (nonChatCall ??= await buildAiSdkRequest(body));
-        let result;
-        switch (candidate.callType) {
-          case CALL_TYPES.IMAGE_GEN:
-            result = await generateImage({ model: candidate.languageModel, ...call });
-            break;
-          case CALL_TYPES.VIDEO_GEN:
-            result = await generateVideo({ model: candidate.languageModel, ...call });
-            break;
-          case CALL_TYPES.AUDIO_GEN:
-            result = await generateSpeech({ model: candidate.languageModel, ...call });
-            break;
-          case CALL_TYPES.EMBEDDING:
-            result = await embedMany({ model: candidate.languageModel, ...call });
-            break;
-          case CALL_TYPES.TRANSCRIBE:
-            result = await transcribe({ model: candidate.languageModel, ...call });
-            break;
-          case CALL_TYPES.CHAT:
-          default:
-            result = await generateText({ model: candidate.languageModel, ...call });
-            break;
-        }
-        return new Response(
-          JSON.stringify(result),
-          {
-            status: 200,
-            headers: {
-              'content-type': 'application/json; charset=UTF-8',
-              'x-gateway-channel': candidate.key,
-              'x-gateway-provider': candidate.provider,
-              'x-gateway-model': candidate.model || '',
-            },
-          },
-        );
-      } catch (error) {
-        console.warn('Language model failover triggered', {
-          channel: candidate.provider,
-          modelId: candidate.model,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    return jsonResponse({ error: { message: `Failed for model \`${body?.model || 'unknown'}\`.` } }, 500);
-  } catch (error) {
-    return jsonResponse({ error: { message: error instanceof Error ? error.message : 'Bad Request' } }, 400);
   }
+  return json({ error: { message: `Unsupported API route: ${url.pathname}` } }, 404);
 }
 
 async function handleStreamRequest({ body, env, url }) {
@@ -194,17 +149,11 @@ async function handleStreamRequest({ body, env, url }) {
     });
 
     const resolved = buildActiveModelCandidate(...orderedCandidates);
-    if (!resolved.languageModel || !resolved.model) {
-      throw new Error(`No AI SDK channel resolved for model \`${resolved.model || 'unknown'}\`.`);
+    if (!resolved.languageModel || !resolved.candidate) {
+      throw new Error(`No AI SDK channel resolved for model \`${resolved.candidate?.model || 'unknown'}\`.`);
     }
-    const call = await buildAiSdkRequest(body, { includeServerFetchTool: true });
-    const result = streamText({ model: resolved.languageModel, ...call });
+    const result = streamText({ ...body, model: resolved.languageModel, });
     return result.toUIMessageStreamResponse({
-      headers: {
-        'x-gateway-channel': resolved.channel,
-        'x-gateway-provider': resolved.provider,
-        'x-gateway-model': resolved.model || '',
-      },
       messageMetadata: ({ part }) => {
         if (part.type === 'finish') {
           return { usage: part.totalUsage, finishReason: part.finishReason };
@@ -212,288 +161,7 @@ async function handleStreamRequest({ body, env, url }) {
       },
     });
   } catch (error) {
-    return jsonResponse({ error: { message: error instanceof Error ? error.message : 'Bad Request' } }, 400);
-  }
-}
-
-async function buildAiSdkRequest(body, options = {}) {
-  const tools = buildRequestTools(body?.tools, options);
-
-  return compactObject({
-    system: body?.system,
-    prompt: body?.prompt ?? body?.input,
-    messages: body.messages ? convertToModelMessages(body.messages, { tools }) : undefined,
-    tools,
-    stopWhen: buildRequestStopWhen(options),
-    toolChoice: normalizeToolChoice(body.toolChoice ?? body?.tool_choice),
-    activeTools: normalizeActiveTools(body.activeTools ?? body?.active_tools),
-    headers: isPlainObject(body?.headers) ? sanitizeRequestHeaders(body.headers) : undefined,
-    providerOptions: isPlainObject(body?.providerOptions ?? body?.provider_options)
-      ? (body.providerOptions ?? body.provider_options)
-      : undefined,
-    temperature: toNumber(body?.temperature),
-    topP: toNumber(body?.topP ?? body?.top_p),
-    topK: toInteger(body?.topK ?? body?.top_k),
-    maxOutputTokens: toInteger(body?.maxOutputTokens ?? body?.max_tokens ?? body?.maxTokens),
-    presencePenalty: toNumber(body?.presencePenalty ?? body?.presence_penalty),
-    frequencyPenalty: toNumber(body?.frequencyPenalty ?? body?.frequency_penalty),
-    stopSequences: normalizeStopSequences(body?.stopSequences ?? body?.stop_sequences ?? body?.stop),
-    seed: toInteger(body?.seed),
-    n: toInteger(body?.n),
-    maxImagesPerCall: toInteger(body?.maxImagesPerCall ?? body?.max_images_per_call),
-    size: firstString(body?.size),
-    aspectRatio: firstString(body?.aspectRatio, body?.aspect_ratio),
-    maxVideosPerCall: toInteger(body?.maxVideosPerCall ?? body?.max_videos_per_call),
-    resolution: firstString(body?.resolution),
-    duration: toNumber(body?.duration),
-    fps: toNumber(body?.fps),
-    text: firstString(body?.text),
-    voice: firstString(body?.voice),
-    outputFormat: firstString(body?.outputFormat, body?.output_format),
-    instructions: firstString(body?.instructions),
-    speed: toNumber(body?.speed),
-    language: firstString(body?.language),
-    values: Array.isArray(body?.values) ? body.values.map((value) => String(value)) : undefined,
-    maxParallelCalls: toInteger(body?.maxParallelCalls ?? body?.max_parallel_calls),
-    audio: typeof body?.audio === 'string' ? new URL(body.audio) : body?.audio,
-    maxRetries: toInteger(body?.maxRetries ?? body?.max_retries),
-    timeout: normalizeTimeout(body?.timeout),
-  });
-}
-
-function buildDeclarativeTools(value) {
-  if (value == null) {
-    return undefined;
-  }
-
-  if (!isPlainObject(value)) {
-    throw new Error('`tools` must be an object keyed by tool name.');
-  }
-
-  return Object.fromEntries(
-    Object.entries(value).map(([name, definition]) => [name, buildDeclarativeTool(name, definition)]),
-  );
-}
-
-function buildRequestTools(value, options = {}) {
-  const tools = buildDeclarativeTools(value);
-
-  if (!options.includeServerFetchTool) {
-    return tools;
-  }
-
-  return {
-    ...(tools || {}),
-    fetch: buildServerFetchTool(),
-  };
-}
-
-function buildRequestStopWhen(options = {}) {
-  if (!options.includeServerFetchTool) {
-    return undefined;
-  }
-
-  return stepCountIs(5);
-}
-
-function buildServerFetchTool() {
-  return tool({
-    description: 'Fetch an HTTP or HTTPS URL and return the response status, headers, and body.',
-    inputSchema: jsonSchema({
-      type: 'object',
-      properties: {
-        url: { type: 'string' },
-        method: { type: 'string' },
-        headers: {
-          type: 'object',
-          additionalProperties: { type: 'string' },
-        },
-        body: {},
-      },
-      required: ['url'],
-      additionalProperties: false,
-    }),
-    outputSchema: jsonSchema({
-      type: 'object',
-      properties: {
-        ok: { type: 'boolean' },
-        url: { type: 'string' },
-        status: { type: 'number' },
-        statusText: { type: 'string' },
-        headers: {
-          type: 'object',
-          additionalProperties: { type: 'string' },
-        },
-        body: {},
-      },
-      required: ['ok', 'url', 'status', 'statusText', 'headers', 'body'],
-      additionalProperties: false,
-    }),
-    execute: executeServerFetchTool,
-  });
-}
-
-function buildDeclarativeTool(name, definition) {
-  if (!name.trim()) {
-    throw new Error('Tool names must be non-empty strings.');
-  }
-
-  if (!isPlainObject(definition)) {
-    throw new Error(`\`tools.${name}\` must be an object.`);
-  }
-
-  if ('execute' in definition || 'toModelOutput' in definition) {
-    throw new Error(`\`tools.${name}\` must be declarative JSON only. Runtime functions are not supported on \`/api\` routes.`);
-  }
-
-  const inputSchema = normalizeJsonSchema(definition.inputSchema, `tools.${name}.inputSchema`);
-  const outputSchema = normalizeJsonSchema(definition.outputSchema, `tools.${name}.outputSchema`);
-
-  return tool(
-    compactObject({
-      title: firstString(definition.title),
-      description: firstString(definition.description),
-      providerOptions: isPlainObject(definition.providerOptions) ? definition.providerOptions : undefined,
-      inputSchema: jsonSchema(inputSchema),
-      inputExamples: Array.isArray(definition.inputExamples) ? definition.inputExamples : undefined,
-      needsApproval: typeof definition.needsApproval === 'boolean' ? definition.needsApproval : undefined,
-      strict: typeof definition.strict === 'boolean' ? definition.strict : undefined,
-      outputSchema: jsonSchema(outputSchema),
-    }),
-  );
-}
-
-function normalizeJsonSchema(schema, label) {
-  if (isPlainObject(schema)) {
-    return schema;
-  }
-
-  throw new Error(`\`${label}\` must be a JSON schema object.`);
-}
-
-async function executeServerFetchTool(input, options = {}) {
-  if (!isPlainObject(input)) {
-    throw new Error('`tools.fetch` input must be a JSON object.');
-  }
-
-  const url = firstString(input.url);
-  if (!url) {
-    throw new Error('`tools.fetch.url` must be a non-empty string.');
-  }
-
-  const target = new URL(url);
-  if (!['http:', 'https:'].includes(target.protocol)) {
-    throw new Error('`tools.fetch.url` must use `http:` or `https:`.');
-  }
-
-  const method = String(firstString(input.method) || (input.body === undefined ? 'GET' : 'POST')).toUpperCase();
-  const headers = sanitizeHeaders(input.headers);
-  const init = {
-    method,
-    headers,
-    signal: options.abortSignal,
-  };
-
-  if (canHaveRequestBody(method) && input.body !== undefined) {
-    init.body = typeof input.body === 'string' ? input.body : JSON.stringify(input.body);
-    if (typeof input.body !== 'string' && headers['content-type'] == null) {
-      init.headers = { ...headers, 'content-type': 'application/json' };
-    }
-  }
-
-  try {
-    const response = await fetch(target, init);
-
-    return {
-      ok: response.ok,
-      url: response.url || target.toString(),
-      status: response.status,
-      statusText: response.statusText,
-      headers: Object.fromEntries(response.headers.entries()),
-      body: await readFetchToolResponseBody(response),
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      url: target.toString(),
-      status: 404,
-      statusText: 'Failed',
-      headers: {},
-      body: String(error),
-    };
-  }
-}
-
-async function readFetchToolResponseBody(response) {
-  const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    try {
-      return await response.clone().json();
-    } catch {
-      // fall through to text body below.
-    }
-  }
-
-  return response.text();
-}
-
-function normalizeToolChoice(value) {
-  if (value == null) {
-    return undefined;
-  }
-
-  if (typeof value === 'string' || isPlainObject(value)) {
-    return value;
-  }
-
-  throw new Error('`toolChoice` must be a string or an object.');
-}
-
-function normalizeActiveTools(value) {
-  if (value == null) {
-    return undefined;
-  }
-
-  if (!Array.isArray(value)) {
-    throw new Error('`activeTools` must be an array of tool names.');
-  }
-
-  return value.map((name) => String(name).trim());
-}
-
-function normalizeTimeout(value) {
-  if (value == null) {
-    return undefined;
-  }
-
-  if (typeof value === 'number') {
-    return Number.isFinite(value) ? value : undefined;
-  }
-
-  if (!isPlainObject(value)) {
-    throw new Error('`timeout` must be a number or an object with `totalMs`, `stepMs`, or `chunkMs`.');
-  }
-
-  const timeout = compactObject({
-    totalMs: toInteger(value.totalMs),
-    stepMs: toInteger(value.stepMs),
-    chunkMs: toInteger(value.chunkMs),
-  });
-
-  if (Object.keys(timeout).length === 0) {
-    throw new Error('`timeout` must include at least one of `totalMs`, `stepMs`, or `chunkMs`.');
-  }
-
-  return timeout;
-}
-
-function rejectUnsupportedAiSdkOptions(body) {
-  const unsupportedOptions = ['output', 'experimental_output', 'stopWhen', 'prepareStep', 'experimental_prepareStep', 'experimental_download', 'abortSignal'];
-
-  for (const key of unsupportedOptions) {
-    if (key in body) {
-      throw new Error(`\`${key}\` is not supported on \`/api\` routes because it requires non-JSON runtime behavior.`);
-    }
+    return json({ error: { message: error instanceof Error ? error.message : 'Bad Request' } }, 400);
   }
 }
 
@@ -555,30 +223,14 @@ function resolveChannels({ env, model, random = Math.random }) {
 
 function buildActiveModelCandidate(...candidates) {
   if (!Array.isArray(candidates) || candidates.length === 0) {
-    throw new Error(`No candidates provided.`);
+    return { languageModel: null, candidate: null };
   }
   const languageModel = buildLanguageModelWithFailover(candidates);
-  const getActiveCandidate = () => getActiveResolvedCandidate(candidates, languageModel);
 
   return {
     languageModel,
-    get channel() {
-      return getActiveCandidate().key;
-    },
-    get provider() {
-      return getActiveCandidate().provider;
-    },
-    get model() {
-      return getActiveCandidate().model;
-    },
-    get baseURL() {
-      return getActiveCandidate().baseURL;
-    },
-    get apiKey() {
-      return getActiveCandidate().apiKey;
-    },
-    get headers() {
-      return getActiveCandidate().headers;
+    get candidate() {
+      return getActiveResolvedCandidate(candidates, languageModel);
     },
   };
 }
@@ -599,11 +251,7 @@ function buildLanguageModelWithFailover(candidates) {
     models: languageModels,
     shouldRetryThisError: () => true,
     onError(error, modelId) {
-      console.warn('Language model failover triggered', {
-        channel: fallback.provider,
-        modelId,
-        message: error instanceof Error ? error.message : String(error),
-      });
+      logFailover(fallback.provider, modelId, error);
     },
   });
   return fallback;
@@ -693,7 +341,7 @@ function instantiateLanguageModel(config, model) {
         case CALL_TYPES.IMAGE_GEN:
           return provider.image(model);
         case CALL_TYPES.AUDIO_GEN:
-          return provider.audio(model);
+          return provider.speechModel(model);
         case CALL_TYPES.CHAT:
           return provider.chat(model);
         default:
@@ -775,19 +423,6 @@ function lowerCaseModelId(value) {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
-function normalizeStopSequences(value) {
-  if (typeof value === 'string' && value.trim()) {
-    return [value];
-  }
-
-  if (Array.isArray(value)) {
-    const items = value.map((item) => String(item || '').trim()).filter(Boolean);
-    return items.length ? items : undefined;
-  }
-
-  return undefined;
-}
-
 function sanitizeHeaders(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return {};
@@ -800,20 +435,8 @@ function sanitizeHeaders(value) {
   );
 }
 
-function sanitizeRequestHeaders(value) {
-  const disallowed = new Set(['authorization', 'api-key', 'x-api-key', 'cookie', 'x-admin-key', 'x-admin-token']);
-
-  return Object.fromEntries(
-    Object.entries(sanitizeHeaders(value)).filter(([key]) => !disallowed.has(key.toLowerCase())),
-  );
-}
-
 function compactObject(value) {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined));
-}
-
-function isPlainObject(value) {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function firstString(...values) {
@@ -825,8 +448,9 @@ function firstString(...values) {
   return undefined;
 }
 
+const requireAdminAuthPath = ['/healthz', '/v1', '/vercel'];
 function routeRequiresAdminAuth(pathname) {
-  return pathname === '/healthz' || pathname.startsWith('/api') || pathname.startsWith('/v1');
+  return requireAdminAuthPath.some((path) => pathname.startsWith(path));
 }
 
 function requireAdminAuth(request, env) {
@@ -837,7 +461,7 @@ function requireAdminAuth(request, env) {
     return null;
   }
 
-  return jsonResponse(
+  return json(
     {
       error: {
         message: 'Unauthorized. Provide `Authorization: Bearer <adminKey>` or `x-admin-key`.',
@@ -868,18 +492,6 @@ function getRequestAdminKey(request) {
   return match ? firstString(match[1]) : undefined;
 }
 
-function toNumber(value) {
-  if (value == null || value === '') return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function toInteger(value) {
-  if (value == null || value === '') return undefined;
-  const parsed = Number.parseInt(String(value), 10);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 async function safeReadJson(request) {
   const contentType = request.headers.get('content-type') || '';
   if (!contentType.includes('application/json') || !canHaveRequestBody(request.method)) {
@@ -901,7 +513,7 @@ function canHaveRequestBody(method) {
   return !['GET', 'HEAD'].includes(method.toUpperCase());
 }
 
-function jsonResponse(data, status = 200) {
+function json(data, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
     status,
     headers: { 'content-type': 'application/json; charset=UTF-8' },
@@ -921,5 +533,159 @@ function withCors(response) {
   });
 }
 
+function logFailover(channelKey, modelID, error) {
+  console.warn('Language model failover triggered', {
+    channel: channelKey,
+    modelId: modelID,
+    message: error instanceof Error ? error.message : String(error),
+  });
+}
 
-export { api, buildAiSdkRequest, buildModelList, v1 };
+
+// -------------------------- ai sdk generate text
+
+async function handleGenerateText({ orderedCandidates, params }) {
+  const chatCandidates = orderedCandidates.filter((candidate) => candidate.callType === CALL_TYPES.CHAT);
+  const resolved = buildActiveModelCandidate(...chatCandidates);
+  return await generateText({ ...params, model: resolved.languageModel });
+}
+
+// -------------------------- ai sdk generate image
+
+async function handleGenerateImage({ orderedCandidates, params }) {
+  try {
+    const result = await handleGenerateText({ orderedCandidates, params });
+    const { text, files } = result;
+    const images = await extractMediaResources({ text, files });
+
+    return {
+      image: images[0],
+      images,
+      warnings: result.warnings ?? [],
+      providerMetadata: result.providerMetadata,
+      response: result.response,
+      usage: {
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+        totalTokens: result.usage.totalTokens,
+      }
+    }
+  } catch (error) {
+    console.warn('handleGenerateImage', error);
+    const imageCandidates = orderedCandidates.filter((candidate) => candidate.callType === CALL_TYPES.IMAGE_GEN);
+    const imageResolved = buildActiveModelCandidate(...imageCandidates);
+    return await generateImage({ ...params, model: imageResolved.languageModel });
+  }
+}
+
+// -------------------------- ai sdk generate audio
+
+async function handleGenerateAudio({ orderedCandidates, params }) {
+  try {
+    const result = await handleGenerateText({ orderedCandidates, params });
+    const { text, files } = result;
+    const audios = await extractMediaResources({ text, files });
+
+    return {
+      audio: audios[0],
+      warnings: result.warnings ?? [],
+      providerMetadata: result.providerMetadata,
+      response: result.response,
+    }
+  } catch (error) {
+    console.warn('handleGenerateAudio', error);
+    const audioCandidates = orderedCandidates.filter((candidate) => candidate.callType === CALL_TYPES.AUDIO_GEN);
+    const audioResolved = buildActiveModelCandidate(...audioCandidates);
+    const speechResult = await generateSpeech({ ...params, model: audioResolved.languageModel });
+    return {
+      audio: {
+        base64: speechResult.audio.base64,
+        format: speechResult.audio.format,
+        mediaType: speechResult.audio.mediaType,
+      },
+      warnings: speechResult.warnings ?? [],
+      providerMetadata: speechResult.providerMetadata,
+      responses: speechResult.responses,
+    }
+  }
+}
+
+// -------------------------- ai sdk generate video
+
+async function handleGenerateVideo({ orderedCandidates, params }) {
+  try {
+    const result = await handleGenerateText({ orderedCandidates, params });
+    const { text, files } = result;
+    const videos = await extractMediaResources({ text, files });
+
+    return {
+      video: videos[0],
+      videos,
+      warnings: result.warnings ?? [],
+      providerMetadata: result.providerMetadata,
+      response: result.response,
+    }
+  } catch (error) {
+    console.warn('handleGenerateVideo', error);
+    const videoCandidates = orderedCandidates.filter((candidate) => candidate.callType === CALL_TYPES.VIDEO_GEN);
+    const videoResolved = buildActiveModelCandidate(...videoCandidates);
+    return await generateVideo({ ...params, model: videoResolved.languageModel });
+  }
+}
+
+// -------------------------- ai sdk generate transcribe
+
+async function handleGenerateTranscribe({ orderedCandidates, params }) {
+  try {
+    const result = await handleGenerateText({ orderedCandidates, params });
+    return {
+      text: result.text,
+      warnings: result.warnings ?? [],
+      providerMetadata: result.providerMetadata,
+      response: result.response,
+    }
+  } catch (error) {
+    console.warn('handleGenerateTranscribe', error);
+    const imageCandidates = orderedCandidates.filter((candidate) => candidate.callType === CALL_TYPES.TRANSCRIBE);
+    const imageResolved = buildActiveModelCandidate(...imageCandidates);
+    return await transcribe({ ...params, model: imageResolved.languageModel });
+  }
+}
+
+// -------------------------- ai sdk generate embedding
+
+async function handleGenerateEmbedding({ orderedCandidates, params }) {
+  const candidates = orderedCandidates.filter((candidate) => candidate.callType === CALL_TYPES.EMBEDDING);
+  const resolved = buildActiveModelCandidate(...candidates);
+  return await embedMany({ ...params, model: resolved.languageModel });
+}
+
+export {
+  v1,
+  vercel,
+  buildModelList,
+  buildHealth,
+  buildResolvedChannel,
+  canHaveRequestBody,
+  compactObject,
+  firstString,
+  getGatewayConfig,
+  getRequestAdminKey,
+  getAdminKey,
+  handleGenerateText,
+  handleGenerateImage,
+  handleGenerateAudio,
+  handleGenerateVideo,
+  handleGenerateTranscribe,
+  handleGenerateEmbedding,
+  json,
+  lowerCaseModelId,
+  normalizeBaseURL,
+  requireAdminAuth,
+  resolveChannels,
+  routeRequiresAdminAuth,
+  safeReadJson,
+  sanitizeHeaders,
+  shuffleArray,
+  withCors,
+};

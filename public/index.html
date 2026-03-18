@@ -1,657 +1,1359 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="description" content="Open AI Gateway - AI 网关统一调试面板" />
-  <meta name="theme-color" content="#07111f" />
-  <title>Open AI Gateway</title>
-  <style>
-    :root{color-scheme:dark;--bg:#07111f;--card:#101b2d;--line:#22324d;--text:#ecf3ff;--muted:#98a7be;--blue:#5aa2ff;--blue-2:#2563eb;--green:#22c55e;--amber:#f59e0b;--red:#ef4444;--shadow:0 20px 50px rgba(0,0,0,.28)}*{box-sizing:border-box}body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:radial-gradient(circle at top,#15325f 0%,#09111e 36%,#050a14 100%);color:var(--text)}main{max-width:1240px;margin:0 auto;padding:40px 20px 56px}.hero{display:grid;gap:20px;grid-template-columns:minmax(0,1.25fr) minmax(280px,.75fr);align-items:start;margin-bottom:24px}.eyebrow{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid rgba(90,162,255,.26);border-radius:999px;background:rgba(90,162,255,.12);font-size:12px;color:#cfe2ff;letter-spacing:.04em;text-transform:uppercase}.hero h1{margin:14px 0 12px;font-size:clamp(32px,5vw,56px);line-height:1.02}.hero p{margin:0;color:#c7d4e6;font-size:16px;line-height:1.7}.card{background:linear-gradient(180deg,rgba(16,27,45,.96),rgba(10,20,35,.96));border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow)}.hero-note{padding:20px}.hero-note h2,.section-header h2{margin:0 0 10px;font-size:18px}.hero-note ul{margin:0;padding-left:18px;color:#cfe0f6;line-height:1.75}.layout{display:grid;gap:20px;grid-template-columns:minmax(0,1.1fr) minmax(320px,.9fr);align-items:start}.workspace,.response,.example{padding:18px}.section-header{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.section-header p{margin:4px 0 0;color:var(--muted);font-size:14px;line-height:1.6}.tabs{display:flex;gap:10px;flex-wrap:wrap;padding:6px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05);border-radius:16px;margin-bottom:18px}.tab{appearance:none;border:0;border-radius:12px;padding:11px 14px;background:transparent;color:#bed0ea;font:inherit;font-weight:600;cursor:pointer;transition:.2s}.tab:hover{background:rgba(255,255,255,.05);color:var(--text)}.tab.active{background:linear-gradient(180deg,rgba(90,162,255,.24),rgba(37,99,235,.24));color:#fff;box-shadow:inset 0 0 0 1px rgba(90,162,255,.3)}.panel{display:none;padding:18px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.05);border-radius:18px}.panel.active{display:block}.panel-meta{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:14px}.pill{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;background:rgba(90,162,255,.12);border:1px solid rgba(90,162,255,.2);color:#dceaff;font-size:12px;font-weight:700;letter-spacing:.02em}.hint{color:var(--muted);font-size:13px;line-height:1.6}.request-form{display:grid;gap:14px}.field{display:grid;gap:7px}.field label{font-size:13px;font-weight:700;color:#d7e5f9}.field small{color:var(--muted);font-size:12px}.checkbox-field{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:14px;border:1px solid #324663;background:#0b1423;color:#d7e5f9;font-size:14px;font-weight:700}.checkbox-field input{margin:0;inline-size:16px;block-size:16px;accent-color:var(--blue)}.input,textarea{width:100%;border-radius:14px;border:1px solid #324663;background:#0b1423;color:var(--text);padding:12px 14px;font:inherit;transition:border-color .2s,box-shadow .2s}.input:focus,textarea:focus{outline:none;border-color:rgba(90,162,255,.8);box-shadow:0 0 0 4px rgba(90,162,255,.15)}textarea{min-height:148px;resize:vertical}.actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between}.button{appearance:none;border:0;border-radius:14px;padding:12px 16px;font:inherit;font-weight:700;cursor:pointer;transition:transform .15s ease,opacity .2s ease,background .2s ease}.button:disabled{opacity:.6;cursor:wait;transform:none}.button.primary{background:linear-gradient(180deg,#5aa2ff,#2563eb);color:#fff}.button.primary:hover:not(:disabled){transform:translateY(-1px)}.button.ghost{background:rgba(255,255,255,.04);color:#d7e5f9;border:1px solid rgba(255,255,255,.08)}.button.ghost:hover:not(:disabled){background:rgba(255,255,255,.08)}.mini-grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));margin-top:16px}.mini-card{padding:14px;border-radius:16px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.05)}.mini-card strong{display:block;margin-bottom:6px;font-size:13px}.mini-card span{display:block;color:var(--muted);font-size:12px;line-height:1.5}.stack{display:grid;gap:20px}.status{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:14px;border:1px solid rgba(255,255,255,.06);background:rgba(255,255,255,.03);color:#d9e7fb;font-size:14px;margin:14px 0 16px}.status::before{content:'';width:10px;height:10px;border-radius:999px;background:#6b7f99;flex:0 0 auto}.status.success::before{background:var(--green)}.status.working::before{background:var(--amber)}.status.error::before{background:var(--red)}.preview{padding:16px;border-radius:18px;background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.02));border:1px solid rgba(255,255,255,.06)}.preview.empty{color:var(--muted)}.preview h3{margin:0 0 12px;font-size:15px}.stats{display:grid;gap:10px;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));margin-bottom:14px}.stat{padding:12px;border-radius:14px;background:rgba(7,17,31,.5);border:1px solid rgba(255,255,255,.05)}.stat span{display:block;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}.stat strong{font-size:14px;word-break:break-word}.preview-body{white-space:pre-wrap;word-break:break-word;line-height:1.7;color:#edf4ff}.preview-body.typing::after{content:' ▍';color:var(--blue);animation:blink 1s steps(1,end) infinite}@keyframes blink{50%{opacity:0}}.code-card{margin-top:16px;padding:10px 14px 14px;border-radius:18px;background:rgba(0,0,0,.18);border:1px solid rgba(255,255,255,.06)}.code-card summary{cursor:pointer;color:#dbe8fb;font-weight:700;user-select:none}.code-card pre,.example pre{margin:12px 0 0;white-space:pre-wrap;word-break:break-word;overflow:auto;background:#071120;border:1px solid rgba(255,255,255,.06);border-radius:14px;padding:14px;color:#dbe8fb;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.7}.example-note{margin:12px 0 0;color:var(--muted);font-size:13px;line-height:1.6}@media (max-width:960px){.hero,.layout{grid-template-columns:1fr}main{padding:24px 16px 40px}.hero h1{font-size:40px}}@media (max-width:640px){.actions,.section-header{flex-direction:column;align-items:stretch}.tabs{display:grid;grid-template-columns:1fr}.button{width:100%}}
-    ::selection{background:rgba(90,162,255,.3);color:#fff}
-    html{scroll-behavior:smooth}
-    body{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
-    code{padding:2px 6px;border-radius:6px;background:rgba(90,162,255,.1);color:#a8d0ff;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.9em}
-    .hero h1{background:linear-gradient(180deg,#fff 0%,#a0c4ff 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-    ::-webkit-scrollbar{width:6px;height:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}::-webkit-scrollbar-thumb:hover{background:#3a5070}
-    .tab:focus-visible,.button:focus-visible{outline:2px solid var(--blue);outline-offset:2px}.tab:focus:not(:focus-visible),.button:focus:not(:focus-visible){outline:none}
-    .button.primary:active:not(:disabled){transform:translateY(1px);filter:brightness(.92)}.button.ghost:active:not(:disabled){background:rgba(255,255,255,.12)}
-    .status::before{transition:background-color .3s ease}.status.working::before{animation:pulse 2s ease-in-out infinite}@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
-    .mini-card{transition:border-color .2s ease,transform .2s ease,background .2s ease}.mini-card:hover{border-color:rgba(90,162,255,.15);background:rgba(255,255,255,.05);transform:translateY(-2px)}
-    .card{transition:border-color .3s ease,box-shadow .3s ease}.card:hover{border-color:rgba(90,162,255,.1)}
-    .input::placeholder,textarea::placeholder{color:#4a6080}
-    main::after{content:'';display:block;height:1px;margin-top:40px;background:linear-gradient(90deg,transparent,var(--line),transparent)}
-    @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}html{scroll-behavior:auto}}
-  </style>
-</head>
-<body>
-  <main>
-    <section class="hero">
-      <div>
-        <span class="eyebrow">Cloudflare Workers · AI Gateway</span>
-        <h1>Open AI Gateway</h1>
-        <p>一个更顺手的调试首页：左边组织请求，右边统一查看响应和原始结果。请求侧只表达目标 <code>model</code>，由后端决定走哪条 channel。</p>
-      </div>
-      <aside class="card hero-note">
-        <h2>当前路由分工</h2>
-        <ul>
-          <li><code>/api/generate</code>：非流式 AI SDK JSON 子集</li>
-          <li><code>/api/stream</code>：流式 AI SDK 响应</li>
-          <li><code>/v1/models</code>：兼容 OpenAI 风格的模型列表查询</li>
-        </ul>
-      </aside>
-    </section>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>Open AI Gateway</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=Manrope:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: oklch(97% 0.02 80);
+        --bg-2: oklch(95% 0.03 70);
+        --ink: oklch(18% 0.03 40);
+        --ink-soft: oklch(35% 0.03 45);
+        --muted: oklch(62% 0.03 55);
+        --line: oklch(82% 0.04 70);
+        --card: oklch(98% 0.01 80);
+        --accent: oklch(60% 0.18 30);
+        --accent-2: oklch(62% 0.14 140);
+        --warning: oklch(72% 0.16 70);
+        --shadow: 0 25px 60px rgba(36, 22, 9, 0.08);
+        --radius: 18px;
+      }
 
-    <section class="layout">
-      <section class="card workspace">
-        <div class="section-header">
-          <div>
-            <h2>请求工作台</h2>
-            <p>先选路由，再填写 <code>model</code> 和输入内容。当前首页不会自动请求任何后端接口。</p>
-          </div>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Manrope", system-ui, sans-serif;
+        color: var(--ink);
+        background: radial-gradient(circle at 15% 10%, rgba(255, 189, 120, 0.2), transparent 40%),
+          radial-gradient(circle at 85% 5%, rgba(128, 219, 175, 0.2), transparent 40%),
+          linear-gradient(180deg, var(--bg), var(--bg-2));
+        min-height: 100vh;
+      }
+
+      .page {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: clamp(24px, 4vw, 52px);
+        display: grid;
+        gap: clamp(20px, 3vw, 36px);
+      }
+
+      .hero {
+        display: grid;
+        gap: 18px;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        align-items: end;
+      }
+
+      .hero h1 {
+        font-family: "Fraunces", serif;
+        font-size: clamp(2.4rem, 3vw, 3.6rem);
+        margin: 0;
+        letter-spacing: -0.02em;
+      }
+
+      .hero p {
+        margin: 8px 0 0;
+        color: var(--ink-soft);
+        font-size: 1.05rem;
+        line-height: 1.6;
+      }
+
+      .hero-card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: 16px 18px;
+        box-shadow: var(--shadow);
+      }
+
+      .hero-card h2 {
+        margin: 0 0 10px;
+        font-size: 0.95rem;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        color: var(--muted);
+      }
+
+      .chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .chip {
+        padding: 6px 10px;
+        border-radius: 999px;
+        font-size: 0.85rem;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.9);
+        color: var(--ink-soft);
+      }
+
+      .main {
+        display: grid;
+        gap: clamp(20px, 3vw, 36px);
+        grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+      }
+
+      .panel {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        padding: clamp(18px, 3vw, 28px);
+        box-shadow: var(--shadow);
+        position: relative;
+        overflow: hidden;
+      }
+
+      .panel::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        opacity: 0.35;
+        background: radial-gradient(circle at 0% 0%, rgba(255, 255, 255, 0.6), transparent 45%);
+      }
+
+      .panel > * {
+        position: relative;
+        z-index: 1;
+      }
+
+      .panel h3 {
+        font-family: "Fraunces", serif;
+        font-size: 1.4rem;
+        margin: 0 0 6px;
+      }
+
+      .panel p {
+        margin: 0;
+        color: var(--ink-soft);
+        line-height: 1.5;
+      }
+
+      form {
+        display: grid;
+        gap: 14px;
+        margin-top: 18px;
+      }
+
+      label {
+        display: grid;
+        gap: 6px;
+        font-size: 0.9rem;
+      }
+
+      input,
+      select,
+      textarea {
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        padding: 10px 12px;
+        font-size: 0.95rem;
+        font-family: inherit;
+        background: rgba(255, 255, 255, 0.9);
+        color: var(--ink);
+        transition: border 0.2s ease, box-shadow 0.2s ease;
+      }
+
+      input:focus,
+      select:focus,
+      textarea:focus {
+        outline: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(219, 113, 64, 0.2);
+      }
+
+      textarea {
+        min-height: 110px;
+        resize: vertical;
+        font-family: "IBM Plex Mono", monospace;
+        font-size: 0.85rem;
+      }
+
+      .row {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      }
+
+      .inline {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        align-items: center;
+      }
+
+      .task-grid {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      }
+
+      .task-button {
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.9);
+        padding: 12px;
+        border-radius: 14px;
+        text-align: left;
+        cursor: pointer;
+        transition: border 0.2s ease, transform 0.2s ease;
+      }
+
+      .task-button strong {
+        display: block;
+        font-size: 0.95rem;
+        margin-bottom: 4px;
+      }
+
+      .task-button span {
+        font-size: 0.8rem;
+        color: var(--ink-soft);
+      }
+
+      .task-button.active {
+        border-color: var(--accent);
+        box-shadow: 0 8px 20px rgba(219, 113, 64, 0.15);
+        transform: translateY(-2px);
+      }
+
+      button {
+        border: none;
+        border-radius: 999px;
+        padding: 10px 18px;
+        font-weight: 600;
+        font-size: 0.95rem;
+        cursor: pointer;
+        background: var(--accent);
+        color: white;
+        transition: transform 0.2s ease, box-shadow 0.2s ease, opacity 0.2s ease;
+      }
+
+      button.secondary {
+        background: transparent;
+        color: var(--ink);
+        border: 1px solid var(--line);
+      }
+
+      button:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+      }
+
+      button:hover:not(:disabled) {
+        transform: translateY(-1px);
+        box-shadow: 0 10px 30px rgba(220, 110, 70, 0.2);
+      }
+
+      details {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px 12px;
+        background: rgba(255, 255, 255, 0.85);
+      }
+
+      details summary {
+        cursor: pointer;
+        font-weight: 600;
+      }
+
+      .hint {
+        font-size: 0.85rem;
+        color: var(--muted);
+        line-height: 1.5;
+      }
+
+      .warning {
+        font-size: 0.85rem;
+        color: var(--ink);
+        background: color-mix(in oklch, var(--warning) 20%, white);
+        border: 1px solid color-mix(in oklch, var(--warning) 50%, white);
+        padding: 8px 12px;
+        border-radius: 12px;
+      }
+
+      .response {
+        border-top: 1px dashed var(--line);
+        padding-top: 16px;
+        display: grid;
+        gap: 12px;
+      }
+
+      .response pre {
+        background: rgba(20, 16, 5, 0.05);
+        border-radius: 12px;
+        padding: 12px;
+        margin: 0;
+        font-size: 0.8rem;
+        line-height: 1.5;
+        overflow-x: auto;
+        font-family: "IBM Plex Mono", monospace;
+      }
+
+      .media-grid {
+        display: grid;
+        gap: 12px;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      }
+
+      .media-card {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.9);
+        display: grid;
+        gap: 8px;
+      }
+
+      .media-card img,
+      .media-card video,
+      .media-card audio {
+        width: 100%;
+        border-radius: 12px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.8);
+      }
+
+      .media-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        justify-content: space-between;
+        font-size: 0.8rem;
+        color: var(--ink-soft);
+      }
+
+      .media-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .media-actions a {
+        text-decoration: none;
+        font-size: 0.78rem;
+        padding: 4px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        color: var(--ink-soft);
+        background: rgba(255, 255, 255, 0.9);
+      }
+
+      .empty {
+        font-size: 0.9rem;
+        color: var(--ink-soft);
+        padding: 10px 0;
+      }
+
+      .visual-card {
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 12px;
+        background: rgba(255, 255, 255, 0.9);
+        display: grid;
+        gap: 10px;
+      }
+
+      .visual-card h4 {
+        margin: 0;
+        font-size: 1rem;
+      }
+
+      .metric-row {
+        display: grid;
+        gap: 10px;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+      }
+
+      .metric {
+        padding: 8px 10px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.8);
+        border: 1px solid var(--line);
+        font-size: 0.85rem;
+        color: var(--ink-soft);
+      }
+
+      .pill-list {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .pill {
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.8);
+        border: 1px solid var(--line);
+        font-size: 0.8rem;
+        color: var(--ink-soft);
+      }
+
+      .text-output {
+        white-space: pre-wrap;
+        line-height: 1.6;
+        font-size: 0.95rem;
+        color: var(--ink);
+      }
+
+      .embedding-list {
+        display: grid;
+        gap: 8px;
+      }
+
+      .embedding-item {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px;
+        font-size: 0.85rem;
+        background: rgba(255, 255, 255, 0.9);
+      }
+
+      .footer {
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+
+      .model-panel {
+        border: 1px dashed var(--line);
+        border-radius: 14px;
+        padding: 12px;
+        display: grid;
+        gap: 10px;
+        background: rgba(255, 255, 255, 0.6);
+      }
+
+      .model-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        max-height: 160px;
+        overflow: auto;
+        padding-right: 4px;
+      }
+
+      .model-tag {
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.9);
+        font-size: 0.82rem;
+        color: var(--ink-soft);
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        .panel,
+        .hero,
+        .hero-card {
+          animation: fadeUp 0.6s ease-out both;
+        }
+      }
+
+      @keyframes fadeUp {
+        from {
+          opacity: 0;
+          transform: translateY(10px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @media (max-width: 960px) {
+        .main {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <section class="hero">
+        <div>
+          <h1>Open AI Gateway</h1>
+          <p>
+            A friendly front desk for your AI gateway. Pick a task, drop in content, and get results without touching
+            JSON.
+          </p>
         </div>
-
-        <div class="field" style="margin-bottom:18px">
-          <label for="admin-key">Admin Key</label>
-          <input class="input" id="admin-key" type="password" placeholder="输入网关 Admin Key" autocomplete="off" />
-          <small>页面本身可直接打开，但发往 <code>/api/*</code>、<code>/v1/models</code>、<code>/healthz</code> 的请求需要带上这个 key。</small>
-        </div>
-
-        <div class="tabs" role="tablist" aria-label="请求类型切换">
-          <button class="tab active" type="button" role="tab" aria-selected="true" aria-controls="panel-generate" data-tab="generate">/api/generate</button>
-          <button class="tab" type="button" role="tab" aria-selected="false" aria-controls="panel-stream" data-tab="stream">/api/stream</button>
-        </div>
-
-        <section class="panel active" id="panel-generate" role="tabpanel" data-panel="generate">
-          <div class="panel-meta">
-            <span class="pill">返回 JSON</span>
-            <span class="hint">适合快速验证 <code>content / finishReason / usage</code> 结构。</span>
-          </div>
-          <form id="generate-form" class="request-form">
-            <div class="field">
-              <label for="generate-model">model</label>
-              <input class="input" id="generate-model" value="moonshotai/kimi-k2-instruct-0905" />
-              <small>后端会按模型自动选 channel。</small>
-            </div>
-            <div class="field">
-              <label for="generate-prompt">prompt</label>
-              <textarea id="generate-prompt">你好，介绍一下你自己，并用三点说明这个网关适合什么场景。</textarea>
-            </div>
-            <div class="actions">
-              <button class="button primary" type="submit">发送到 /api/generate</button>
-              <span class="hint">用于看最终结果，不处理 SSE。</span>
-            </div>
-          </form>
-        </section>
-
-        <section class="panel" id="panel-stream" role="tabpanel" data-panel="stream">
-          <div class="panel-meta">
-            <span class="pill">返回流</span>
-            <span class="hint">适合观察流式增量输出和事件流原文。</span>
-          </div>
-          <form id="stream-form" class="request-form">
-            <div class="field">
-              <label for="stream-model">model</label>
-              <input class="input" id="stream-model" value="moonshotai/kimi-k2-instruct-0905" />
-              <small>仍然只表达模型，由后端决定具体上游。</small>
-            </div>
-            <div class="field">
-              <label for="stream-prompt">prompt</label>
-              <textarea id="stream-prompt">请用三句话介绍一下流式输出，并在最后给一个简短总结。</textarea>
-            </div>
-            <div class="actions">
-              <button class="button primary" type="submit">发送到 /api/stream</button>
-              <span class="hint">右侧会实时刷新流内容和原始响应。</span>
-            </div>
-          </form>
-        </section>
-
-        <div class="mini-grid">
-          <div class="mini-card">
-            <strong>只填 model</strong>
-            <span>前端不需要传 <code>provider</code> / <code>channel</code>。</span>
-          </div>
-          <div class="mini-card">
-            <strong>更清晰的结果</strong>
-            <span>右侧同时展示可读预览和原始响应，排查更轻松。</span>
-          </div>
-          <div class="mini-card">
-            <strong>零首屏请求</strong>
-            <span>页面初始化不主动请求后端，避免额外 Worker 调用。</span>
+        <div class="hero-card">
+          <h2>Session</h2>
+          <div class="chip-row">
+            <span class="chip" id="origin-chip">Origin: --</span>
+            <span class="chip" id="model-chip">Model: --</span>
+            <span class="chip" id="timeout-chip">Timeout: --</span>
           </div>
         </div>
       </section>
 
-      <div class="stack">
-        <section class="card response">
-          <div class="section-header">
-            <div>
-              <h2>响应面板</h2>
-              <p id="response-endpoint">当前目标：/api/generate</p>
+      <section class="panel" id="settings-panel">
+        <h3>Gateway Setup</h3>
+        <p>Set it once. Everything else follows.</p>
+        <form id="settings-form">
+          <div class="row">
+            <label>
+              Base URL
+              <input id="base-url" type="url" placeholder="https://gateway.example.com" />
+            </label>
+            <label>
+              Default Model
+              <input id="default-model" list="model-list" placeholder="gpt-4o-mini" />
+            </label>
+          </div>
+          <div class="row">
+            <label>
+              Request Timeout (ms)
+              <input id="timeout-ms" type="number" min="1000" step="500" placeholder="120000" />
+            </label>
+            <label>
+              Admin Key (optional)
+              <input id="admin-key" type="password" placeholder="Only for /v1 and /healthz" />
+            </label>
+          </div>
+          <label>
+            Extra Headers (JSON, optional)
+            <textarea id="extra-headers" placeholder='{"x-channel": "primary"}'></textarea>
+          </label>
+          <div class="inline">
+            <button id="load-models" type="button" class="secondary">Load Models</button>
+            <button id="save-settings" type="button">Save Settings</button>
+            <span class="hint" id="models-hint">Models are loaded from `/vercel/models`.</span>
+          </div>
+          <div id="models-panel" class="model-panel">
+            <div class="inline" style="justify-content: space-between;">
+              <span class="hint">Available models</span>
+              <span class="hint" id="models-count">0 models</span>
+            </div>
+            <div id="model-tags" class="model-tags">
+              <span class="empty">No models loaded yet.</span>
             </div>
           </div>
-          <div id="response-status" class="status">准备就绪，尚未发起请求。</div>
-          <div id="response-preview" class="preview empty">提交请求后，这里会展示更适合阅读的结果预览。</div>
-          <details class="code-card" open>
-            <summary>原始响应</summary>
-            <pre id="response-output">尚未请求</pre>
-          </details>
+        </form>
+      </section>
+
+      <div class="main">
+        <section class="panel">
+          <h3>Choose Your Task</h3>
+          <p>We will show only the inputs you need for this task.</p>
+          <div class="task-grid" id="task-grid">
+            <button class="task-button active" type="button" data-task="text">
+              <strong>Text</strong>
+              <span>Write, summarize, analyze</span>
+            </button>
+            <button class="task-button" type="button" data-task="image">
+              <strong>Image</strong>
+              <span>Generate or edit visuals</span>
+            </button>
+            <button class="task-button" type="button" data-task="audio">
+              <strong>Audio</strong>
+              <span>Text to speech</span>
+            </button>
+            <button class="task-button" type="button" data-task="video">
+              <strong>Video</strong>
+              <span>Text or image to video</span>
+            </button>
+            <button class="task-button" type="button" data-task="transcribe">
+              <strong>Transcribe</strong>
+              <span>Audio to text</span>
+            </button>
+            <button class="task-button" type="button" data-task="embedding">
+              <strong>Embedding</strong>
+              <span>Vectorize text</span>
+            </button>
+          </div>
+
+          <form id="task-form">
+            <label>
+              Model
+              <input name="model" list="model-list" placeholder="Use default or override" />
+            </label>
+
+            <section data-section="text">
+              <label>
+                What do you want?
+                <textarea name="text-prompt" placeholder="Draft a concise press release about a new product launch."></textarea>
+              </label>
+              <label>
+                Tone or system guidance (optional)
+                <input name="text-system" placeholder="You are an expert editor" />
+              </label>
+              <div class="row">
+                <label>
+                  Temperature
+                  <input name="text-temperature" type="number" step="0.1" min="0" max="2" />
+                </label>
+                <label>
+                  Max Tokens
+                  <input name="text-maxTokens" type="number" min="1" step="1" />
+                </label>
+              </div>
+            </section>
+
+            <section data-section="image" hidden>
+              <label>
+                Describe the image
+                <textarea name="image-prompt" placeholder="A warm studio portrait in sculpted clay."></textarea>
+              </label>
+              <label>
+                Optional input images
+                <input name="image-files" type="file" accept="image/*" multiple />
+              </label>
+              <label>
+                Optional mask (image editing)
+                <input name="image-mask" type="file" accept="image/*" />
+              </label>
+              <div class="row">
+                <label>
+                  Count
+                  <input name="image-n" type="number" min="1" step="1" />
+                </label>
+                <label>
+                  Size
+                  <input name="image-size" placeholder="1024x1024" />
+                </label>
+                <label>
+                  Aspect Ratio
+                  <input name="image-aspectRatio" placeholder="16:9" />
+                </label>
+              </div>
+            </section>
+
+            <section data-section="audio" hidden>
+              <label>
+                Script to read aloud
+                <textarea name="audio-text" placeholder="Welcome to our spring collection. Here is what changed..."></textarea>
+              </label>
+              <div class="row">
+                <label>
+                  Voice
+                  <input name="audio-voice" placeholder="alloy" />
+                </label>
+                <label>
+                  Output Format
+                  <input name="audio-format" placeholder="mp3" />
+                </label>
+                <label>
+                  Speed
+                  <input name="audio-speed" type="number" step="0.1" />
+                </label>
+              </div>
+            </section>
+
+            <section data-section="video" hidden>
+              <label>
+                Describe the motion
+                <textarea name="video-prompt" placeholder="A paper sculpture rotating slowly under a soft light."></textarea>
+              </label>
+              <label>
+                Optional reference image
+                <input name="video-image" type="file" accept="image/*" />
+              </label>
+              <div class="row">
+                <label>
+                  Count
+                  <input name="video-n" type="number" min="1" step="1" />
+                </label>
+                <label>
+                  Aspect Ratio
+                  <input name="video-aspectRatio" placeholder="16:9" />
+                </label>
+                <label>
+                  Resolution
+                  <input name="video-resolution" placeholder="1280x720" />
+                </label>
+                <label>
+                  Duration (s)
+                  <input name="video-duration" type="number" step="1" />
+                </label>
+              </div>
+            </section>
+
+            <section data-section="transcribe" hidden>
+              <label>
+                Upload audio
+                <input name="transcribe-file" type="file" accept="audio/*" />
+              </label>
+              <label>
+                Or paste an audio URL
+                <input name="transcribe-url" type="url" placeholder="https://example.com/audio.mp3" />
+              </label>
+              <div class="warning">Provide a file or a URL. The transcript will appear below.</div>
+            </section>
+
+            <section data-section="embedding" hidden>
+              <label>
+                Texts to embed (one per line)
+                <textarea name="embedding-values" placeholder="Product tagline\nFeature list\nSupport policy"></textarea>
+              </label>
+              <div class="row">
+                <label>
+                  Max Parallel Calls
+                  <input name="embedding-parallel" type="number" min="1" step="1" />
+                </label>
+              </div>
+            </section>
+
+            <details>
+              <summary>Advanced options (JSON)</summary>
+              <label>
+                Merge into request
+                <textarea name="advanced" placeholder='{"providerOptions":{},"seed":12}'></textarea>
+              </label>
+              <label>
+                Raw JSON (override all)
+                <textarea name="raw" placeholder='{"model":"gpt-4o-mini","prompt":"Hello"}'></textarea>
+              </label>
+            </details>
+
+            <div class="inline">
+              <button type="submit" id="run-task">Run Task</button>
+              <button type="button" class="secondary" id="copy-response">Copy Response</button>
+              <span class="hint" id="task-endpoint">Endpoint: /vercel/text</span>
+            </div>
+
+            <div class="response">
+              <div class="media-grid" id="response-media"></div>
+              <div id="response-visual"></div>
+              <details id="raw-toggle">
+                <summary>Raw JSON</summary>
+                <pre id="response-output">Awaiting your first run...</pre>
+              </details>
+            </div>
+          </form>
         </section>
 
-        <section class="card example">
-          <div class="section-header">
-            <div>
-              <h2>调用示例</h2>
-              <p>示例会跟随当前 Tab 与输入内容变化，并始终使用 <code>location.origin</code>。</p>
+        <section class="panel">
+          <h3>Result Feed</h3>
+          <p>Latest response and timing.</p>
+          <div class="response">
+            <div class="inline">
+              <button id="clear-console" type="button" class="secondary">Clear</button>
+              <span class="hint" id="console-meta">No requests yet</span>
             </div>
-            <button id="copy-example" class="button ghost" type="button">复制 curl</button>
+            <pre id="console-output">Waiting for a request...</pre>
           </div>
-          <pre id="example">loading...</pre>
-          <p class="example-note">如果你在做客户端接入，推荐先用这里的请求样例跑通，再迁移到正式代码。</p>
+          <div class="hint" style="margin-top: 14px;">
+            This UI uses `/vercel/*` APIs. `/v1/*` and `/healthz` require the admin key.
+          </div>
         </section>
       </div>
-    </section>
-  </main>
 
-  <script>
-    const defaults={model:'moonshotai/kimi-k2-instruct-0905'};
-    const adminKeyStorageKey='open-ai-gateway.adminKey';
-    const $ = (id) => document.getElementById(id);
-    const endpoints = { generate: '/api/generate', stream: '/api/stream' };
-    const endpointNotes = {
-      generate: 'AI SDK 非流式 JSON 请求',
-      stream: 'AI SDK 流式请求',
-    };
-    let activeTab = 'generate';
+      <div class="footer">Open AI Gateway UI · Built for end users</div>
+    </div>
 
-    const value = (id, fallback) => ($(id)?.value || '').trim() || fallback;
-    const escapeHtml = (input) => String(input)
-      .replaceAll('&', '&amp;')
-      .replaceAll('<', '&lt;')
-      .replaceAll('>', '&gt;')
-      .replaceAll('"', '&quot;')
-      .replaceAll("'", '&#39;');
+    <datalist id="model-list"></datalist>
 
-    function getAdminKey() {
-      return ($('admin-key')?.value || '').trim();
-    }
+    <script>
+      const $ = (selector, root = document) => root.querySelector(selector);
+      const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 
-    function readStoredAdminKey() {
-      try {
-        return localStorage.getItem(adminKeyStorageKey) || '';
-      } catch {
-        return '';
-      }
-    }
-
-    function writeStoredAdminKey(input) {
-      try {
-        if (input) localStorage.setItem(adminKeyStorageKey, input);
-        else localStorage.removeItem(adminKeyStorageKey);
-      } catch {}
-    }
-
-    function buildGatewayHeaders() {
-      const adminKey = getAdminKey();
-      return {
-        'content-type': 'application/json',
-        ...(adminKey ? { 'x-admin-key': adminKey } : {}),
+      const settings = {
+        baseUrl: $('#base-url'),
+        defaultModel: $('#default-model'),
+        adminKey: $('#admin-key'),
+        extraHeaders: $('#extra-headers'),
+        timeout: $('#timeout-ms'),
       };
-    }
 
-    function setStatus(message, tone = '') {
-      const el = $('response-status');
-      if (!el) return;
-      el.className = `status ${tone}`.trim();
-      el.textContent = message;
-    }
+      const storageKey = 'open-ai-gateway-settings';
+      const responseOutput = $('#response-output');
+      const responseVisual = $('#response-visual');
+      const responseMedia = $('#response-media');
+      const consoleOutput = $('#console-output');
+      const consoleMeta = $('#console-meta');
+      const originChip = $('#origin-chip');
+      const modelChip = $('#model-chip');
+      const timeoutChip = $('#timeout-chip');
+      const endpointLabel = $('#task-endpoint');
+      const runButton = $('#run-task');
 
-    function setRawOutput(content) {
-      const el = $('response-output');
-      if (el) el.textContent = content;
-    }
+      const taskToEndpoint = {
+        text: '/vercel/text',
+        image: '/vercel/image',
+        audio: '/vercel/audio',
+        video: '/vercel/video',
+        transcribe: '/vercel/transcribe',
+        embedding: '/vercel/embedding',
+      };
 
-    function setPreview(title, body, stats = [], options = {}) {
-      const el = $('response-preview');
-      if (!el) return;
-      const statsHtml = stats.map((item) => `
-        <div class="stat">
-          <span>${escapeHtml(item.label)}</span>
-          <strong>${escapeHtml(item.value)}</strong>
-        </div>
-      `).join('');
-      const previewBodyClass = ['preview-body', options.typing ? 'typing' : ''].filter(Boolean).join(' ');
-      el.classList.remove('empty');
-      el.innerHTML = `
-        <h3>${escapeHtml(title)}</h3>
-        ${statsHtml ? `<div class="stats">${statsHtml}</div>` : ''}
-        <div class="${previewBodyClass}">${escapeHtml(body || '（无可读预览）')}</div>
-      `;
-    }
+      let activeTask = 'text';
 
-    function extractGenerateText(data) {
-      if (!Array.isArray(data?.content)) return '';
-      return data.content.filter((part) => part?.type === 'text').map((part) => part.text || '').join('\n\n').trim();
-    }
-
-    function extractTextFromContent(content) {
-      if (typeof content === 'string') return content;
-      if (!Array.isArray(content)) return '';
-      return content.map((part) => {
-        if (typeof part === 'string') return part;
-        if (typeof part?.text === 'string') return part.text;
-        return '';
-      }).join('');
-    }
-
-    function readSseDataEvents(raw, allowTrailing = false) {
-      const normalized = String(raw || '').replace(/\r\n/g, '\n');
-      if (!normalized) return [];
-      const blocks = normalized.split('\n\n');
-      const completeBlocks = allowTrailing || normalized.endsWith('\n\n') ? blocks : blocks.slice(0, -1);
-      return completeBlocks.map((block) => block.split('\n')
-        .filter((line) => line.startsWith('data:'))
-        .map((line) => line.slice(5).trimStart())
-        .join('\n'))
-        .filter(Boolean);
-    }
-
-    function extractStreamTextPayload(payload) {
-      if (!payload || typeof payload !== 'object') return '';
-      if (payload?.type === 'text-delta' && typeof payload.delta === 'string') {
-        return payload.delta;
-      }
-      if (payload?.type === 'text' && typeof payload.text === 'string') {
-        return payload.text;
-      }
-      const choices = Array.isArray(payload?.choices) ? payload.choices : [];
-      return choices.map((choice) => extractTextFromContent(choice?.delta?.content ?? choice?.message?.content)).join('');
-    }
-
-    function formatToolPreview(tool) {
-      const name = tool.title || tool.name || tool.id || 'unknown';
-      const inputHint = tool.inputChars > 0 ? `（输入流 ${tool.inputChars} 字）` : '';
-      return `工具 ${name}：${tool.status}${inputHint}`;
-    }
-
-    function buildStreamPreviewBody(summary, fallbackText, finished) {
-      const sections = [];
-      const reasoning = summary.reasoning.trim();
-      const text = summary.text.trim();
-      const notes = [...summary.fileNotes, ...summary.sourceNotes, ...summary.toolNotes];
-
-      if (reasoning) {
-        sections.push(`${finished ? '思考过程' : '思考中'}：\n${reasoning}`);
-      }
-      if (text) {
-        sections.push(`${finished ? '输出结果' : '当前输出'}：\n${text}`);
-      }
-      if (notes.length) {
-        sections.push(`附加事件：\n${notes.map((note) => `- ${note}`).join('\n')}`);
-      }
-
-      return sections.join('\n\n') || fallbackText;
-    }
-
-    function summarizeStreamPreview(raw, allowTrailing = false) {
-      const events = readSseDataEvents(raw, allowTrailing);
-      let text = '';
-      let textChunks = 0;
-      let reasoning = '';
-      let reasoningChunks = 0;
-      const fileNotes = [];
-      const sourceNotes = [];
-      const tools = new Map();
-      for (const eventData of events) {
-        if (eventData === '[DONE]') continue;
+      function safeJsonParse(value, fallback = null) {
+        if (!value) return fallback;
         try {
-          const payload = JSON.parse(eventData);
-          if (!payload || typeof payload !== 'object') continue;
-
-          if (payload?.type === 'text-delta' && typeof payload.delta === 'string') {
-            text += payload.delta;
-            textChunks += 1;
-            continue;
-          }
-
-          if (payload?.type === 'reasoning-delta' && typeof payload.delta === 'string') {
-            reasoning += payload.delta;
-            reasoningChunks += 1;
-            continue;
-          }
-
-          if (payload?.type === 'file') {
-            fileNotes.push(`文件输出：${payload.mediaType || 'unknown'}（详见原始响应）`);
-            continue;
-          }
-
-          if (payload?.type === 'source-url') {
-            sourceNotes.push(`来源链接：${payload.title || payload.url || payload.sourceId || '未命名链接'}`);
-            continue;
-          }
-
-          if (payload?.type === 'source-document') {
-            sourceNotes.push(`来源文档：${payload.title || payload.filename || payload.sourceId || '未命名文档'}${payload.filename ? `（${payload.filename}）` : ''}`);
-            continue;
-          }
-
-          if (payload?.type === 'tool-input-start' || payload?.type === 'tool-call') {
-            const id = payload.toolCallId || 'unknown';
-            const current = tools.get(id) || { id, inputChars: 0 };
-            tools.set(id, {
-              ...current,
-              id,
-              name: payload.toolName || current.name,
-              title: payload.title || current.title,
-              status: '正在准备输入',
-            });
-            continue;
-          }
-
-          if (payload?.type === 'tool-input-delta') {
-            const id = payload.toolCallId || 'unknown';
-            const current = tools.get(id) || { id, inputChars: 0 };
-            tools.set(id, {
-              ...current,
-              id,
-              status: '正在传输输入',
-              inputChars: (current.inputChars || 0) + String(payload.inputTextDelta || '').length,
-            });
-            continue;
-          }
-
-          if (payload?.type === 'tool-input-available') {
-            const id = payload.toolCallId || 'unknown';
-            const current = tools.get(id) || { id, inputChars: 0 };
-            tools.set(id, {
-              ...current,
-              id,
-              name: payload.toolName || current.name,
-              title: payload.title || current.title,
-              status: '输入已就绪',
-            });
-            continue;
-          }
-
-          if (payload?.type === 'tool-input-error') {
-            const id = payload.toolCallId || 'unknown';
-            const current = tools.get(id) || { id, inputChars: 0 };
-            tools.set(id, {
-              ...current,
-              id,
-              name: payload.toolName || current.name,
-              title: payload.title || current.title,
-              status: '输入解析失败',
-            });
-            continue;
-          }
-
-          if (payload?.type === 'tool-approval-request') {
-            const id = payload.toolCallId || 'unknown';
-            const current = tools.get(id) || { id, inputChars: 0 };
-            tools.set(id, {
-              ...current,
-              id,
-              status: '等待批准',
-            });
-            continue;
-          }
-
-          if (payload?.type === 'tool-output-available' || payload?.type === 'tool-result') {
-            const id = payload.toolCallId || 'unknown';
-            const current = tools.get(id) || { id, inputChars: 0 };
-            tools.set(id, {
-              ...current,
-              id,
-              name: payload.toolName || current.name,
-              title: payload.title || current.title,
-              status: payload.preliminary ? '已返回中间结果' : '已返回结果',
-            });
-            continue;
-          }
-
-          if (payload?.type === 'tool-output-error' || payload?.type === 'tool-error') {
-            const id = payload.toolCallId || 'unknown';
-            const current = tools.get(id) || { id, inputChars: 0 };
-            tools.set(id, {
-              ...current,
-              id,
-              name: payload.toolName || current.name,
-              title: payload.title || current.title,
-              status: '执行失败',
-            });
-            continue;
-          }
-
-          if (payload?.type === 'tool-output-denied') {
-            const id = payload.toolCallId || 'unknown';
-            const current = tools.get(id) || { id, inputChars: 0 };
-            tools.set(id, {
-              ...current,
-              id,
-              status: '已被拒绝',
-            });
-            continue;
-          }
-
-          const delta = extractStreamTextPayload(payload);
-          if (!delta) continue;
-          text += delta;
-          textChunks += 1;
-        } catch {
-          // Ignore non-JSON or incomplete data events in preview mode.
-        }
-      }
-      return {
-        text,
-        reasoning,
-        eventCount: events.length,
-        textChunks,
-        reasoningChunks,
-        fileNotes,
-        sourceNotes,
-        toolNotes: Array.from(tools.values()).map(formatToolPreview),
-        extraNotesCount: fileNotes.length + sourceNotes.length + tools.size,
-        hasSse: events.length > 0,
-      };
-    }
-
-    function renderPreviewForJson(path, data, response) {
-      if (path === '/api/generate') {
-        const content = Array.isArray(data?.content) ? data.content : [];
-        const fileCount = content.filter((part) => part?.type === 'file').length;
-        setPreview('Generate 结果预览', extractGenerateText(data), [
-          { label: 'finish reason', value: data?.finishReason || 'unknown' },
-          { label: 'total tokens', value: String(data?.usage?.totalTokens ?? '-') },
-          { label: 'file parts', value: String(fileCount) },
-        ]);
-        return;
-      }
-      setPreview('JSON 响应预览', JSON.stringify(data, null, 2), [{ label: 'status', value: `${response.status}` }]);
-    }
-
-    function renderStreamPreview(raw, response, finished = false) {
-      const contentType = response.headers.get('content-type') || '';
-      const summary = summarizeStreamPreview(raw, finished);
-      const compact = raw.trim();
-      const isEventStream = /text\/event-stream/i.test(contentType) || summary.hasSse;
-      const fallbackText = isEventStream
-        ? (finished ? '（流已结束，但没有可显示内容）' : '正在等待模型开始输出…')
-        : (compact || (finished ? '（响应为空）' : '正在等待响应体…'));
-      const previewBody = buildStreamPreviewBody(summary, fallbackText, finished);
-      setPreview('流式预览', previewBody, [
-        { label: 'status', value: `${response.status} ${response.statusText}`.trim() },
-        { label: 'events', value: String(summary.eventCount) },
-        { label: 'chunks', value: String(summary.textChunks) },
-        { label: 'reasoning', value: String(summary.reasoningChunks) },
-        { label: 'notes', value: String(summary.extraNotesCount) },
-        { label: 'mode', value: isEventStream ? 'typewriter' : (contentType || 'stream') },
-      ], {
-        typing: response.ok && !finished && isEventStream,
-      });
-    }
-
-    function buildPayload(tab) {
-      if (tab === 'stream') {
-        return {
-          path: endpoints.stream,
-          payload: { model: value('stream-model', defaults.model), prompt: value('stream-prompt', '请用三句话介绍一下流式输出，并在最后给一个简短总结。') },
-          stream: true,
-        };
-      }
-      return {
-        path: endpoints.generate,
-        payload: { model: value('generate-model', defaults.model), prompt: value('generate-prompt', '你好，介绍一下你自己，并用三点说明这个网关适合什么场景。') },
-        stream: false,
-      };
-    }
-
-    function renderExample() {
-      const request = buildPayload(activeTab);
-      const el = $('example');
-      if (!el) return;
-      const adminKey = getAdminKey();
-      el.textContent = `curl \\
-  -X POST \\
-  -H "Content-Type: application/json" \\
-  -H "x-admin-key: ${adminKey || 'replace-with-admin-key'}" \\
-  "${location.origin}${request.path}" \\
-  -d '${JSON.stringify(request.payload)}'`;
-    }
-
-    function switchTab(tab) {
-      activeTab = tab;
-      document.querySelectorAll('.tab').forEach((button) => {
-        const isActive = button.dataset.tab === tab;
-        button.classList.toggle('active', isActive);
-        button.setAttribute('aria-selected', String(isActive));
-      });
-      document.querySelectorAll('.panel').forEach((panel) => panel.classList.toggle('active', panel.dataset.panel === tab));
-      const endpoint = $('response-endpoint');
-      if (endpoint) endpoint.textContent = `当前目标：${endpoints[tab]} · ${endpointNotes[tab]}`;
-      renderExample();
-    }
-
-    async function readJsonOrText(response) {
-      const raw = await response.text();
-      try {
-        const data = JSON.parse(raw);
-        return { raw: JSON.stringify(data, null, 2), data };
-      } catch {
-        return { raw: raw || '(empty response)', data: null };
-      }
-    }
-
-    async function sendRequest({ path, payload, stream }) {
-      const preview = $('response-preview');
-      setStatus(`正在请求 ${path} ...`, 'working');
-      setRawOutput(`POST ${path}\n\n${JSON.stringify(payload, null, 2)}\n\nwaiting...`);
-      if (preview) {
-        preview.classList.add('empty');
-        preview.textContent = '请求已发出，等待响应中...';
-      }
-
-      const response = await fetch(path, {
-        method: 'POST',
-        headers: buildGatewayHeaders(),
-        body: JSON.stringify(payload),
-      });
-
-      if (stream && response.body) {
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let body = '';
-        for (;;) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          body += decoder.decode(value, { stream: true });
-          setRawOutput(`HTTP ${response.status} ${response.statusText}\n\n${body}`);
-          renderStreamPreview(body, response, false);
-        }
-        body += decoder.decode();
-        setRawOutput(`HTTP ${response.status} ${response.statusText}\n\n${body || '(empty response)'}`);
-        renderStreamPreview(body, response, true);
-        setStatus(response.ok ? `流式请求完成：${path}` : `流式请求失败：${path}`, response.ok ? 'success' : 'error');
-        return;
-      }
-
-      const { raw, data } = await readJsonOrText(response);
-      setRawOutput(`HTTP ${response.status} ${response.statusText}\n\n${raw}`);
-      if (data) {
-        renderPreviewForJson(path, data, response);
-      } else {
-        setPreview('文本响应预览', raw, [{ label: 'status', value: `${response.status} ${response.statusText}`.trim() }]);
-      }
-      setStatus(response.ok ? `请求成功：${path}` : `请求失败：${path}`, response.ok ? 'success' : 'error');
-    }
-
-    document.querySelectorAll('.tab').forEach((button) => {
-      button.addEventListener('click', () => switchTab(button.dataset.tab || 'generate'));
-    });
-
-    document.querySelector('.tabs')?.addEventListener('keydown', (e) => {
-      const tabs = [...document.querySelectorAll('.tab')];
-      const idx = tabs.indexOf(document.activeElement);
-      if (idx < 0) return;
-      let next = -1;
-      if (e.key === 'ArrowRight' || e.key === 'ArrowDown') next = (idx + 1) % tabs.length;
-      if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') next = (idx - 1 + tabs.length) % tabs.length;
-      if (next >= 0) { e.preventDefault(); tabs[next].focus(); tabs[next].click(); }
-    });
-
-    const forms = {
-      'generate-form': () => buildPayload('generate'),
-      'stream-form': () => buildPayload('stream'),
-    };
-
-    Object.entries(forms).forEach(([formId, builder]) => {
-      const form = $(formId);
-      if (!form) return;
-      form.addEventListener('submit', async (event) => {
-        event.preventDefault();
-        const button = form.querySelector('button[type="submit"]');
-        if (button) button.disabled = true;
-        try {
-          await sendRequest(builder());
+          return JSON.parse(value);
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          setStatus(message, 'error');
-          setPreview('请求异常', message, [{ label: 'status', value: 'client error' }]);
-          setRawOutput(error instanceof Error ? error.stack || error.message : String(error));
-        } finally {
-          if (button) button.disabled = false;
+          return { __error: error.message };
         }
-      });
-    });
-
-    const storedAdminKey = readStoredAdminKey();
-    if (storedAdminKey && $('admin-key')) {
-      $('admin-key').value = storedAdminKey;
-    }
-
-    $('admin-key')?.addEventListener('input', (event) => {
-      writeStoredAdminKey(event.target.value.trim());
-      renderExample();
-    });
-
-    ['generate-model','generate-prompt','stream-model','stream-prompt'].forEach((id) => {
-      $(id)?.addEventListener('input', renderExample);
-    });
-
-    $('copy-example')?.addEventListener('click', async () => {
-      const btn = $('copy-example');
-      const content = $('example')?.textContent || '';
-      try {
-        await navigator.clipboard.writeText(content);
-        if (btn) { const orig = btn.textContent; btn.textContent = '已复制'; setTimeout(() => { btn.textContent = orig; }, 1500); }
-        setStatus('curl 示例已复制到剪贴板。', 'success');
-      } catch {
-        setStatus('复制失败，请手动复制右侧 curl 示例。', 'error');
       }
-    });
 
-    switchTab(activeTab);
-  </script>
-</body>
+      function formatJson(data) {
+        return typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+      }
+
+      function updateChips() {
+        originChip.textContent = `Origin: ${settings.baseUrl.value || window.location.origin}`;
+        modelChip.textContent = `Model: ${settings.defaultModel.value || 'not set'}`;
+        timeoutChip.textContent = `Timeout: ${settings.timeout.value || '120000'} ms`;
+      }
+
+      function saveSettings() {
+        const payload = {
+          baseUrl: settings.baseUrl.value,
+          defaultModel: settings.defaultModel.value,
+          adminKey: settings.adminKey.value,
+          extraHeaders: settings.extraHeaders.value,
+          timeout: settings.timeout.value,
+        };
+        localStorage.setItem(storageKey, JSON.stringify(payload));
+        updateChips();
+      }
+
+      function loadSettings() {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) return;
+        try {
+          const payload = JSON.parse(raw);
+          settings.baseUrl.value = payload.baseUrl || '';
+          settings.defaultModel.value = payload.defaultModel || '';
+          settings.adminKey.value = payload.adminKey || '';
+          settings.extraHeaders.value = payload.extraHeaders || '';
+          settings.timeout.value = payload.timeout || '';
+        } catch (error) {
+          console.warn('Failed to load settings', error);
+        }
+      }
+
+      function getBaseUrl() {
+        return settings.baseUrl.value || window.location.origin;
+      }
+
+      function buildHeaders() {
+        const headers = { 'content-type': 'application/json' };
+        if (settings.adminKey.value) {
+          headers.authorization = `Bearer ${settings.adminKey.value}`;
+        }
+        const extra = safeJsonParse(settings.extraHeaders.value, {});
+        if (extra && !extra.__error) {
+          Object.assign(headers, extra);
+        }
+        return headers;
+      }
+
+      function readNumber(value) {
+        if (value === '' || value == null) return undefined;
+        const parsed = Number(value);
+        return Number.isNaN(parsed) ? undefined : parsed;
+      }
+
+      function setActiveTask(task) {
+        activeTask = task;
+        $$('#task-grid .task-button').forEach((button) => {
+          button.classList.toggle('active', button.dataset.task === task);
+        });
+        $$('[data-section]').forEach((section) => {
+          section.hidden = section.dataset.section !== task;
+        });
+        endpointLabel.textContent = `Endpoint: ${taskToEndpoint[task]}`;
+      }
+
+      async function fileToDataUrl(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result;
+            if (typeof result === 'string') {
+              const commaIndex = result.indexOf(',');
+              resolve(commaIndex === -1 ? result : result.slice(commaIndex + 1));
+              return;
+            }
+            resolve(result);
+          };
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(file);
+        });
+      }
+
+      function normalizeMedia(item) {
+        if (!item) return null;
+        if (typeof item === 'string') return item;
+        if (item.base64 && item.mediaType === "application/octet-stream") {
+          return item.base64;
+        }
+        if (item.base64Data && item.mediaType) {
+          return `data:${item.mediaType};base64,${item.base64Data}`;
+        }
+        if (item.base64 && item.mediaType) {
+          if (String(item.base64).startsWith('data:')) return item.base64;
+          return `data:${item.mediaType};base64,${item.base64}`;
+        }
+        if (item.data && typeof item.data === 'string') return item.data;
+        return null;
+      }
+
+      function buildMediaCard({ src, type, index, label }) {
+        const card = document.createElement('div');
+        card.className = 'media-card';
+
+        let mediaEl;
+        if (type === 'image') {
+          mediaEl = document.createElement('img');
+          mediaEl.alt = label;
+        } else if (type === 'audio') {
+          mediaEl = document.createElement('audio');
+          mediaEl.controls = true;
+        } else if (type === 'video') {
+          mediaEl = document.createElement('video');
+          mediaEl.controls = true;
+        }
+
+        mediaEl.src = src;
+        card.appendChild(mediaEl);
+
+        const meta = document.createElement('div');
+        meta.className = 'media-meta';
+        meta.innerHTML = `<span>${label}</span>`;
+
+        const actions = document.createElement('div');
+        actions.className = 'media-actions';
+        const openLink = document.createElement('a');
+        openLink.href = src;
+        openLink.target = '_blank';
+        openLink.rel = 'noreferrer';
+        openLink.textContent = 'Open';
+
+        const downloadLink = document.createElement('a');
+        downloadLink.href = src;
+        downloadLink.download = `${type}-${index + 1}`;
+        downloadLink.textContent = 'Download';
+
+        actions.appendChild(openLink);
+        actions.appendChild(downloadLink);
+
+        meta.appendChild(actions);
+        card.appendChild(meta);
+        return card;
+      }
+
+      function renderMedia(mediaItems, type) {
+        responseMedia.innerHTML = '';
+        if (!mediaItems || mediaItems.length === 0) return;
+        mediaItems.forEach((item, index) => {
+          const src = normalizeMedia(item);
+          if (!src) return;
+          const label = `${type.toUpperCase()} ${index + 1}`;
+          responseMedia.appendChild(buildMediaCard({ src, type, index, label }));
+        });
+      }
+
+      function updateConsole({ endpoint, durationMs, responseText }) {
+        consoleMeta.textContent = `${endpoint} · ${durationMs}ms`;
+        consoleOutput.textContent = responseText;
+      }
+
+      function renderVisual(parsed) {
+        if (!parsed || typeof parsed !== 'object') {
+          responseVisual.innerHTML = '<div class="empty">No visual response available.</div>';
+          return;
+        }
+
+        responseVisual.innerHTML = '';
+
+        if (activeTask === 'text') {
+          const content = parsed.content || parsed.text || '';
+          const finishReason = parsed.finishReason || 'unknown';
+          const usage = parsed.usage || {};
+          responseVisual.innerHTML = `
+            <div class="visual-card">
+              <h4>Generated Text</h4>
+              <div class="text-output">${content || 'No text returned.'}</div>
+              <div class="metric-row">
+                <div class="metric">Finish: ${finishReason}</div>
+                <div class="metric">Input: ${usage.inputTokens ?? '—'}</div>
+                <div class="metric">Output: ${usage.outputTokens ?? '—'}</div>
+                <div class="metric">Total: ${usage.totalTokens ?? '—'}</div>
+              </div>
+            </div>
+          `;
+          return;
+        }
+
+        if (activeTask === 'transcribe') {
+          responseVisual.innerHTML = `
+            <div class="visual-card">
+              <h4>Transcript</h4>
+              <div class="text-output">${parsed.text || 'No transcript returned.'}</div>
+            </div>
+          `;
+          return;
+        }
+
+        if (activeTask === 'embedding') {
+          const embeddings = Array.isArray(parsed.embeddings) ? parsed.embeddings : [];
+          const values = Array.isArray(parsed.values) ? parsed.values : [];
+          const usage = parsed.usage || {};
+          const list = embeddings
+            .map((item, index) => {
+              const preview = Array.isArray(item) ? item.slice(0, 6).map((v) => v.toFixed(4)).join(', ') : '';
+              return `<div class="embedding-item"><strong>#${index + 1}</strong> ${values[index] || ''}<div class="hint">[${preview}${Array.isArray(item) && item.length > 6 ? ', …' : ''}]</div></div>`;
+            })
+            .join('');
+
+          responseVisual.innerHTML = `
+            <div class="visual-card">
+              <h4>Embeddings</h4>
+              <div class="metric-row">
+                <div class="metric">Count: ${embeddings.length}</div>
+                <div class="metric">Input: ${usage.inputTokens ?? '—'}</div>
+                <div class="metric">Total: ${usage.totalTokens ?? '—'}</div>
+              </div>
+              <div class="embedding-list">${list || '<div class="empty">No embeddings returned.</div>'}</div>
+            </div>
+          `;
+          return;
+        }
+
+        if (activeTask === 'image') {
+          const images = parsed.images || (parsed.image ? [parsed.image] : []);
+          renderMedia(images, 'image');
+          responseVisual.innerHTML = `
+            <div class="visual-card">
+              <h4>Images</h4>
+              <div class="metric-row">
+                <div class="metric">Count: ${images.length}</div>
+              </div>
+              <div class="pill-list">
+                <span class="pill">Tip: Click Open to view full size</span>
+                <span class="pill">Download keeps original quality</span>
+              </div>
+            </div>
+          `;
+          return;
+        }
+
+        if (activeTask === 'audio') {
+          const audioItems = parsed.audio ? [parsed.audio] : [];
+          renderMedia(audioItems, 'audio');
+          responseVisual.innerHTML = `
+            <div class="visual-card">
+              <h4>Audio</h4>
+              <div class="metric-row">
+                <div class="metric">Count: ${audioItems.length}</div>
+              </div>
+              <div class="pill-list">
+                <span class="pill">Tip: Use Download to save the file</span>
+              </div>
+            </div>
+          `;
+          return;
+        }
+
+        if (activeTask === 'video') {
+          const videos = parsed.videos || (parsed.video ? [parsed.video] : []);
+          renderMedia(videos, 'video');
+          responseVisual.innerHTML = `
+            <div class="visual-card">
+              <h4>Video</h4>
+              <div class="metric-row">
+                <div class="metric">Count: ${videos.length}</div>
+              </div>
+              <div class="pill-list">
+                <span class="pill">Tip: Open in a new tab for full screen</span>
+              </div>
+            </div>
+          `;
+          return;
+        }
+
+        responseVisual.innerHTML = '<div class="empty">No visual renderer available.</div>';
+      }
+
+      function mergeAdvanced(base, advancedText) {
+        const advanced = safeJsonParse(advancedText, {});
+        if (advanced && advanced.__error) {
+          throw new Error(`Advanced JSON invalid: ${advanced.__error}`);
+        }
+        return { ...base, ...advanced };
+      }
+
+      async function buildPayload() {
+        const form = $('#task-form');
+        const formData = new FormData(form);
+        const model = formData.get('model') || settings.defaultModel.value;
+        if (!model) {
+          throw new Error('Model is required. Set a default model or provide one.');
+        }
+
+        let payload = { model };
+
+        if (activeTask === 'text') {
+          const prompt = formData.get('text-prompt');
+          const system = formData.get('text-system');
+          const temperature = readNumber(formData.get('text-temperature'));
+          const maxTokens = readNumber(formData.get('text-maxTokens'));
+          if (!prompt) {
+            throw new Error('Please add a prompt.');
+          }
+          payload.prompt = prompt;
+          if (system) payload.system = system;
+          if (temperature != null) payload.temperature = temperature;
+          if (maxTokens != null) payload.maxTokens = maxTokens;
+        }
+
+        if (activeTask === 'image') {
+          const prompt = formData.get('image-prompt');
+          const images = formData.getAll('image-files').filter((file) => file && file.size > 0);
+          const maskFile = formData.get('image-mask');
+          let promptPayload = prompt;
+          if (images.length > 0 || (maskFile && maskFile.size > 0)) {
+            const imageData = await Promise.all(images.map((file) => fileToDataUrl(file)));
+            const mask = maskFile && maskFile.size > 0 ? await fileToDataUrl(maskFile) : undefined;
+            promptPayload = { text: prompt || '', images: imageData };
+            if (mask) promptPayload.mask = mask;
+          }
+          if (!promptPayload || (typeof promptPayload === 'string' && !promptPayload.trim())) {
+            if (!images.length && !(maskFile && maskFile.size > 0)) {
+              throw new Error('Please provide a prompt or input images.');
+            }
+          }
+          payload.prompt = promptPayload;
+          const n = readNumber(formData.get('image-n'));
+          const size = formData.get('image-size');
+          const aspectRatio = formData.get('image-aspectRatio');
+          if (n != null) payload.n = n;
+          if (size) payload.size = size;
+          if (aspectRatio) payload.aspectRatio = aspectRatio;
+        }
+
+        if (activeTask === 'audio') {
+          const text = formData.get('audio-text');
+          if (!text) {
+            throw new Error('Please enter a script for the audio.');
+          }
+          payload.text = text;
+          const voice = formData.get('audio-voice');
+          const outputFormat = formData.get('audio-format');
+          const speed = readNumber(formData.get('audio-speed'));
+          if (voice) payload.voice = voice;
+          if (outputFormat) payload.outputFormat = outputFormat;
+          if (speed != null) payload.speed = speed;
+        }
+
+        if (activeTask === 'video') {
+          const prompt = formData.get('video-prompt');
+          const imageFile = formData.get('video-image');
+          let promptPayload = prompt;
+          if (imageFile && imageFile.size > 0) {
+            const imageData = await fileToDataUrl(imageFile);
+            promptPayload = { text: prompt || '', image: imageData };
+          }
+          if (!promptPayload || (typeof promptPayload === 'string' && !promptPayload.trim())) {
+            if (!(imageFile && imageFile.size > 0)) {
+              throw new Error('Please provide a prompt or a reference image.');
+            }
+          }
+          payload.prompt = promptPayload;
+          const n = readNumber(formData.get('video-n'));
+          const aspectRatio = formData.get('video-aspectRatio');
+          const resolution = formData.get('video-resolution');
+          const duration = readNumber(formData.get('video-duration'));
+          if (n != null) payload.n = n;
+          if (aspectRatio) payload.aspectRatio = aspectRatio;
+          if (resolution) payload.resolution = resolution;
+          if (duration != null) payload.duration = duration;
+        }
+
+        if (activeTask === 'transcribe') {
+          const audioFile = formData.get('transcribe-file');
+          const audioUrl = formData.get('transcribe-url');
+          if (audioFile && audioFile.size > 0) {
+            payload.audio = await fileToDataUrl(audioFile);
+          } else if (audioUrl) {
+            payload.audio = audioUrl;
+          } else {
+            throw new Error('Please upload a file or paste a URL.');
+          }
+        }
+
+        if (activeTask === 'embedding') {
+          const valuesRaw = formData.get('embedding-values') || '';
+          const values = String(valuesRaw)
+            .split('\n')
+            .map((value) => value.trim())
+            .filter(Boolean);
+          if (values.length === 0) {
+            throw new Error('Please enter at least one line of text.');
+          }
+          payload.values = values;
+          payload.input_type = 'query';
+          const maxParallelCalls = readNumber(formData.get('embedding-parallel'));
+          if (maxParallelCalls != null) payload.maxParallelCalls = maxParallelCalls;
+        }
+
+        const rawText = formData.get('raw')?.trim();
+        if (rawText) {
+          const rawPayload = safeJsonParse(rawText, null);
+          if (!rawPayload || rawPayload.__error) {
+            throw new Error(`Raw JSON invalid: ${rawPayload.__error || 'empty'}`);
+          }
+          return rawPayload;
+        }
+
+        const advancedText = formData.get('advanced');
+        if (advancedText && advancedText.trim()) {
+          payload = mergeAdvanced(payload, advancedText);
+        }
+
+        return payload;
+      }
+
+      async function sendRequest(payload) {
+        const endpoint = taskToEndpoint[activeTask];
+        const controller = new AbortController();
+        const timeoutValue = Number(settings.timeout.value || 120000);
+        const timer = setTimeout(() => controller.abort(), timeoutValue);
+        const start = performance.now();
+
+        responseOutput.textContent = 'Running...';
+        responseVisual.innerHTML = '<div class="empty">Preparing response…</div>';
+        responseMedia.innerHTML = '';
+
+        let response;
+        try {
+          response = await fetch(`${getBaseUrl()}${endpoint}`, {
+            method: 'POST',
+            headers: buildHeaders(),
+            body: JSON.stringify(payload),
+            signal: controller.signal,
+          });
+        } finally {
+          clearTimeout(timer);
+        }
+
+        const duration = Math.round(performance.now() - start);
+        const text = await response.text();
+        let parsed;
+        try {
+          parsed = JSON.parse(text);
+        } catch (error) {
+          parsed = text;
+        }
+
+        if (!response.ok) {
+          responseOutput.textContent = `HTTP ${response.status}: ${formatJson(parsed)}`;
+          responseVisual.innerHTML = '<div class="warning">Request failed. See raw JSON for details.</div>';
+          updateConsole({ endpoint, durationMs: duration, responseText: responseOutput.textContent });
+          return;
+        }
+
+        responseOutput.textContent = formatJson(parsed);
+        updateConsole({ endpoint, durationMs: duration, responseText: responseOutput.textContent });
+        renderVisual(parsed);
+      }
+
+      async function handleSubmit(event) {
+        event.preventDefault();
+        runButton.disabled = true;
+        try {
+          const payload = await buildPayload();
+          await sendRequest(payload);
+        } catch (error) {
+          responseOutput.textContent = `Error: ${error.message}`;
+          responseVisual.innerHTML = `<div class="warning">${error.message}</div>`;
+        } finally {
+          runButton.disabled = false;
+        }
+      }
+
+      async function loadModels() {
+        const button = $('#load-models');
+        const tags = $('#model-tags');
+        const count = $('#models-count');
+        button.disabled = true;
+        button.textContent = 'Loading...';
+        try {
+          const response = await fetch(`${getBaseUrl()}/vercel/models`, {
+            headers: buildHeaders(),
+          });
+          const data = await response.json();
+          const datalist = $('#model-list');
+          datalist.innerHTML = '';
+          if (Array.isArray(data?.data)) {
+            tags.innerHTML = '';
+            count.textContent = `${data.data.length} models`;
+            if (data.data.length === 0) {
+              tags.innerHTML = '<span class="empty">No models available.</span>';
+            }
+            data.data.forEach((model) => {
+              const option = document.createElement('option');
+              option.value = model.id;
+              datalist.appendChild(option);
+              const tag = document.createElement('span');
+              tag.className = 'model-tag';
+              tag.textContent = model.id;
+              tags.appendChild(tag);
+            });
+          } else {
+            tags.innerHTML = '<span class=\"empty\">No models returned.</span>';
+            count.textContent = '0 models';
+          }
+        } catch (error) {
+          console.warn('Failed to load models', error);
+          if (tags) {
+            tags.innerHTML = '<span class=\"empty\">Failed to load models.</span>';
+          }
+          if (count) {
+            count.textContent = '0 models';
+          }
+        } finally {
+          button.disabled = false;
+          button.textContent = 'Load Models';
+        }
+      }
+
+      function wireTasks() {
+        $$('#task-grid .task-button').forEach((button) => {
+          button.addEventListener('click', () => setActiveTask(button.dataset.task));
+        });
+      }
+
+      function wireCopyButton() {
+        $('#copy-response').addEventListener('click', () => {
+          navigator.clipboard.writeText(responseOutput.textContent || '');
+        });
+      }
+
+      function init() {
+        settings.baseUrl.value = window.location.origin;
+        loadSettings();
+        updateChips();
+        wireTasks();
+        $('#save-settings').addEventListener('click', saveSettings);
+        $('#load-models').addEventListener('click', loadModels);
+        $('#clear-console').addEventListener('click', () => {
+          consoleOutput.textContent = 'Waiting for a request...';
+          consoleMeta.textContent = 'No requests yet';
+        });
+        $('#task-form').addEventListener('submit', handleSubmit);
+        wireCopyButton();
+      }
+
+      init();
+    </script>
+  </body>
 </html>
-
