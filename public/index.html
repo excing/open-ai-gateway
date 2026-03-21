@@ -455,6 +455,37 @@
         color: var(--ink-soft);
       }
 
+      .mode-toggle {
+        display: inline-flex;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.9);
+        padding: 3px;
+      }
+
+      .mode-toggle button {
+        padding: 6px 14px;
+        border-radius: 999px;
+        font-size: 0.85rem;
+        font-weight: 500;
+        background: transparent;
+        color: var(--ink-soft);
+        border: none;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        box-shadow: none;
+      }
+
+      .mode-toggle button:hover:not(:disabled) {
+        box-shadow: none;
+        transform: none;
+      }
+
+      .mode-toggle button.active {
+        background: var(--accent);
+        color: white;
+      }
+
       @media (prefers-reduced-motion: no-preference) {
         .panel,
         .hero,
@@ -505,6 +536,13 @@
         <h3>Gateway Setup</h3>
         <p>Set it once. Everything else follows.</p>
         <form id="settings-form">
+          <div class="inline" style="margin-bottom: 4px;">
+            <span style="font-size: 0.9rem; font-weight: 600;">API Mode</span>
+            <div class="mode-toggle" id="api-mode-toggle">
+              <button type="button" data-mode="vercel" class="active">Vercel AI SDK</button>
+              <button type="button" data-mode="v1">OpenAI /v1</button>
+            </div>
+          </div>
           <div class="row">
             <label>
               Base URL
@@ -747,8 +785,8 @@
             </div>
             <pre id="console-output">Waiting for a request...</pre>
           </div>
-          <div class="hint" style="margin-top: 14px;">
-            This UI uses `/vercel/*` APIs. `/v1/*` and `/healthz` require the admin key.
+          <div class="hint" style="margin-top: 14px;" id="mode-hint">
+            This UI uses <code>/vercel/*</code> APIs. <code>/v1/*</code> and <code>/healthz</code> require the admin key.
           </div>
         </section>
       </div>
@@ -792,6 +830,79 @@
       };
 
       let activeTask = 'text';
+      let apiMode = 'vercel';
+
+      const v1TaskToEndpoint = {
+        text: '/v1/chat/completions',
+        image: '/v1/images/generations',
+        audio: '/v1/audio/speech',
+        transcribe: '/v1/audio/transcriptions',
+        embedding: '/v1/embeddings',
+      };
+
+      function getEndpoint(task) {
+        return apiMode === 'v1' ? v1TaskToEndpoint[task] : taskToEndpoint[task];
+      }
+
+      function setApiMode(mode) {
+        apiMode = mode;
+        $$('#api-mode-toggle button').forEach((btn) => {
+          btn.classList.toggle('active', btn.dataset.mode === mode);
+        });
+        endpointLabel.textContent = `Endpoint: ${getEndpoint(activeTask)}`;
+        $('#models-hint').textContent = mode === 'v1'
+          ? 'Models are loaded from `/v1/models`.'
+          : 'Models are loaded from `/vercel/models`.';
+        const modeHint = $('#mode-hint');
+        if (modeHint) {
+          modeHint.innerHTML = mode === 'v1'
+            ? 'This UI uses <code>/v1/*</code> (OpenAI-compatible) APIs. Admin key required.'
+            : 'This UI uses <code>/vercel/*</code> APIs. <code>/v1/*</code> and <code>/healthz</code> require the admin key.';
+        }
+        const videoBtn = $('[data-task="video"]');
+        if (videoBtn) {
+          videoBtn.disabled = mode === 'v1';
+          videoBtn.style.opacity = mode === 'v1' ? '0.4' : '';
+          videoBtn.title = mode === 'v1' ? 'Video generation is not available in OpenAI /v1 mode' : '';
+        }
+        if (mode === 'v1' && activeTask === 'video') {
+          setActiveTask('text');
+        }
+      }
+
+      function normalizeV1Response(parsed, task, payload) {
+        if (task === 'text' && parsed?.choices) {
+          return {
+            content: parsed.choices[0]?.message?.content || '',
+            finishReason: parsed.choices[0]?.finish_reason || 'unknown',
+            usage: {
+              inputTokens: parsed.usage?.prompt_tokens,
+              outputTokens: parsed.usage?.completion_tokens,
+              totalTokens: parsed.usage?.total_tokens,
+            },
+          };
+        }
+        if (task === 'embedding' && Array.isArray(parsed?.data)) {
+          const inputValues = Array.isArray(payload?.input) ? payload.input : (payload?.input ? [payload.input] : []);
+          return {
+            embeddings: parsed.data.map((d) => d.embedding),
+            values: inputValues,
+            usage: {
+              inputTokens: parsed.usage?.prompt_tokens,
+              totalTokens: parsed.usage?.total_tokens,
+            },
+          };
+        }
+        if (task === 'image' && Array.isArray(parsed?.data)) {
+          const images = parsed.data.map((d) => {
+            if (d.b64_json) return { base64: d.b64_json, mediaType: 'image/png' };
+            if (d.url) return d.url;
+            return null;
+          }).filter(Boolean);
+          return { images, image: images[0] };
+        }
+        return parsed;
+      }
 
       function safeJsonParse(value, fallback = null) {
         if (!value) return fallback;
@@ -819,6 +930,7 @@
           adminKey: settings.adminKey.value,
           extraHeaders: settings.extraHeaders.value,
           timeout: settings.timeout.value,
+          apiMode: apiMode,
         };
         localStorage.setItem(storageKey, JSON.stringify(payload));
         updateChips();
@@ -834,6 +946,9 @@
           settings.adminKey.value = payload.adminKey || '';
           settings.extraHeaders.value = payload.extraHeaders || '';
           settings.timeout.value = payload.timeout || '';
+          if (payload.apiMode) {
+            setApiMode(payload.apiMode);
+          }
         } catch (error) {
           console.warn('Failed to load settings', error);
         }
@@ -869,7 +984,7 @@
         $$('[data-section]').forEach((section) => {
           section.hidden = section.dataset.section !== task;
         });
-        endpointLabel.textContent = `Endpoint: ${taskToEndpoint[task]}`;
+        endpointLabel.textContent = `Endpoint: ${getEndpoint(task)}`;
       }
 
       async function fileToDataUrl(file) {
@@ -1109,35 +1224,55 @@
           if (!prompt) {
             throw new Error('Please add a prompt.');
           }
-          payload.prompt = prompt;
-          if (system) payload.system = system;
-          if (temperature != null) payload.temperature = temperature;
-          if (maxTokens != null) payload.maxTokens = maxTokens;
+          if (apiMode === 'v1') {
+            const messages = [];
+            if (system) messages.push({ role: 'system', content: system });
+            messages.push({ role: 'user', content: prompt });
+            payload.messages = messages;
+            if (temperature != null) payload.temperature = temperature;
+            if (maxTokens != null) payload.max_tokens = maxTokens;
+          } else {
+            payload.prompt = prompt;
+            if (system) payload.system = system;
+            if (temperature != null) payload.temperature = temperature;
+            if (maxTokens != null) payload.maxTokens = maxTokens;
+          }
         }
 
         if (activeTask === 'image') {
-          const prompt = formData.get('image-prompt');
-          const images = formData.getAll('image-files').filter((file) => file && file.size > 0);
-          const maskFile = formData.get('image-mask');
-          let promptPayload = prompt;
-          if (images.length > 0 || (maskFile && maskFile.size > 0)) {
-            const imageData = await Promise.all(images.map((file) => fileToDataUrl(file)));
-            const mask = maskFile && maskFile.size > 0 ? await fileToDataUrl(maskFile) : undefined;
-            promptPayload = { text: prompt || '', images: imageData };
-            if (mask) promptPayload.mask = mask;
-          }
-          if (!promptPayload || (typeof promptPayload === 'string' && !promptPayload.trim())) {
-            if (!images.length && !(maskFile && maskFile.size > 0)) {
-              throw new Error('Please provide a prompt or input images.');
+          if (apiMode === 'v1') {
+            const prompt = formData.get('image-prompt');
+            if (!prompt) throw new Error('Please provide an image prompt.');
+            payload.prompt = prompt;
+            const n = readNumber(formData.get('image-n'));
+            const size = formData.get('image-size');
+            if (n != null) payload.n = n;
+            if (size) payload.size = size;
+            payload.response_format = 'b64_json';
+          } else {
+            const prompt = formData.get('image-prompt');
+            const images = formData.getAll('image-files').filter((file) => file && file.size > 0);
+            const maskFile = formData.get('image-mask');
+            let promptPayload = prompt;
+            if (images.length > 0 || (maskFile && maskFile.size > 0)) {
+              const imageData = await Promise.all(images.map((file) => fileToDataUrl(file)));
+              const mask = maskFile && maskFile.size > 0 ? await fileToDataUrl(maskFile) : undefined;
+              promptPayload = { text: prompt || '', images: imageData };
+              if (mask) promptPayload.mask = mask;
             }
+            if (!promptPayload || (typeof promptPayload === 'string' && !promptPayload.trim())) {
+              if (!images.length && !(maskFile && maskFile.size > 0)) {
+                throw new Error('Please provide a prompt or input images.');
+              }
+            }
+            payload.prompt = promptPayload;
+            const n = readNumber(formData.get('image-n'));
+            const size = formData.get('image-size');
+            const aspectRatio = formData.get('image-aspectRatio');
+            if (n != null) payload.n = n;
+            if (size) payload.size = size;
+            if (aspectRatio) payload.aspectRatio = aspectRatio;
           }
-          payload.prompt = promptPayload;
-          const n = readNumber(formData.get('image-n'));
-          const size = formData.get('image-size');
-          const aspectRatio = formData.get('image-aspectRatio');
-          if (n != null) payload.n = n;
-          if (size) payload.size = size;
-          if (aspectRatio) payload.aspectRatio = aspectRatio;
         }
 
         if (activeTask === 'audio') {
@@ -1145,13 +1280,23 @@
           if (!text) {
             throw new Error('Please enter a script for the audio.');
           }
-          payload.text = text;
-          const voice = formData.get('audio-voice');
-          const outputFormat = formData.get('audio-format');
-          const speed = readNumber(formData.get('audio-speed'));
-          if (voice) payload.voice = voice;
-          if (outputFormat) payload.outputFormat = outputFormat;
-          if (speed != null) payload.speed = speed;
+          if (apiMode === 'v1') {
+            payload.input = text;
+            const voice = formData.get('audio-voice');
+            const outputFormat = formData.get('audio-format');
+            const speed = readNumber(formData.get('audio-speed'));
+            if (voice) payload.voice = voice;
+            if (outputFormat) payload.response_format = outputFormat;
+            if (speed != null) payload.speed = speed;
+          } else {
+            payload.text = text;
+            const voice = formData.get('audio-voice');
+            const outputFormat = formData.get('audio-format');
+            const speed = readNumber(formData.get('audio-speed'));
+            if (voice) payload.voice = voice;
+            if (outputFormat) payload.outputFormat = outputFormat;
+            if (speed != null) payload.speed = speed;
+          }
         }
 
         if (activeTask === 'video') {
@@ -1199,10 +1344,14 @@
           if (values.length === 0) {
             throw new Error('Please enter at least one line of text.');
           }
-          payload.values = values;
-          payload.input_type = 'query';
-          const maxParallelCalls = readNumber(formData.get('embedding-parallel'));
-          if (maxParallelCalls != null) payload.maxParallelCalls = maxParallelCalls;
+          if (apiMode === 'v1') {
+            payload.input = values.length === 1 ? values[0] : values;
+          } else {
+            payload.values = values;
+            payload.input_type = 'query';
+            const maxParallelCalls = readNumber(formData.get('embedding-parallel'));
+            if (maxParallelCalls != null) payload.maxParallelCalls = maxParallelCalls;
+          }
         }
 
         const rawText = formData.get('raw')?.trim();
@@ -1223,7 +1372,13 @@
       }
 
       async function sendRequest(payload) {
-        const endpoint = taskToEndpoint[activeTask];
+        const endpoint = getEndpoint(activeTask);
+        if (!endpoint) {
+          responseOutput.textContent = 'This task is not supported in the current API mode.';
+          responseVisual.innerHTML = '<div class="warning">Not supported in this API mode.</div>';
+          return;
+        }
+
         const controller = new AbortController();
         const timeoutValue = Number(settings.timeout.value || 120000);
         const timer = setTimeout(() => controller.abort(), timeoutValue);
@@ -1246,6 +1401,27 @@
         }
 
         const duration = Math.round(performance.now() - start);
+
+        // Handle binary audio response from /v1/audio/speech
+        const contentType = response.headers.get('content-type') || '';
+        if (apiMode === 'v1' && activeTask === 'audio' && response.ok && contentType.startsWith('audio/')) {
+          const blob = await response.blob();
+          const audioUrl = URL.createObjectURL(blob);
+          responseOutput.textContent = `Audio response (${contentType}, ${blob.size} bytes)`;
+          updateConsole({ endpoint, durationMs: duration, responseText: responseOutput.textContent });
+          renderMedia([audioUrl], 'audio');
+          responseVisual.innerHTML = `
+            <div class="visual-card">
+              <h4>Audio</h4>
+              <div class="metric-row">
+                <div class="metric">Format: ${contentType}</div>
+                <div class="metric">Size: ${(blob.size / 1024).toFixed(1)} KB</div>
+              </div>
+            </div>
+          `;
+          return;
+        }
+
         const text = await response.text();
         let parsed;
         try {
@@ -1263,7 +1439,8 @@
 
         responseOutput.textContent = formatJson(parsed);
         updateConsole({ endpoint, durationMs: duration, responseText: responseOutput.textContent });
-        renderVisual(parsed);
+        const visualData = apiMode === 'v1' ? normalizeV1Response(parsed, activeTask, payload) : parsed;
+        renderVisual(visualData);
       }
 
       async function handleSubmit(event) {
@@ -1287,7 +1464,8 @@
         button.disabled = true;
         button.textContent = 'Loading...';
         try {
-          const response = await fetch(`${getBaseUrl()}/vercel/models`, {
+          const modelsEndpoint = apiMode === 'v1' ? '/v1/models' : '/vercel/models';
+          const response = await fetch(`${getBaseUrl()}${modelsEndpoint}`, {
             headers: buildHeaders(),
           });
           const data = await response.json();
@@ -1343,6 +1521,12 @@
         loadSettings();
         updateChips();
         wireTasks();
+        $$('#api-mode-toggle button').forEach((btn) => {
+          btn.addEventListener('click', () => {
+            setApiMode(btn.dataset.mode);
+            saveSettings();
+          });
+        });
         $('#save-settings').addEventListener('click', saveSettings);
         $('#load-models').addEventListener('click', loadModels);
         $('#clear-console').addEventListener('click', () => {

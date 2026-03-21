@@ -5,7 +5,7 @@
   "main": "worker.js",
   "scripts": {
     "test": "node --test",
-    "cf:dev": "npx wrangler dev",
+    "cf:dev": "npx wrangler dev --ip 0.0.0.0",
     "cf:deploy": "npx wrangler deploy",
     "cf:tail": "npx wrangler tail"
   },

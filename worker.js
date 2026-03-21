@@ -46,7 +46,8 @@ export default {
     if (request.method === 'OPTIONS') {
       return withCors(new Response(null, { status: 204 }));
     }
-
+    
+    console.info("request", request.url);
     const url = new URL(request.url);
 
     try {
@@ -85,11 +86,28 @@ export default {
 async function v1({ request, env, url }) {
   if (request.method === 'GET' && url.pathname === '/v1/models') {
     return json({ object: 'list', data: buildModelList(env) });
-  } else if (request.method === 'POST' && url.pathname === '/v1/chat/completions') {
-    const body = await safeReadJson(request);
-    return handleStreamRequest({ body, env, request, url });
   }
-  return json({ error: { message: `Unsupported API route: ${url.pathname}` } }, 404);
+
+  if (request.method !== 'POST') {
+    return json({ error: { message: `Unsupported API route: ${url.pathname}`, type: 'invalid_request_error' } }, 404);
+  }
+
+  const body = await safeReadJson(request);
+
+  switch (url.pathname) {
+    case '/v1/chat/completions':
+      return handleV1ChatCompletions({ body, env, url });
+    case '/v1/embeddings':
+      return handleV1Embeddings({ body, env, url });
+    case '/v1/images/generations':
+      return handleV1ImageGenerations({ body, env, url });
+    case '/v1/audio/speech':
+      return handleV1AudioSpeech({ body, env, url });
+    case '/v1/audio/transcriptions':
+      return handleV1AudioTranscriptions({ body, env, url });
+    default:
+      return json({ error: { message: `Unsupported API route: ${url.pathname}`, type: 'invalid_request_error' } }, 404);
+  }
 }
 
 async function vercel({ request, env, url }) {
@@ -141,28 +159,264 @@ async function vercel({ request, env, url }) {
   return json({ error: { message: `Unsupported API route: ${url.pathname}` } }, 404);
 }
 
-async function handleStreamRequest({ body, env, url }) {
+// -------- /v1/chat/completions (OpenAI-compatible) --------
+
+async function handleV1ChatCompletions({ body, env, url }) {
   try {
     const orderedCandidates = resolveChannels({
       env,
-      model: body?.model || url.searchParams.get('model')
+      model: body?.model || url.searchParams.get('model'),
     });
 
-    const resolved = buildActiveModelCandidate(...orderedCandidates);
-    if (!resolved.languageModel || !resolved.candidate) {
-      throw new Error(`No AI SDK channel resolved for model \`${resolved.candidate?.model || 'unknown'}\`.`);
+    const chatCandidates = orderedCandidates.filter((c) => c.callType === CALL_TYPES.CHAT);
+    const resolved = buildActiveModelCandidate(...chatCandidates);
+
+    if (!resolved.languageModel) {
+      return json({ error: { message: `No channel resolved for model \`${body?.model || 'unknown'}\`.`, type: 'invalid_request_error' } }, 400);
     }
-    const result = streamText({ ...body, model: resolved.languageModel, });
-    return result.toUIMessageStreamResponse({
-      messageMetadata: ({ part }) => {
-        if (part.type === 'finish') {
-          return { usage: part.totalUsage, finishReason: part.finishReason };
+
+    const aiParams = mapOpenAIToAISDKParams(body);
+    const completionId = `chatcmpl-${crypto.randomUUID().replace(/-/g, '')}`;
+    const created = Math.floor(Date.now() / 1000);
+    const modelId = body?.model || 'unknown';
+
+    if (body?.stream === true) {
+      const result = streamText({ ...aiParams, model: resolved.languageModel });
+      return openAIStreamResponse({ result, completionId, created, modelId, includeUsage: body?.stream_options?.include_usage });
+    }
+
+    const result = await generateText({ ...aiParams, model: resolved.languageModel });
+    return json({
+      id: completionId,
+      object: 'chat.completion',
+      created,
+      model: modelId,
+      choices: [{
+        index: 0,
+        message: { role: 'assistant', content: result.text },
+        finish_reason: mapFinishReason(result.finishReason),
+      }],
+      usage: mapUsage(result.usage),
+    });
+  } catch (error) {
+    return json({ error: { message: error instanceof Error ? error.message : 'Bad Request', type: 'invalid_request_error' } }, 400);
+  }
+}
+
+function openAIStreamResponse({ result, completionId, created, modelId, includeUsage }) {
+  const encoder = new TextEncoder();
+
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        controller.enqueue(encoder.encode(sseChunk({
+          id: completionId, object: 'chat.completion.chunk', created, model: modelId,
+          choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
+        })));
+
+        for await (const text of result.textStream) {
+          controller.enqueue(encoder.encode(sseChunk({
+            id: completionId, object: 'chat.completion.chunk', created, model: modelId,
+            choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
+          })));
         }
+
+        const [finishReason, usage] = await Promise.all([result.finishReason, result.usage]);
+        const finalChunk = {
+          id: completionId, object: 'chat.completion.chunk', created, model: modelId,
+          choices: [{ index: 0, delta: {}, finish_reason: mapFinishReason(finishReason) }],
+        };
+        if (includeUsage) {
+          finalChunk.usage = mapUsage(usage);
+        }
+        controller.enqueue(encoder.encode(sseChunk(finalChunk)));
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      } catch {
+        controller.enqueue(encoder.encode(sseChunk({
+          id: completionId, object: 'chat.completion.chunk', created, model: modelId,
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        })));
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'content-type': 'text/event-stream; charset=utf-8',
+      'cache-control': 'no-cache',
+    },
+  });
+}
+
+// -------- /v1/embeddings (OpenAI-compatible) --------
+
+async function handleV1Embeddings({ body, env, url }) {
+  try {
+    const orderedCandidates = resolveChannels({
+      env,
+      model: body?.model || url.searchParams.get('model'),
+    });
+
+    const candidates = orderedCandidates.filter((c) => c.callType === CALL_TYPES.EMBEDDING);
+    const resolved = buildActiveModelCandidate(...candidates);
+
+    if (!resolved.languageModel) {
+      return json({ error: { message: `No channel resolved for embedding model \`${body?.model || 'unknown'}\`.`, type: 'invalid_request_error' } }, 400);
+    }
+
+    const input = body?.input;
+    const values = Array.isArray(input) ? input : [input];
+
+    const result = await embedMany({ model: resolved.languageModel, values });
+
+    return json({
+      object: 'list',
+      data: result.embeddings.map((embedding, index) => ({
+        object: 'embedding',
+        embedding,
+        index,
+      })),
+      model: body?.model || 'unknown',
+      usage: {
+        prompt_tokens: result.usage?.tokens ?? 0,
+        total_tokens: result.usage?.tokens ?? 0,
       },
     });
   } catch (error) {
-    return json({ error: { message: error instanceof Error ? error.message : 'Bad Request' } }, 400);
+    return json({ error: { message: error instanceof Error ? error.message : 'Bad Request', type: 'invalid_request_error' } }, 400);
   }
+}
+
+// -------- /v1/images/generations (OpenAI-compatible) --------
+
+async function handleV1ImageGenerations({ body, env, url }) {
+  try {
+    const orderedCandidates = resolveChannels({
+      env,
+      model: body?.model || url.searchParams.get('model'),
+    });
+
+    const params = compactObject({ ...body, messages: [{ role: 'user', content: body?.prompt || '' }], prompt: undefined });
+    const result = await handleGenerateImage({ orderedCandidates, params });
+    const images = result.images || (result.image ? [result.image] : []);
+
+    return json({
+      created: Math.floor(Date.now() / 1000),
+      data: images.map((img) => {
+        if (body?.response_format === 'b64_json' || img.base64) {
+          return { b64_json: img.base64 || img };
+        }
+        if (img.url) return { url: img.url };
+        return { b64_json: typeof img === 'string' ? img : '' };
+      }),
+    });
+  } catch (error) {
+    return json({ error: { message: error instanceof Error ? error.message : 'Bad Request', type: 'invalid_request_error' } }, 400);
+  }
+}
+
+// -------- /v1/audio/speech (OpenAI-compatible) --------
+
+async function handleV1AudioSpeech({ body, env, url }) {
+  try {
+    const orderedCandidates = resolveChannels({
+      env,
+      model: body?.model || url.searchParams.get('model'),
+    });
+
+    const params = {
+      text: body?.input || '',
+      voice: body?.voice,
+      messages: [{ role: 'user', content: body?.input || '' }],
+    };
+    const result = await handleGenerateAudio({ orderedCandidates, params });
+
+    if (result.audio?.base64) {
+      const binaryStr = atob(result.audio.base64);
+      const bytes = new Uint8Array(binaryStr.length);
+      for (let i = 0; i < binaryStr.length; i++) {
+        bytes[i] = binaryStr.charCodeAt(i);
+      }
+      const format = body?.response_format || 'mp3';
+      return new Response(bytes, {
+        headers: { 'content-type': result.audio.mediaType || `audio/${format}` },
+      });
+    }
+
+    return json({ error: { message: 'Failed to generate audio', type: 'server_error' } }, 500);
+  } catch (error) {
+    return json({ error: { message: error instanceof Error ? error.message : 'Bad Request', type: 'invalid_request_error' } }, 400);
+  }
+}
+
+// -------- /v1/audio/transcriptions (OpenAI-compatible) --------
+
+async function handleV1AudioTranscriptions({ body, env, url }) {
+  try {
+    const orderedCandidates = resolveChannels({
+      env,
+      model: body?.model || url.searchParams.get('model'),
+    });
+
+    const result = await handleGenerateTranscribe({ orderedCandidates, params: body });
+
+    if (body?.response_format === 'text') {
+      return new Response(result.text, {
+        headers: { 'content-type': 'text/plain; charset=utf-8' },
+      });
+    }
+
+    return json({ text: result.text });
+  } catch (error) {
+    return json({ error: { message: error instanceof Error ? error.message : 'Bad Request', type: 'invalid_request_error' } }, 400);
+  }
+}
+
+// -------- OpenAI format helpers --------
+
+function mapOpenAIToAISDKParams(body) {
+  if (!body) return {};
+  const params = {};
+  if (body.messages) params.messages = body.messages;
+  if (body.temperature != null) params.temperature = body.temperature;
+  if (body.max_tokens != null) params.maxTokens = body.max_tokens;
+  if (body.max_completion_tokens != null) params.maxTokens = body.max_completion_tokens;
+  if (body.top_p != null) params.topP = body.top_p;
+  if (body.frequency_penalty != null) params.frequencyPenalty = body.frequency_penalty;
+  if (body.presence_penalty != null) params.presencePenalty = body.presence_penalty;
+  if (body.seed != null) params.seed = body.seed;
+  if (body.stop != null) {
+    params.stopSequences = Array.isArray(body.stop) ? body.stop : [body.stop];
+  }
+  return params;
+}
+
+function mapFinishReason(reason) {
+  switch (reason) {
+    case 'stop': return 'stop';
+    case 'length': return 'length';
+    case 'content-filter': return 'content_filter';
+    case 'tool-calls': return 'tool_calls';
+    default: return 'stop';
+  }
+}
+
+function mapUsage(usage) {
+  if (!usage) return { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+  const promptTokens = usage.promptTokens ?? usage.inputTokens ?? 0;
+  const completionTokens = usage.completionTokens ?? usage.outputTokens ?? 0;
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: usage.totalTokens ?? (promptTokens + completionTokens),
+  };
+}
+
+function sseChunk(data) {
+  return `data: ${JSON.stringify(data)}\n\n`;
 }
 
 function buildResolvedChannel(channel, model) {
@@ -672,6 +926,11 @@ export {
   getGatewayConfig,
   getRequestAdminKey,
   getAdminKey,
+  handleV1ChatCompletions,
+  handleV1Embeddings,
+  handleV1ImageGenerations,
+  handleV1AudioSpeech,
+  handleV1AudioTranscriptions,
   handleGenerateText,
   handleGenerateImage,
   handleGenerateAudio,
@@ -680,6 +939,9 @@ export {
   handleGenerateEmbedding,
   json,
   lowerCaseModelId,
+  mapFinishReason,
+  mapOpenAIToAISDKParams,
+  mapUsage,
   normalizeBaseURL,
   requireAdminAuth,
   resolveChannels,

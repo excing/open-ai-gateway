@@ -12,6 +12,9 @@ import worker, {
   getRequestAdminKey,
   json,
   lowerCaseModelId,
+  mapFinishReason,
+  mapOpenAIToAISDKParams,
+  mapUsage,
   normalizeBaseURL,
   requireAdminAuth,
   resolveChannels,
@@ -310,4 +313,99 @@ test('withCors appends CORS headers', async () => {
   const response = withCors(new Response('ok', { status: 202 }));
   assert.equal(response.status, 202);
   assert.equal(response.headers.get('access-control-allow-origin'), '*');
+});
+
+// -------- mapOpenAIToAISDKParams --------
+
+test('mapOpenAIToAISDKParams maps OpenAI params to AI SDK params', () => {
+  const params = mapOpenAIToAISDKParams({
+    messages: [{ role: 'user', content: 'hi' }],
+    temperature: 0.7,
+    max_tokens: 100,
+    top_p: 0.9,
+    frequency_penalty: 0.5,
+    presence_penalty: 0.3,
+    seed: 42,
+    stop: 'END',
+  });
+
+  assert.deepEqual(params.messages, [{ role: 'user', content: 'hi' }]);
+  assert.equal(params.temperature, 0.7);
+  assert.equal(params.maxTokens, 100);
+  assert.equal(params.topP, 0.9);
+  assert.equal(params.frequencyPenalty, 0.5);
+  assert.equal(params.presencePenalty, 0.3);
+  assert.equal(params.seed, 42);
+  assert.deepEqual(params.stopSequences, ['END']);
+});
+
+test('mapOpenAIToAISDKParams prefers max_completion_tokens over max_tokens', () => {
+  const params = mapOpenAIToAISDKParams({ max_tokens: 50, max_completion_tokens: 100 });
+  assert.equal(params.maxTokens, 100);
+});
+
+test('mapOpenAIToAISDKParams returns empty object for null body', () => {
+  assert.deepEqual(mapOpenAIToAISDKParams(null), {});
+});
+
+// -------- mapFinishReason --------
+
+test('mapFinishReason maps AI SDK reasons to OpenAI reasons', () => {
+  assert.equal(mapFinishReason('stop'), 'stop');
+  assert.equal(mapFinishReason('length'), 'length');
+  assert.equal(mapFinishReason('content-filter'), 'content_filter');
+  assert.equal(mapFinishReason('tool-calls'), 'tool_calls');
+  assert.equal(mapFinishReason('unknown'), 'stop');
+  assert.equal(mapFinishReason(undefined), 'stop');
+});
+
+// -------- mapUsage --------
+
+test('mapUsage maps AI SDK usage to OpenAI format', () => {
+  assert.deepEqual(mapUsage({ promptTokens: 10, completionTokens: 20, totalTokens: 30 }), {
+    prompt_tokens: 10, completion_tokens: 20, total_tokens: 30,
+  });
+
+  assert.deepEqual(mapUsage({ inputTokens: 5, outputTokens: 15, totalTokens: 20 }), {
+    prompt_tokens: 5, completion_tokens: 15, total_tokens: 20,
+  });
+
+  assert.deepEqual(mapUsage(null), {
+    prompt_tokens: 0, completion_tokens: 0, total_tokens: 0,
+  });
+});
+
+// -------- v1 endpoint routing --------
+
+test('v1 embeddings endpoint rejects missing model', async () => {
+  const response = await worker.fetch(
+    authedRequest('https://example.com/v1/embeddings', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ input: 'hello' }),
+    }),
+    baseEnv,
+  );
+  assert.equal(response.status, 400);
+  const data = await response.json();
+  assert.match(data.error.message, /`model` is required/);
+});
+
+test('v1 images generations endpoint rejects missing model', async () => {
+  const response = await worker.fetch(
+    authedRequest('https://example.com/v1/images/generations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ prompt: 'a cat' }),
+    }),
+    baseEnv,
+  );
+  assert.equal(response.status, 400);
+  const data = await response.json();
+  assert.match(data.error.message, /`model` is required/);
+});
+
+test('v1 GET on POST-only routes returns 404', async () => {
+  const response = await worker.fetch(authedRequest('https://example.com/v1/chat/completions'), baseEnv);
+  assert.equal(response.status, 404);
 });
