@@ -305,13 +305,13 @@ function buildHealth(env) {
 }
 
 function buildResolvedChannel(channel, model) {
-  const provider = String(firstString(channel?.provider) || '').toLowerCase();
+  const provider = firstString(channel?.provider, '').toLowerCase();
   const defaults = DEFAULT_PROVIDER_CATALOG[provider] || {};
-  const callType = firstString(model?.callType) || CALL_TYPES.CHAT;
-  const finalModelCode = firstString(model?.code) || '';
-  const key = firstString(channel?.key) || '';
-  const baseURL = normalizeBaseURL(firstString(channel?.baseURL) || defaults.baseURL || '');
-  const apiKey = firstString(channel?.apiKey) || '';
+  const callType = firstString(model?.callType, CALL_TYPES.CHAT);
+  const finalModelCode = firstString(model?.code, '');
+  const key = firstString(channel?.key, '');
+  const baseURL = normalizeBaseURL(firstString(channel?.baseURL, defaults.baseURL, ''));
+  const apiKey = firstString(channel?.apiKey, '');
   const headers = sanitizeHeaders(channel?.headers);
   const languageModel = finalModelCode
     ? instantiateLanguageModel(
@@ -422,7 +422,7 @@ function instantiateLanguageModel(config, model) {
   const apiKey = config.apiKey || undefined;
   const baseURL = config.baseURL ? normalizeBaseURL(config.baseURL) : undefined;
   const headers = sanitizeHeaders(config.headers);
-  const callType = firstString(config.callType) || CALL_TYPES.CHAT;
+  const callType = firstString(config.callType, CALL_TYPES.CHAT);
 
   const unsupportedCallType = () => {
     throw new Error(`Provider \`${config.provider}\` does not support callType \`${callType}\` for model \`${model}\`.`);
@@ -664,7 +664,14 @@ async function handleGenerateText({ orderedCandidates, params }) {
  */
 async function handleGenerateImage({ orderedCandidates, params }) {
   try {
-    const { media, result } = await generateMediaFromText({ orderedCandidates, params });
+    const basePrompt = firstString(params.prompt, params.messages?.[0]?.content, "");
+    const parts = [basePrompt];
+    if (params.n > 1) parts.push(`count: ${params.n}`);
+    if (params.size) parts.push(`size: ${params.size}`);
+    if (params.quality) parts.push(`quality: ${params.quality}`);
+    if (params.style) parts.push(`style: ${params.style}`);
+    const chatParams = { ...params, messages: [{ role: 'user', content: parts.filter(Boolean).join(', ') }] };
+    const { media, result } = await generateMediaFromText({ orderedCandidates, params: chatParams });
     return {
       image: media[0],
       images: media,
@@ -682,7 +689,12 @@ async function handleGenerateImage({ orderedCandidates, params }) {
 
 async function handleGenerateAudio({ orderedCandidates, params }) {
   try {
-    const { media, result } = await generateMediaFromText({ orderedCandidates, params });
+    const text = firstString(params.text, params.input, params.prompt, params.messages?.[0]?.content, "");
+    const parts = [text];
+    if (params.voice) parts.push(`voice: ${params.voice}`);
+    if (params.speed != null) parts.push(`speed: ${params.speed}`);
+    const chatParams = { ...params, messages: [{ role: 'user', content: parts.filter(Boolean).join(', ') }] };
+    const { media, result } = await generateMediaFromText({ orderedCandidates, params: chatParams });
     return {
       audio: media[0],
       warnings: result.warnings ?? [],
@@ -708,7 +720,13 @@ async function handleGenerateAudio({ orderedCandidates, params }) {
 
 async function handleGenerateVideo({ orderedCandidates, params }) {
   try {
-    const { media, result } = await generateMediaFromText({ orderedCandidates, params });
+    const basePrompt = firstString(params.prompt, params.messages?.[0]?.content, "");
+    const parts = [basePrompt];
+    if (params.aspectRatio) parts.push(`aspectRatio: ${params.aspectRatio}`);
+    if (params.duration) parts.push(`duration: ${params.duration}s`);
+    if (params.resolution) parts.push(`resolution: ${params.resolution}`);
+    const chatParams = { ...params, messages: [{ role: 'user', content: parts.filter(Boolean).join(', ') }] };
+    const { media, result } = await generateMediaFromText({ orderedCandidates, params: chatParams });
     return {
       video: media[0],
       videos: media,
@@ -725,7 +743,11 @@ async function handleGenerateVideo({ orderedCandidates, params }) {
 
 async function handleGenerateTranscribe({ orderedCandidates, params }) {
   try {
-    const result = await handleGenerateText({ orderedCandidates, params });
+    const parts = ['Transcribe the audio.'];
+    if (params.language) parts.push(`language: ${params.language}`);
+    if (params.prompt) parts.push(`context: ${params.prompt}`);
+    const chatParams = { ...params, messages: [{ role: 'user', content: parts.join(' ') }] };
+    const result = await handleGenerateText({ orderedCandidates, params: chatParams });
     return {
       text: result.text,
       warnings: result.warnings ?? [],
