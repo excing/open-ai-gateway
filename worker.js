@@ -369,21 +369,6 @@ function resolveChannels({ env, model, random = Math.random }) {
   return orderedCandidates;
 }
 
-function buildActiveModelCandidate(...candidates) {
-  if (!Array.isArray(candidates) || candidates.length === 0) {
-    return { languageModel: null, candidate: null };
-  }
-
-  const languageModel = buildLanguageModelWithFailover(candidates);
-
-  return {
-    languageModel,
-    get candidate() {
-      return getActiveResolvedCandidate(candidates, languageModel);
-    },
-  };
-}
-
 function buildLanguageModelWithFailover(candidates) {
   const languageModels = candidates.map((candidate) => candidate.languageModel).filter(Boolean);
 
@@ -635,7 +620,23 @@ function resolveOrderedCandidatesForRequest({ env, body, url }) {
 
 function resolveActiveLanguageModel(orderedCandidates, callType) {
   const candidates = orderedCandidates.filter((candidate) => candidate.callType === callType);
-  return buildActiveModelCandidate(...candidates);
+
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    throw new Error(`No channel supports callType \`${callType}\`.`);
+  }
+
+  const languageModel = buildLanguageModelWithFailover(candidates);
+
+  if (!languageModel) {
+    throw new Error(`No channel supports callType \`${callType}\`.`);
+  }
+
+  return {
+    languageModel,
+    get candidate() {
+      return getActiveResolvedCandidate(candidates, languageModel);
+    },
+  };
 }
 
 async function generateMediaFromText({ orderedCandidates, params }) {
@@ -664,13 +665,14 @@ async function handleGenerateText({ orderedCandidates, params }) {
  */
 async function handleGenerateImage({ orderedCandidates, params }) {
   try {
-    const basePrompt = firstString(params.prompt, params.messages?.[0]?.content, "");
+    const basePrompt = firstString(params.prompt, params.messages?.find((m) => m.role === 'user')?.content, '');
     const parts = [basePrompt];
     if (params.n > 1) parts.push(`count: ${params.n}`);
     if (params.size) parts.push(`size: ${params.size}`);
     if (params.quality) parts.push(`quality: ${params.quality}`);
     if (params.style) parts.push(`style: ${params.style}`);
-    const chatParams = { ...params, messages: [{ role: 'user', content: parts.filter(Boolean).join(', ') }] };
+    const chatParams = { ...params, prompt: parts.filter(Boolean).join(', '), messages: undefined };
+
     const { media, result } = await generateMediaFromText({ orderedCandidates, params: chatParams });
     return {
       image: media[0],
@@ -689,11 +691,11 @@ async function handleGenerateImage({ orderedCandidates, params }) {
 
 async function handleGenerateAudio({ orderedCandidates, params }) {
   try {
-    const text = firstString(params.text, params.input, params.prompt, params.messages?.[0]?.content, "");
+    const text = firstString(params.text, params.input, params.prompt, params.messages?.find((m) => m.role === 'user')?.content, '');
     const parts = [text];
     if (params.voice) parts.push(`voice: ${params.voice}`);
     if (params.speed != null) parts.push(`speed: ${params.speed}`);
-    const chatParams = { ...params, messages: [{ role: 'user', content: parts.filter(Boolean).join(', ') }] };
+    const chatParams = { ...params, prompt: parts.filter(Boolean).join(', '), messages: undefined };
     const { media, result } = await generateMediaFromText({ orderedCandidates, params: chatParams });
     return {
       audio: media[0],
@@ -720,12 +722,12 @@ async function handleGenerateAudio({ orderedCandidates, params }) {
 
 async function handleGenerateVideo({ orderedCandidates, params }) {
   try {
-    const basePrompt = firstString(params.prompt, params.messages?.[0]?.content, "");
+    const basePrompt = firstString(params.prompt, params.messages?.find((m) => m.role === 'user')?.content, '');
     const parts = [basePrompt];
     if (params.aspectRatio) parts.push(`aspectRatio: ${params.aspectRatio}`);
     if (params.duration) parts.push(`duration: ${params.duration}s`);
     if (params.resolution) parts.push(`resolution: ${params.resolution}`);
-    const chatParams = { ...params, messages: [{ role: 'user', content: parts.filter(Boolean).join(', ') }] };
+    const chatParams = { ...params, prompt: parts.filter(Boolean).join(', '), messages: undefined };
     const { media, result } = await generateMediaFromText({ orderedCandidates, params: chatParams });
     return {
       video: media[0],
@@ -746,7 +748,7 @@ async function handleGenerateTranscribe({ orderedCandidates, params }) {
     const parts = ['Transcribe the audio.'];
     if (params.language) parts.push(`language: ${params.language}`);
     if (params.prompt) parts.push(`context: ${params.prompt}`);
-    const chatParams = { ...params, messages: [{ role: 'user', content: parts.join(' ') }] };
+    const chatParams = { ...params, prompt: parts.join(' '), messages: undefined };
     const result = await handleGenerateText({ orderedCandidates, params: chatParams });
     return {
       text: result.text,
@@ -930,12 +932,7 @@ async function handleV1Embeddings({ body, env, url }) {
 async function handleV1ImageGenerations({ body, env, url }) {
   try {
     const orderedCandidates = resolveOrderedCandidatesForRequest({ env, body, url });
-    const params = compactObject({
-      ...body,
-      messages: [{ role: 'user', content: body?.prompt || '' }],
-      prompt: undefined,
-    });
-    const result = await handleGenerateImage({ orderedCandidates, params });
+    const result = await handleGenerateImage({ orderedCandidates, params: body });
     const images = result.images || (result.image ? [result.image] : []);
 
     return json({
@@ -960,12 +957,7 @@ async function handleV1ImageGenerations({ body, env, url }) {
 async function handleV1AudioSpeech({ body, env, url }) {
   try {
     const orderedCandidates = resolveOrderedCandidatesForRequest({ env, body, url });
-    const params = {
-      text: body?.input || '',
-      voice: body?.voice,
-      messages: [{ role: 'user', content: body?.input || '' }],
-    };
-    const result = await handleGenerateAudio({ orderedCandidates, params });
+    const result = await handleGenerateAudio({ orderedCandidates, params: body });
 
     if (result.audio?.base64) {
       const binaryStr = atob(result.audio.base64);
