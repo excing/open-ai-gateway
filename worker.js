@@ -2,7 +2,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { embedMany, generateImage, generateText, streamText } from 'ai';
+import { APICallError, embedMany, generateImage, generateText, streamText } from 'ai';
 import { experimental_generateSpeech as generateSpeech } from 'ai';
 import { experimental_generateVideo as generateVideo } from 'ai';
 import { experimental_transcribe as transcribe } from 'ai';
@@ -65,6 +65,60 @@ let cachedGatewayConfigJson;
 let cachedGatewayConfig;
 
 // -------------------------- common helpers
+class GatewayError extends Error {
+  constructor(message, { status = 400, type = 'invalid_request_error', code, param } = {}) {
+    super(message);
+    this.name = 'GatewayError';
+    this.status = status;
+    this.type = type;
+    this.code = code;
+    this.param = param;
+  }
+}
+
+function mapErrorTypeFromStatus(status) {
+  if (!status || status < 400) return 'api_error';
+  if (status === 400) return 'invalid_request_error';
+  if (status === 401) return 'authentication_error';
+  if (status === 403) return 'permission_error';
+  if (status === 404) return 'not_found_error';
+  if (status === 409) return 'conflict_error';
+  if (status === 413) return 'request_too_large';
+  if (status === 429) return 'rate_limit_error';
+  if (status === 503) return 'service_unavailable';
+  if (status >= 500) return 'server_error';
+  return 'api_error';
+}
+
+function tryParseJson(value) {
+  if (typeof value !== 'string') return null;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function extractProviderErrorDetails(error) {
+  if (!APICallError.isInstance(error)) return null;
+
+  const rawBody = error.responseBody ?? error.data;
+  if (!rawBody) return null;
+
+  let payload = rawBody;
+  if (typeof payload === 'string') {
+    payload = tryParseJson(payload) ?? { message: payload };
+  }
+
+  if (payload && typeof payload === 'object') {
+    if (payload.error && typeof payload.error === 'object') {
+      return payload.error;
+    }
+    return payload;
+  }
+
+  return null;
+}
 
 function firstString(...values) {
   for (const value of values) {
@@ -142,7 +196,7 @@ async function safeReadJson(request) {
   try {
     return await request.clone().json();
   } catch {
-    return null;
+    throw new GatewayError('Invalid JSON in request body.', { status: 400, type: 'invalid_request_error' });
   }
 }
 
@@ -209,16 +263,54 @@ function requireAdminAuth(request, env) {
   );
 }
 
-function invalidRequestErrorResponse(error, fallbackMessage = 'Bad Request') {
+function errorResponse(
+  error,
+  { fallbackMessage = 'Internal Server Error', fallbackStatus = 500 } = {},
+) {
+  let status = fallbackStatus;
+  let message = fallbackMessage;
+  let type;
+  let code;
+  let param;
+
+  if (error instanceof GatewayError) {
+    status = error.status ?? status;
+    message = error.message || message;
+    type = error.type;
+    code = error.code;
+    param = error.param;
+  } else if (APICallError.isInstance(error)) {
+    status = error.statusCode ?? status;
+    message = error.message || message;
+
+    const providerError = extractProviderErrorDetails(error);
+    if (providerError && typeof providerError === 'object') {
+      message = firstString(providerError.message, message) || message;
+      type = firstString(providerError.type, type);
+      code = firstString(providerError.code, code);
+      param = firstString(providerError.param, param);
+    }
+  } else if (error instanceof Error) {
+    message = error.message || message;
+  }
+
+  type = type || mapErrorTypeFromStatus(status);
+
   return json(
     {
-      error: {
-        message: error instanceof Error ? error.message : fallbackMessage,
-        type: 'invalid_request_error',
-      },
+      error: compactObject({
+        message,
+        type,
+        code,
+        param,
+      }),
     },
-    400,
+    status,
   );
+}
+
+function invalidRequestErrorResponse(error, fallbackMessage = 'Bad Request') {
+  return errorResponse(error, { fallbackMessage, fallbackStatus: 400 });
 }
 
 function unsupportedApiRouteResponse(pathname) {
@@ -238,14 +330,7 @@ function notFoundResponse() {
 }
 
 function internalServerErrorResponse(error) {
-  return json(
-    {
-      error: {
-        message: error instanceof Error ? error.message : 'Internal Server Error',
-      },
-    },
-    500,
-  );
+  return errorResponse(error, { fallbackMessage: 'Internal Server Error', fallbackStatus: 500 });
 }
 
 // -------------------------- config / channel / provider resolution
@@ -254,7 +339,10 @@ function getGatewayConfig(env) {
   const rawConfig = firstString(env?.GATEWAY_CONFIG_JSON);
 
   if (!rawConfig) {
-    throw new Error('Missing `GATEWAY_CONFIG_JSON`. Set the complete gateway configuration JSON in this environment variable.');
+    throw new GatewayError(
+      'Missing `GATEWAY_CONFIG_JSON`. Set the complete gateway configuration JSON in this environment variable.',
+      { status: 500, type: 'server_error' },
+    );
   }
 
   if (rawConfig === cachedGatewayConfigJson && cachedGatewayConfig) {
@@ -266,7 +354,7 @@ function getGatewayConfig(env) {
     cachedGatewayConfigJson = rawConfig;
     return cachedGatewayConfig;
   } catch {
-    throw new Error('`GATEWAY_CONFIG_JSON` must be valid JSON.');
+    throw new GatewayError('`GATEWAY_CONFIG_JSON` must be valid JSON.', { status: 500, type: 'server_error' });
   }
 }
 
@@ -339,11 +427,14 @@ function resolveChannels({ env, model, random = Math.random }) {
   const requestedId = lowerCaseModelId(requestedModel);
 
   if (!requestedModel) {
-    throw new Error('`model` is required.');
+    throw new GatewayError('`model` is required.', { status: 400, type: 'invalid_request_error', param: 'model' });
   }
 
   if (channels.length === 0) {
-    throw new Error('No channels configured in `GATEWAY_CONFIG_JSON`.');
+    throw new GatewayError('No channels configured in `GATEWAY_CONFIG_JSON`.', {
+      status: 500,
+      type: 'server_error',
+    });
   }
 
   const orderedCandidates = shuffleArray(
@@ -363,7 +454,11 @@ function resolveChannels({ env, model, random = Math.random }) {
   );
 
   if (orderedCandidates.length === 0) {
-    throw new Error(`No channel supports model \`${requestedModel}\`.`);
+    throw new GatewayError(`No channel supports model \`${requestedModel}\`.`, {
+      status: 400,
+      type: 'invalid_request_error',
+      param: 'model',
+    });
   }
 
   return orderedCandidates;
@@ -622,13 +717,13 @@ function resolveActiveLanguageModel(orderedCandidates, callType) {
   const candidates = orderedCandidates.filter((candidate) => candidate.callType === callType);
 
   if (!Array.isArray(candidates) || candidates.length === 0) {
-    throw new Error(`No channel supports callType \`${callType}\`.`);
+    return null;
   }
 
   const languageModel = buildLanguageModelWithFailover(candidates);
 
   if (!languageModel) {
-    throw new Error(`No channel supports callType \`${callType}\`.`);
+    return null;
   }
 
   return {
@@ -637,6 +732,18 @@ function resolveActiveLanguageModel(orderedCandidates, callType) {
       return getActiveResolvedCandidate(candidates, languageModel);
     },
   };
+}
+
+function requireResolvedLanguageModel(orderedCandidates, callType) {
+  const resolved = resolveActiveLanguageModel(orderedCandidates, callType);
+  if (!resolved?.languageModel) {
+    throw new GatewayError(`No channel resolved for callType \`${callType}\`.`, {
+      status: 400,
+      type: 'invalid_request_error',
+      param: 'model',
+    });
+  }
+  return resolved;
 }
 
 async function generateMediaFromText({ orderedCandidates, params }) {
@@ -654,8 +761,17 @@ function mapTextGenerationUsage(result) {
 }
 
 async function handleGenerateText({ orderedCandidates, params }) {
-  const resolved = resolveActiveLanguageModel(orderedCandidates, CALL_TYPES.CHAT);
-  return generateText({ ...params, model: resolved.languageModel });
+  try {
+    const resolved = requireResolvedLanguageModel(orderedCandidates, CALL_TYPES.CHAT);
+    return await generateText({ ...params, model: resolved.languageModel });
+  } catch (error) {
+    if (error instanceof APICallError) {
+      console.warn('handleGenerateText', error);
+    } else {
+      console.log('handleGenerateText', error);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -683,8 +799,12 @@ async function handleGenerateImage({ orderedCandidates, params }) {
       usage: mapTextGenerationUsage(result),
     };
   } catch (error) {
-    console.warn('handleGenerateImage', error);
-    const imageResolved = resolveActiveLanguageModel(orderedCandidates, CALL_TYPES.IMAGE_GEN);
+    if (error instanceof APICallError) {
+      console.warn('handleGenerateImage', error);
+    } else {
+      console.log('handleGenerateImage', error);
+    }
+    const imageResolved = requireResolvedLanguageModel(orderedCandidates, CALL_TYPES.IMAGE_GEN);
     return generateImage({ ...params, model: imageResolved.languageModel });
   }
 }
@@ -704,8 +824,12 @@ async function handleGenerateAudio({ orderedCandidates, params }) {
       response: result.response,
     };
   } catch (error) {
-    console.warn('handleGenerateAudio', error);
-    const audioResolved = resolveActiveLanguageModel(orderedCandidates, CALL_TYPES.AUDIO_GEN);
+    if (error instanceof APICallError) {
+      console.warn('handleGenerateAudio', error);
+    } else {
+      console.log('handleGenerateAudio', error);
+    }
+    const audioResolved = requireResolvedLanguageModel(orderedCandidates, CALL_TYPES.AUDIO_GEN);
     const speechResult = await generateSpeech({ ...params, model: audioResolved.languageModel });
     return {
       audio: {
@@ -737,8 +861,12 @@ async function handleGenerateVideo({ orderedCandidates, params }) {
       response: result.response,
     };
   } catch (error) {
-    console.warn('handleGenerateVideo', error);
-    const videoResolved = resolveActiveLanguageModel(orderedCandidates, CALL_TYPES.VIDEO_GEN);
+    if (error instanceof APICallError) {
+      console.warn('handleGenerateVideo', error);
+    } else {
+      console.log('handleGenerateVideo', error);
+    }
+    const videoResolved = requireResolvedLanguageModel(orderedCandidates, CALL_TYPES.VIDEO_GEN);
     return generateVideo({ ...params, model: videoResolved.languageModel });
   }
 }
@@ -757,102 +885,123 @@ async function handleGenerateTranscribe({ orderedCandidates, params }) {
       response: result.response,
     };
   } catch (error) {
-    console.warn('handleGenerateTranscribe', error);
-    const transcriptionResolved = resolveActiveLanguageModel(orderedCandidates, CALL_TYPES.TRANSCRIBE);
+    if (error instanceof APICallError) {
+      console.warn('handleGenerateTranscribe', error);
+    } else {
+      console.log('handleGenerateTranscribe', error);
+    }
+    const transcriptionResolved = requireResolvedLanguageModel(orderedCandidates, CALL_TYPES.TRANSCRIBE);
     return transcribe({ ...params, model: transcriptionResolved.languageModel });
   }
 }
 
 async function handleGenerateEmbedding({ orderedCandidates, params }) {
-  const resolved = resolveActiveLanguageModel(orderedCandidates, CALL_TYPES.EMBEDDING);
-  return embedMany({ ...params, model: resolved.languageModel });
+  try {
+    const resolved = requireResolvedLanguageModel(orderedCandidates, CALL_TYPES.EMBEDDING);
+    return await embedMany({ ...params, model: resolved.languageModel });
+  } catch (error) {
+    if (error instanceof APICallError) {
+      console.warn('handleGenerateEmbedding', error);
+    } else {
+      console.log('handleGenerateEmbedding', error);
+    }
+    throw error;
+  }
 }
 
 // -------------------------- route handlers
 
 async function v1({ request, env, url }) {
-  if (request.method === 'GET' && url.pathname === '/v1/models') {
-    return json({ object: 'list', data: buildModelList(env) });
-  }
+  try {
+    if (request.method === 'GET' && url.pathname === '/v1/models') {
+      return json({ object: 'list', data: buildModelList(env) });
+    }
 
-  if (request.method !== 'POST') {
-    return unsupportedApiRouteResponse(url.pathname);
-  }
-
-  const body = await safeReadJson(request);
-
-  switch (url.pathname) {
-    case '/v1/chat/completions':
-      return handleV1ChatCompletions({ body, env, url });
-    case '/v1/embeddings':
-      return handleV1Embeddings({ body, env, url });
-    case '/v1/images/generations':
-      return handleV1ImageGenerations({ body, env, url });
-    case '/v1/audio/speech':
-      return handleV1AudioSpeech({ body, env, url });
-    case '/v1/audio/transcriptions':
-      return handleV1AudioTranscriptions({ body, env, url });
-    default:
+    if (request.method !== 'POST') {
       return unsupportedApiRouteResponse(url.pathname);
+    }
+
+    const body = await safeReadJson(request);
+
+    switch (url.pathname) {
+      case '/v1/chat/completions':
+        return handleV1ChatCompletions({ body, env, url });
+      case '/v1/embeddings':
+        return handleV1Embeddings({ body, env, url });
+      case '/v1/images/generations':
+        return handleV1ImageGenerations({ body, env, url });
+      case '/v1/audio/speech':
+        return handleV1AudioSpeech({ body, env, url });
+      case '/v1/audio/transcriptions':
+        return handleV1AudioTranscriptions({ body, env, url });
+      default:
+        return unsupportedApiRouteResponse(url.pathname);
+    }
+  } catch (error) {
+    return errorResponse(error, { fallbackMessage: 'Bad Request', fallbackStatus: 400 });
   }
 }
 
 async function vercel({ request, env, url }) {
-  if (request.method === 'GET' && url.pathname === '/vercel/models') {
-    return json({ object: 'list', data: buildModelList(env) });
+  try {
+    if (request.method === 'GET' && url.pathname === '/vercel/models') {
+      return json({ object: 'list', data: buildModelList(env) });
+    }
+
+    if (request.method === 'POST') {
+      const body = await safeReadJson(request);
+      const orderedCandidates = resolveOrderedCandidatesForRequest({ env, body, url });
+
+      if (url.pathname === '/vercel/text') {
+        const result = await handleGenerateText({ orderedCandidates, params: body });
+        return json({
+          content: result.content,
+          finishReason: result.finishReason,
+          usage: result.usage,
+        });
+      }
+
+      if (url.pathname === '/vercel/image') {
+        const result = await handleGenerateImage({ orderedCandidates, params: body });
+        return json({
+          image: result.image,
+          images: result.images,
+          usage: result.usage,
+        });
+      }
+
+      if (url.pathname === '/vercel/audio') {
+        const result = await handleGenerateAudio({ orderedCandidates, params: body });
+        return json({ audio: result.audio });
+      }
+
+      if (url.pathname === '/vercel/video') {
+        const result = await handleGenerateVideo({ orderedCandidates, params: body });
+        return json({
+          video: result.video,
+          videos: result.videos,
+        });
+      }
+
+      if (url.pathname === '/vercel/transcribe') {
+        const result = await handleGenerateTranscribe({ orderedCandidates, params: body });
+        return json({ text: result.text });
+      }
+
+      if (url.pathname === '/vercel/embedding') {
+        const result = await handleGenerateEmbedding({ orderedCandidates, params: body });
+        return json({
+          values: result.values,
+          embeddings: result.embeddings,
+          usage: result.usage,
+        });
+      }
+    }
+
+    return json({ error: { message: `Unsupported API route: ${url.pathname}` } }, 404);
+  } catch (error) {
+    return errorResponse(error, { fallbackMessage: 'Bad Request', fallbackStatus: 400 });
   }
-
-  if (request.method === 'POST') {
-    const body = await safeReadJson(request);
-    const orderedCandidates = resolveOrderedCandidatesForRequest({ env, body, url });
-
-    if (url.pathname === '/vercel/text') {
-      const result = await handleGenerateText({ orderedCandidates, params: body });
-      return json({
-        content: result.content,
-        finishReason: result.finishReason,
-        usage: result.usage,
-      });
-    }
-
-    if (url.pathname === '/vercel/image') {
-      const result = await handleGenerateImage({ orderedCandidates, params: body });
-      return json({
-        image: result.image,
-        images: result.images,
-        usage: result.usage,
-      });
-    }
-
-    if (url.pathname === '/vercel/audio') {
-      const result = await handleGenerateAudio({ orderedCandidates, params: body });
-      return json({ audio: result.audio });
-    }
-
-    if (url.pathname === '/vercel/video') {
-      const result = await handleGenerateVideo({ orderedCandidates, params: body });
-      return json({
-        video: result.video,
-        videos: result.videos,
-      });
-    }
-
-    if (url.pathname === '/vercel/transcribe') {
-      const result = await handleGenerateTranscribe({ orderedCandidates, params: body });
-      return json({ text: result.text });
-    }
-
-    if (url.pathname === '/vercel/embedding') {
-      const result = await handleGenerateEmbedding({ orderedCandidates, params: body });
-      return json({
-        values: result.values,
-        embeddings: result.embeddings,
-        usage: result.usage,
-      });
-    }
-  }
-
-  return json({ error: { message: `Unsupported API route: ${url.pathname}` } }, 404);
 }
 
 async function handleV1ChatCompletions({ body, env, url }) {
@@ -894,7 +1043,7 @@ async function handleV1ChatCompletions({ body, env, url }) {
       usage: mapUsage(result.usage),
     });
   } catch (error) {
-    return invalidRequestErrorResponse(error);
+    return errorResponse(error, { fallbackMessage: 'Bad Request', fallbackStatus: 400 });
   }
 }
 
@@ -925,7 +1074,7 @@ async function handleV1Embeddings({ body, env, url }) {
       },
     });
   } catch (error) {
-    return invalidRequestErrorResponse(error);
+    return errorResponse(error, { fallbackMessage: 'Bad Request', fallbackStatus: 400 });
   }
 }
 
@@ -950,7 +1099,7 @@ async function handleV1ImageGenerations({ body, env, url }) {
       }),
     });
   } catch (error) {
-    return invalidRequestErrorResponse(error);
+    return errorResponse(error, { fallbackMessage: 'Bad Request', fallbackStatus: 400 });
   }
 }
 
@@ -974,7 +1123,7 @@ async function handleV1AudioSpeech({ body, env, url }) {
 
     return json({ error: { message: 'Failed to generate audio', type: 'server_error' } }, 500);
   } catch (error) {
-    return invalidRequestErrorResponse(error);
+    return errorResponse(error, { fallbackMessage: 'Bad Request', fallbackStatus: 400 });
   }
 }
 
@@ -991,7 +1140,7 @@ async function handleV1AudioTranscriptions({ body, env, url }) {
 
     return json({ text: result.text });
   } catch (error) {
-    return invalidRequestErrorResponse(error);
+    return errorResponse(error, { fallbackMessage: 'Bad Request', fallbackStatus: 400 });
   }
 }
 
