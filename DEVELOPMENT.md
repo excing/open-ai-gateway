@@ -1,0 +1,1744 @@
+# Open AI Gateway 开发文档
+
+## 1. 项目概述
+
+Open AI Gateway 是一个运行在 Cloudflare Workers 上的 AI 网关服务，提供统一的 OpenAI 兼容 API 接口，将请求智能路由到不同的 AI 平台（OpenAI、Google Gemini、Anthropic Claude、OpenRouter、Pollinations）。
+
+**核心能力：**
+- 统一 API：所有 AI 平台通过 OpenAI `/v1/*` 格式统一调用
+- 智能路由：基于权重、延迟、成功率的模型选择算法
+- 渠道回退（Failover）：按评分排序依次重试，stream 场景使用 ai-fallback 包
+- 熔断器：自动检测故障模型并执行冷却隔离
+- 多接口支持：聊天、图片生成、视频生成、语音生成、语音识别、向量化
+- 管理后台：渠道/模型的 CRUD 管理、请求日志查询
+
+**技术栈：**
+- 后端：Cloudflare Workers + Vercel AI SDK + Cloudflare D1 + Zod
+- 前端：Vue CDN + TailwindCSS + Fetch API
+- 测试：Node.js Test Runner
+
+---
+
+## 2. 用例图
+
+```mermaid
+graph TB
+    subgraph 用户角色
+        U[API 调用者]
+        A[管理员]
+        V[访客]
+    end
+
+    subgraph API 调用者用例
+        UC1[发起聊天请求 /v1/chat/completions]
+        UC2[生成图片 /v1/images/generations]
+        UC3[生成视频 /v1/video/generations]
+        UC4[生成语音 /v1/audio/speech]
+        UC5[语音识别 /v1/audio/transcriptions]
+        UC6[向量化 /v1/embeddings]
+        UC7[获取模型列表 /v1/models]
+        UC8[指定渠道请求 x-channel-id]
+    end
+
+    subgraph 管理员用例
+        AC1[创建渠道 POST /api/channel]
+        AC2[查看渠道 GET /api/channel/:id]
+        AC3[更新渠道 PUT /api/channel/:id]
+        AC4[删除渠道 DELETE /api/channel/:id]
+        AC5[渠道列表 GET /api/channels]
+        AC6[查看模型 GET /api/model/:id]
+        AC7[更新模型 PUT /api/model/:id]
+        AC8[删除模型 DELETE /api/model/:id]
+        AC9[查看日志 GET /api/log]
+    end
+
+    subgraph 访客用例
+        VC1[查看状态 GET /status]
+    end
+
+    U --> UC1 & UC2 & UC3 & UC4 & UC5 & UC6 & UC7 & UC8
+    A --> AC1 & AC2 & AC3 & AC4 & AC5 & AC6 & AC7 & AC8 & AC9
+    V --> VC1
+```
+
+---
+
+## 3. 系统架构
+
+```mermaid
+graph LR
+    Client[客户端] -->|OpenAI 兼容请求| GW[AI Gateway<br/>Cloudflare Worker]
+    GW -->|鉴权| Auth[认证模块]
+    GW -->|路由| Router[路由模块]
+    Router -->|/v1/*| V1[V1 API 处理器]
+    Router -->|/api/*| Admin[管理 API 处理器]
+    Router -->|/status| Status[状态处理器]
+    V1 -->|模型选择+排序| Selector[模型选择器]
+    Selector -->|熔断检查| CB[熔断器]
+    Selector -->|读取模型| D1[(D1 数据库)]
+    V1 -->|Failover 重试| Failover[回退调度器]
+    Failover -->|stream: ai-fallback| AIF[ai-fallback 包]
+    Failover -->|非 stream: 队列重试| Queue[顺序重试]
+    V1 -->|实例化模型| ILM[instantiateLanguageModel]
+    ILM -->|Vercel AI SDK| OpenAI_P[OpenAI / OpenAI-Compatible]
+    ILM -->|Vercel AI SDK| Google_P[Google / Gemini]
+    ILM -->|Vercel AI SDK| Anthropic_P[Anthropic / Claude]
+    ILM -->|Vercel AI SDK| OpenRouter_P[OpenRouter]
+    ILM -->|Vercel AI SDK| Pollinations_P[Pollinations]
+    V1 -->|记录日志| Logger[日志模块]
+    Logger --> D1
+    Admin -->|CRUD| D1
+```
+
+---
+
+## 4. 数据结构与表结构
+
+### 4.1 D1 数据库表
+
+#### `channels` 表 — AI 渠道
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| `id` | TEXT | PRIMARY KEY | 渠道唯一标识，UUID v4 格式 |
+| `name` | TEXT | NOT NULL | 渠道显示名称，如 "OpenAI 官方"，用于管理界面展示 |
+| `key` | TEXT | NOT NULL, UNIQUE | 渠道唯一标识键，如 "openai-official"，用于程序内部引用，仅允许 `[a-z0-9-]` |
+| `provider` | TEXT | NOT NULL, DEFAULT 'openai' | AI 平台标识。取值：`openai`/`openai-compatible`、`google`/`gemini`、`anthropic`/`claude`、`openrouter`、`pollinations`。同一平台的别名等价（如 `google` 与 `gemini` 行为一致）。决定使用哪个 Vercel AI SDK provider 创建函数 |
+| `api_key` | TEXT | NOT NULL | 该渠道对应平台的 API 密钥，用于鉴权请求。部分 provider（如 pollinations）可为空字符串 |
+| `base_url` | TEXT | DEFAULT '' | 自定义 API 基础地址，为空时使用 SDK 默认地址 |
+| `created_at` | TEXT | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 创建时间，ISO 8601 格式 |
+| `updated_at` | TEXT | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 最后更新时间，ISO 8601 格式 |
+
+```sql
+CREATE TABLE channels (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    key TEXT NOT NULL UNIQUE,
+    provider TEXT NOT NULL DEFAULT 'openai',
+    api_key TEXT NOT NULL,
+    base_url TEXT DEFAULT '',
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+#### `channel_models` 表 — 渠道下的模型
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| `id` | TEXT | PRIMARY KEY | 模型记录唯一标识，UUID v4 格式 |
+| `channel_id` | TEXT | NOT NULL, FK → channels.id | 所属渠道 ID，删除渠道时级联删除 |
+| `code` | TEXT | NOT NULL | 模型在 AI 平台上的真实代码，如 "gpt-4o"，用于发送给 provider 的请求 |
+| `name` | TEXT | NOT NULL | 模型显示名称，如 "GPT-4o"，用于管理界面展示 |
+| `desc` | TEXT | DEFAULT '' | 模型描述说明 |
+| `aliases` | TEXT | DEFAULT '[]' | JSON 数组字符串，模型别名列表，如 `["gpt4o","gpt-4-omni"]`。用户请求中的 model 字段若匹配任一别名，等同于请求该模型 |
+| `call_type` | TEXT | NOT NULL, DEFAULT 'chat' | 请求该模型时需要调用的接口类型。取值范围见 `CALL_TYPES` 常量。决定使用 AI SDK 的哪个函数（generateText/streamText/generateImage 等） |
+| `capabilities` | TEXT | DEFAULT '["chat"]' | JSON 数组字符串，该模型支持的能力列表。取值范围见 `MODEL_CAPABILITIES` 常量。用于模型列表展示和能力过滤 |
+| `cost` | TEXT | DEFAULT '' | 成本描述字符串。格式为 `数值+单位`，如 "0.5/M"（每百万 token $0.5）、"0.02/img"（每张图 $0.02）、"0.006/sec"（每秒 $0.006）、"1/req"（每次请求 $1） |
+| `status` | TEXT | NOT NULL, DEFAULT 'active' | 模型状态。`active`=正常参与调度；`open`=熔断器开启，冷却期中不参与调度；`disable`=管理员手动禁用，不参与调度 |
+| `weight` | REAL | NOT NULL, DEFAULT 1.0 | 路由权重，值越大被选中概率越高。取值范围 `[0.0, 100.0]`，默认 1.0。设为 0 等效于禁用 |
+| `avg_latency_ms` | REAL | NOT NULL, DEFAULT 0.0 | 近期平均响应时间（毫秒），由系统自动计算更新。值越大被选中概率越小。初始为 0 表示无历史数据 |
+| `success_rate` | REAL | NOT NULL, DEFAULT 1.0 | 请求成功率，范围 `[0.0, 1.0]`，由系统自动计算更新。值越大被选中概率越大。初始为 1.0（乐观初始值） |
+| `error_rate` | REAL | NOT NULL, DEFAULT 0.0 | 请求失败率，范围 `[0.0, 1.0]`，`= 1.0 - success_rate`，冗余字段用于快速查询 |
+| `consecutive_failures` | INTEGER | NOT NULL, DEFAULT 0 | 最近连续失败次数。任何一次成功请求会将此值重置为 0。当 `>= 2` 时触发熔断器，进入冷却期 |
+| `open_end_at` | TEXT | DEFAULT NULL | 冷却结束时间，ISO 8601 格式。当 `status === 'open'` 时此值必不为空。仅当 `consecutive_failures >= 2` 时设置。为 NULL 或早于当前时间表示不在冷却期 |
+| `last_updated` | TEXT | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 模型统计数据最后更新时间 |
+| `headers` | TEXT | DEFAULT '{}' | JSON 对象字符串，请求该模型时附加的额外 HTTP 头，如 `{"x-custom":"value"}` |
+
+```sql
+CREATE TABLE channel_models (
+    id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    desc TEXT DEFAULT '',
+    aliases TEXT DEFAULT '[]',
+    call_type TEXT NOT NULL DEFAULT 'chat',
+    capabilities TEXT DEFAULT '["chat"]',
+    cost TEXT DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    weight REAL NOT NULL DEFAULT 1.0,
+    avg_latency_ms REAL NOT NULL DEFAULT 0.0,
+    success_rate REAL NOT NULL DEFAULT 1.0,
+    error_rate REAL NOT NULL DEFAULT 0.0,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    open_end_at TEXT DEFAULT NULL,
+    last_updated TEXT NOT NULL DEFAULT (datetime('now')),
+    headers TEXT DEFAULT '{}',
+    FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_channel_models_channel_id ON channel_models(channel_id);
+CREATE INDEX idx_channel_models_code ON channel_models(code);
+CREATE INDEX idx_channel_models_status ON channel_models(status);
+CREATE INDEX idx_channel_models_call_type ON channel_models(call_type);
+```
+
+#### `request_logs` 表 — 请求日志
+
+| 字段 | 类型 | 约束 | 说明 |
+|------|------|------|------|
+| `id` | TEXT | PRIMARY KEY | 日志记录唯一标识，UUID v4 格式 |
+| `channel_id` | TEXT | NOT NULL | 使用的渠道 ID |
+| `channel_name` | TEXT | NOT NULL | 渠道名称（冗余，避免渠道删除后丢失信息） |
+| `model_id` | TEXT | NOT NULL | 使用的模型记录 ID |
+| `model_code` | TEXT | NOT NULL | 模型代码（冗余，同上理由） |
+| `call_type` | TEXT | NOT NULL | 接口类型，见 `CALL_TYPES` |
+| `request_model` | TEXT | NOT NULL | 用户请求中携带的原始 model 字段值 |
+| `status` | TEXT | NOT NULL | 请求结果状态：`success` 或 `error` |
+| `error_message` | TEXT | DEFAULT '' | 当 status='error' 时的错误信息 |
+| `latency_ms` | INTEGER | NOT NULL, DEFAULT 0 | 请求耗时（毫秒），从发起 AI 请求到收到响应/第一个 chunk 的时间 |
+| `input_tokens` | INTEGER | DEFAULT 0 | 输入 token 数量（仅 chat/embedding 类型有效） |
+| `output_tokens` | INTEGER | DEFAULT 0 | 输出 token 数量（仅 chat 类型有效） |
+| `created_at` | TEXT | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 请求发生时间 |
+
+```sql
+CREATE TABLE request_logs (
+    id TEXT PRIMARY KEY,
+    channel_id TEXT NOT NULL,
+    channel_name TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    model_code TEXT NOT NULL,
+    call_type TEXT NOT NULL,
+    request_model TEXT NOT NULL,
+    status TEXT NOT NULL,
+    error_message TEXT DEFAULT '',
+    latency_ms INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER DEFAULT 0,
+    output_tokens INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX idx_request_logs_created_at ON request_logs(created_at);
+CREATE INDEX idx_request_logs_channel_id ON request_logs(channel_id);
+CREATE INDEX idx_request_logs_model_id ON request_logs(model_id);
+CREATE INDEX idx_request_logs_status ON request_logs(status);
+```
+
+### 4.2 TypeScript 类型定义
+
+```ts
+/** AI 平台 provider 标识（含别名，同一平台别名行为等价） */
+type Provider = 'openai' | 'openai-compatible' | 'google' | 'gemini' | 'anthropic' | 'claude' | 'openrouter' | 'pollinations';
+
+/** 模型调用接口类型 */
+type CallType = 'chat' | 'image_gen' | 'audio_gen' | 'video_gen' | 'transcribe' | 'embedding';
+
+/** 模型能力标识 */
+type ModelCapability = 'chat' | 'image_in' | 'image_out' | 'audio_in' | 'audio_out' | 'video_in' | 'video_out' | 'embedding';
+
+/** 模型状态 */
+type ModelStatus = 'active' | 'open' | 'disable';
+
+/** 请求日志状态 */
+type LogStatus = 'success' | 'error';
+
+/** 成本单位 */
+type CostUnit = '/img' | '/M' | '/sec' | '/req';
+
+/** 分页参数 */
+interface PaginationParams {
+    page: number;   // 页码，从 1 开始，默认 1
+    limit: number;  // 每页条数，范围 [1, 100]，默认 20
+}
+
+/** 分页响应包装 */
+interface PaginatedResponse<T> {
+    data: T[];           // 当前页数据
+    total: number;       // 总记录数
+    page: number;        // 当前页码
+    limit: number;       // 每页条数
+    total_pages: number; // 总页数
+}
+
+/** 统一 API 响应格式 */
+interface ApiResponse<T = any> {
+    success: boolean;    // 请求是否成功
+    data?: T;            // 成功时的数据
+    error?: string;      // 失败时的错误信息
+}
+
+/** 模型选择结果 */
+interface ModelSelection {
+    channel: ChannelRow;       // 选中的渠道数据库行
+    model: ChannelModelRow;    // 选中的模型数据库行
+    score: number;             // 该模型的综合评分
+}
+
+/** 渠道数据库行（对应 channels 表） */
+interface ChannelRow {
+    id: string;
+    name: string;
+    key: string;
+    provider: Provider;
+    api_key: string;
+    base_url: string;
+    created_at: string;
+    updated_at: string;
+}
+
+/** 模型数据库行（对应 channel_models 表） */
+interface ChannelModelRow {
+    id: string;
+    channel_id: string;
+    code: string;
+    name: string;
+    desc: string;
+    aliases: string;          // JSON 字符串，运行时解析为 string[]
+    call_type: CallType;
+    capabilities: string;     // JSON 字符串，运行时解析为 ModelCapability[]
+    cost: string;
+    status: ModelStatus;
+    weight: number;
+    avg_latency_ms: number;
+    success_rate: number;
+    error_rate: number;
+    consecutive_failures: number;
+    open_end_at: string | null;
+    last_updated: string;
+    headers: string;          // JSON 字符串，运行时解析为 Record<string, string>
+}
+
+/** 日志数据库行（对应 request_logs 表） */
+interface RequestLogRow {
+    id: string;
+    channel_id: string;
+    channel_name: string;
+    model_id: string;
+    model_code: string;
+    call_type: CallType;
+    request_model: string;
+    status: LogStatus;
+    error_message: string;
+    latency_ms: number;
+    input_tokens: number;
+    output_tokens: number;
+    created_at: string;
+}
+```
+
+
+---
+
+## 5. 常量定义
+
+```ts
+/** 支持的 AI 平台列表（含别名，同一平台别名行为等价） */
+const PROVIDERS = {
+    OPENAI: 'openai',
+    OPENAI_COMPATIBLE: 'openai-compatible', // 等价于 openai
+    GOOGLE: 'google',
+    GEMINI: 'gemini',                       // 等价于 google
+    ANTHROPIC: 'anthropic',
+    CLAUDE: 'claude',                       // 等价于 anthropic
+    OPENROUTER: 'openrouter',
+    POLLINATIONS: 'pollinations',
+} as const;
+
+/** 模型调用接口类型 */
+const CALL_TYPES = {
+    CHAT: 'chat',
+    IMAGE_GEN: 'image_gen',
+    AUDIO_GEN: 'audio_gen',
+    VIDEO_GEN: 'video_gen',
+    TRANSCRIBE: 'transcribe',
+    EMBEDDING: 'embedding',
+} as const;
+
+/** 调用接口类型到 v1 路径的映射 */
+const CALL_TYPE_TO_PATH = {
+    [CALL_TYPES.CHAT]: '/v1/chat/completions',
+    [CALL_TYPES.IMAGE_GEN]: '/v1/images/generations',
+    [CALL_TYPES.VIDEO_GEN]: '/v1/video/generations',
+    [CALL_TYPES.AUDIO_GEN]: '/v1/audio/speech',
+    [CALL_TYPES.TRANSCRIBE]: '/v1/audio/transcriptions',
+    [CALL_TYPES.EMBEDDING]: '/v1/embeddings',
+} as const;
+
+/** v1 路径到调用接口类型的反向映射 */
+const PATH_TO_CALL_TYPE = Object.fromEntries(
+    Object.entries(CALL_TYPE_TO_PATH).map(([k, v]) => [v, k])
+);
+
+/**
+ * Provider 与 CallType 的支持矩阵
+ * 用于 instantiateLanguageModel 函数的分发逻辑
+ *
+ * | Provider           | chat | image_gen | audio_gen | video_gen | embedding | transcribe |
+ * |--------------------|------|-----------|-----------|-----------|-----------|------------|
+ * | openai/compatible  | ✅   | ✅ image  | ✅ speech | ❌        | ✅        | ✅         |
+ * | google/gemini      | ✅   | ✅ image  | ✅ chat   | ✅ video  | ✅        | ❌         |
+ * | anthropic/claude   | ✅   | ❌        | ❌        | ❌        | ✅ embeddingModel | ❌  |
+ * | openrouter         | ✅   | ✅ imageModel | ❌   | ❌        | ✅ textEmbeddingModel | ❌ |
+ * | pollinations       | ✅   | ✅ image  | ✅ speechModel | ❌   | ❌        | ❌         |
+ */
+
+/** 模型能力标识 */
+const MODEL_CAPABILITIES = {
+    CHAT: 'chat',
+    IMAGE_IN: 'image_in',
+    IMAGE_OUT: 'image_out',
+    AUDIO_IN: 'audio_in',
+    AUDIO_OUT: 'audio_out',
+    VIDEO_IN: 'video_in',
+    VIDEO_OUT: 'video_out',
+    EMBEDDING: 'embedding',
+} as const;
+
+/** 模型状态 */
+const MODEL_STATUS = {
+    ACTIVE: 'active',     // 正常参与调度
+    OPEN: 'open',         // 熔断器开启，冷却期中
+    DISABLE: 'disable',   // 管理员手动禁用
+} as const;
+
+/** 熔断器冷却时间配置（按连续失败次数分级） */
+const COOLDOWN_TIERS = [
+    { minFailures: 2,  maxFailures: 4,  durationMs: 60_000 },       // 60 秒
+    { minFailures: 4,  maxFailures: 8,  durationMs: 300_000 },      // 5 分钟
+    { minFailures: 8,  maxFailures: 24, durationMs: 3_600_000 },    // 1 小时
+    { minFailures: 24, maxFailures: 32, durationMs: 86_400_000 },   // 1 天
+    { minFailures: 32, maxFailures: Infinity, durationMs: 259_200_000 }, // 3 天
+] as const;
+
+/** 分页默认值 */
+const DEFAULT_PAGE = 1;
+const DEFAULT_PAGE_SIZE = 20;
+const MAX_PAGE_SIZE = 100;
+
+/** 模型评分权重因子 */
+const SCORE_WEIGHTS = {
+    WEIGHT_FACTOR: 10,        // 模型权重的放大因子
+    SUCCESS_RATE_FACTOR: 50,  // 成功率的放大因子
+    LATENCY_PENALTY: 0.01,    // 延迟的惩罚因子（每毫秒）
+    FAILURE_PENALTY: 20,      // 每次连续失败的惩罚分
+} as const;
+
+/** 统计数据滑动平均系数（指数移动平均 EMA alpha） */
+const EMA_ALPHA = 0.3; // 新数据点的权重，范围 (0, 1)，值越大新数据影响越大
+
+/** HTTP 状态码 */
+const HTTP_STATUS = {
+    OK: 200,
+    CREATED: 201,
+    BAD_REQUEST: 400,
+    UNAUTHORIZED: 401,
+    FORBIDDEN: 403,
+    NOT_FOUND: 404,
+    METHOD_NOT_ALLOWED: 405,
+    INTERNAL_ERROR: 500,
+    SERVICE_UNAVAILABLE: 503,
+} as const;
+
+/** 错误消息 */
+const ERROR_MESSAGES = {
+    UNAUTHORIZED: 'Missing or invalid authorization token',
+    FORBIDDEN: 'Insufficient permissions',
+    NOT_FOUND: 'Resource not found',
+    MODEL_NOT_FOUND: 'No available model found for the requested model identifier',
+    CHANNEL_NOT_FOUND: 'Channel not found',
+    METHOD_NOT_ALLOWED: 'Method not allowed',
+    INVALID_REQUEST_BODY: 'Invalid request body',
+    NO_MODEL_AVAILABLE: 'All models for this identifier are currently unavailable (cooldown or disabled)',
+    PROVIDER_ERROR: 'Upstream AI provider returned an error',
+    INTERNAL_ERROR: 'Internal server error',
+} as const;
+
+/** CORS 头 */
+const CORS_HEADERS = {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-channel-id',
+    'Access-Control-Max-Age': '86400',
+} as const;
+```
+
+
+---
+
+## 6. Zod Schema 定义
+
+```ts
+import { z } from 'zod';
+
+/** 创建渠道请求体校验 */
+const CreateChannelSchema = z.object({
+    name: z.string().min(1).max(100),                    // 渠道显示名称
+    key: z.string().regex(/^[a-z0-9-]+$/).min(1).max(50), // 渠道唯一键
+    provider: z.enum(['openai', 'openai-compatible', 'google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations']).default('openai'),
+    apiKey: z.string(),                                   // API 密钥
+    baseURL: z.string().url().or(z.literal('')).default(''), // 自定义基础地址
+    models: z.array(z.object({
+        code: z.string().min(1),                          // 模型代码
+        name: z.string().min(1),                          // 模型显示名称
+        desc: z.string().default(''),                     // 模型描述
+        aliases: z.array(z.string()).default([]),          // 模型别名列表
+        callType: z.enum(['chat', 'image_gen', 'audio_gen', 'video_gen', 'transcribe', 'embedding']).default('chat'),
+        capabilities: z.array(z.string()).default(['chat']),
+        cost: z.string().default(''),
+        weight: z.number().min(0).max(100).default(1.0),
+        headers: z.record(z.string()).default({}),
+    })).default([]),
+});
+
+/** 更新渠道请求体校验（所有字段可选） */
+const UpdateChannelSchema = CreateChannelSchema.partial();
+
+/** 更新模型请求体校验 */
+const UpdateModelSchema = z.object({
+    code: z.string().min(1).optional(),
+    name: z.string().min(1).optional(),
+    desc: z.string().optional(),
+    aliases: z.array(z.string()).optional(),
+    callType: z.enum(['chat', 'image_gen', 'audio_gen', 'video_gen', 'transcribe', 'embedding']).optional(),
+    capabilities: z.array(z.string()).optional(),
+    cost: z.string().optional(),
+    status: z.enum(['active', 'open', 'disable']).optional(),
+    weight: z.number().min(0).max(100).optional(),
+    headers: z.record(z.string()).optional(),
+});
+
+/** 分页查询参数校验 */
+const PaginationSchema = z.object({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+
+/** 日志查询参数校验 */
+const LogQuerySchema = PaginationSchema.extend({
+    channel_id: z.string().optional(),    // 按渠道过滤
+    model_id: z.string().optional(),      // 按模型过滤
+    status: z.enum(['success', 'error']).optional(), // 按状态过滤
+    start_date: z.string().optional(),    // 起始日期，ISO 8601
+    end_date: z.string().optional(),      // 结束日期，ISO 8601
+});
+```
+
+---
+
+## 7. 全部函数签名
+
+### 7.1 入口与路由
+
+```ts
+/**
+ * 主入口函数，处理所有传入请求
+ * - OPTIONS 请求直接返回 CORS 预检响应
+ * - 根据路径前缀分发到对应处理器
+ * - 全局异常捕获，返回 500 错误
+ *
+ * @param request - Cloudflare Workers Request 对象
+ * @param env - 环境变量对象，包含 ADMIN_KEY, DB(D1), ASSETS 等绑定
+ * @returns Response 对象
+ * @throws 不抛出异常，内部 try-catch 兜底
+ */
+async function handleRequest(request: Request, env: Env): Promise<Response>;
+
+/**
+ * 路由分发函数，根据 URL pathname 匹配对应的处理器
+ * 路由优先级：精确匹配 > 前缀匹配
+ *
+ * 路由表：
+ * - OPTIONS *           → handleCorsPreflightRequest
+ * - GET     /status     → handleStatus（无需鉴权）
+ * - GET     /v1/models  → handleModelsList（需鉴权）
+ * - POST    /v1/chat/completions      → handleV1Proxy（需鉴权）
+ * - POST    /v1/images/generations    → handleV1Proxy（需鉴权）
+ * - POST    /v1/video/generations     → handleV1Proxy（需鉴权）
+ * - POST    /v1/audio/speech          → handleV1Proxy（需鉴权）
+ * - POST    /v1/audio/transcriptions  → handleV1Proxy（需鉴权）
+ * - POST    /v1/embeddings            → handleV1Proxy（需鉴权）
+ * - *       /api/*      → routeAdminApi（需管理员鉴权）
+ *
+ * @param request - Request 对象
+ * @param env - 环境变量
+ * @returns Response 对象
+ * @throws 路径不匹配时返回 404
+ */
+async function routeRequest(request: Request, env: Env): Promise<Response>;
+```
+
+### 7.2 鉴权模块
+
+```ts
+/**
+ * 从请求中提取并验证 Bearer Token
+ * 提取顺序：Authorization: Bearer <token> 头
+ * 验证逻辑：token === env.ADMIN_KEY
+ *
+ * @param request - Request 对象
+ * @param env - 环境变量，需要 ADMIN_KEY
+ * @returns 鉴权成功返回 true，失败返回 false
+ */
+function authenticate(request: Request, env: Env): boolean;
+
+/**
+ * 验证是否为管理员请求
+ * 验证逻辑同 authenticate，但返回值语义不同
+ * 用于 /api/* 路由的权限检查
+ *
+ * @param request - Request 对象
+ * @param env - 环境变量
+ * @returns 是管理员返回 true
+ */
+function isAdmin(request: Request, env: Env): boolean;
+```
+
+
+### 7.3 V1 API 处理器
+
+```ts
+/**
+ * 统一的 /v1/* AI 代理处理器
+ *
+ * 核心概念：用户请求的路径（如 /v1/images/generations）决定"用户意图 callType"，
+ * 但模型自身的 callType 决定实际使用哪个 AI SDK 函数。
+ * 当前版本：若模型 callType 与用户意图不一致，跳过该模型（后期再实现跨类型转换）。
+ *
+ * 处理流程：
+ * 1. 解析请求体，提取 model 字段和 stream 标志
+ * 2. 根据路径确定用户意图 callType（PATH_TO_CALL_TYPE）
+ * 3. 调用 selectModels 获取按评分排序的候选模型列表
+ * 4. 执行 Failover 重试：
+ *    a. 若 callType=chat 且 stream=true：使用 ai-fallback 包并行回退
+ *    b. 其他情况：按评分顺序依次重试，直到成功或全部失败
+ * 5. 对每次重试：instantiateLanguageModel → executeAIRequest
+ * 6. 记录日志并更新模型统计（成功/失败）
+ * 7. 返回响应（支持流式和非流式）
+ *
+ * @param request - Request 对象，body 为 JSON，包含 model 字段
+ * @param env - 环境变量
+ * @param userCallType - 用户意图接口类型，由路由层根据路径确定
+ * @returns Response 对象，流式时为 SSE 格式
+ * @throws 无可用模型时返回 503，所有重试均失败时返回 502
+ */
+async function handleV1Proxy(request: Request, env: Env, userCallType: CallType): Promise<Response>;
+
+/**
+ * 获取模型列表
+ * 从数据库查询所有 status != 'disable' 的模型
+ * 按 OpenAI /v1/models 响应格式返回
+ * 去重逻辑：同一 code 的多个渠道模型只返回一条
+ *
+ * @param request - Request 对象
+ * @param env - 环境变量
+ * @returns OpenAI 兼容的模型列表响应 { object: 'list', data: [...] }
+ */
+async function handleModelsList(request: Request, env: Env): Promise<Response>;
+```
+
+### 7.4 管理 API 处理器
+
+```ts
+/**
+ * 管理 API 路由分发
+ * 根据路径和方法分发到具体的 CRUD 处理器
+ *
+ * @param request - Request 对象
+ * @param env - 环境变量
+ * @returns Response 对象
+ */
+async function routeAdminApi(request: Request, env: Env): Promise<Response>;
+
+/**
+ * 创建渠道
+ * 1. 用 CreateChannelSchema 校验请求体
+ * 2. 生成 UUID 插入 channels 表
+ * 3. 遍历 models 数组，批量插入 channel_models 表
+ * 4. 返回创建的渠道完整数据（含 models）
+ *
+ * @param request - Request 对象，body 符合 CreateChannelSchema
+ * @param env - 环境变量
+ * @returns { success: true, data: ChannelWithModels } 状态码 201
+ * @throws 校验失败返回 400，key 冲突返回 409
+ */
+async function handleCreateChannel(request: Request, env: Env): Promise<Response>;
+
+/**
+ * 获取单个渠道详情（含其下所有模型）
+ *
+ * @param channelId - URL 路径中的渠道 ID
+ * @param env - 环境变量
+ * @returns { success: true, data: ChannelWithModels }
+ * @throws 渠道不存在返回 404
+ */
+async function handleGetChannel(channelId: string, env: Env): Promise<Response>;
+
+/**
+ * 更新渠道
+ * 1. 用 UpdateChannelSchema 校验请求体
+ * 2. 更新 channels 表对应字段
+ * 3. 若 models 字段存在，删除旧模型，批量插入新模型
+ * 4. 更新 updated_at 时间戳
+ *
+ * @param channelId - URL 路径中的渠道 ID
+ * @param request - Request 对象
+ * @param env - 环境变量
+ * @returns { success: true, data: ChannelWithModels }
+ * @throws 渠道不存在返回 404，校验失败返回 400
+ */
+async function handleUpdateChannel(channelId: string, request: Request, env: Env): Promise<Response>;
+
+/**
+ * 删除渠道（级联删除其下所有模型）
+ *
+ * @param channelId - URL 路径中的渠道 ID
+ * @param env - 环境变量
+ * @returns { success: true }
+ * @throws 渠道不存在返回 404
+ */
+async function handleDeleteChannel(channelId: string, env: Env): Promise<Response>;
+
+/**
+ * 获取渠道列表（分页）
+ *
+ * @param request - Request 对象，查询参数 page, limit
+ * @param env - 环境变量
+ * @returns PaginatedResponse<ChannelWithModels>
+ */
+async function handleListChannels(request: Request, env: Env): Promise<Response>;
+
+/**
+ * 获取单个模型详情
+ *
+ * @param modelId - URL 路径中的模型 ID
+ * @param env - 环境变量
+ * @returns { success: true, data: ChannelModelRow }
+ * @throws 模型不存在返回 404
+ */
+async function handleGetModel(modelId: string, env: Env): Promise<Response>;
+
+/**
+ * 更新模型
+ * 用 UpdateModelSchema 校验请求体，更新 channel_models 表
+ *
+ * @param modelId - URL 路径中的模型 ID
+ * @param request - Request 对象
+ * @param env - 环境变量
+ * @returns { success: true, data: ChannelModelRow }
+ * @throws 模型不存在返回 404，校验失败返回 400
+ */
+async function handleUpdateModel(modelId: string, request: Request, env: Env): Promise<Response>;
+
+/**
+ * 删除模型
+ *
+ * @param modelId - URL 路径中的模型 ID
+ * @param env - 环境变量
+ * @returns { success: true }
+ * @throws 模型不存在返回 404
+ */
+async function handleDeleteModel(modelId: string, env: Env): Promise<Response>;
+
+/**
+ * 获取请求日志（分页 + 过滤）
+ * 查询参数用 LogQuerySchema 校验
+ *
+ * @param request - Request 对象，查询参数见 LogQuerySchema
+ * @param env - 环境变量
+ * @returns PaginatedResponse<RequestLogRow>
+ */
+async function handleGetLogs(request: Request, env: Env): Promise<Response>;
+
+/**
+ * 获取系统状态（无需鉴权）
+ * 返回所有模型的状态摘要信息
+ *
+ * @param env - 环境变量
+ * @returns { models: ModelStatusSummary[] }
+ * 其中 ModelStatusSummary = { code, name, status, channel_name, success_rate, avg_latency_ms, consecutive_failures }
+ */
+async function handleStatus(env: Env): Promise<Response>;
+```
+
+
+### 7.5 模型选择与调度
+
+```ts
+/**
+ * 智能模型选择（返回排序后的候选列表，用于 Failover）
+ * 根据用户请求的 model 标识（code 或 alias），从数据库中查找所有匹配的模型实例，
+ * 过滤掉不可用的模型（disabled / 冷却中），按评分降序排序后返回完整列表。
+ *
+ * 调用方根据列表顺序依次重试（Failover），而非仅选择一个。
+ *
+ * 若指定了 x-channel-id 头，则只在该渠道中查找。
+ *
+ * 查找逻辑：
+ * 1. SELECT 所有 channel_models + channels WHERE code = modelIdentifier OR aliases LIKE '%modelIdentifier%'
+ * 2. 过滤 status = 'disable' 的模型
+ * 3. 过滤正在冷却中的模型（checkCooldown）
+ * 4. 过滤 call_type 与用户意图 callType 不匹配的模型（当前版本直接跳过，后期实现跨类型转换）
+ * 5. 对剩余模型计算评分（calculateModelScore）
+ * 6. 按评分降序排序
+ *
+ * @param modelIdentifier - 用户请求中的 model 字段值，如 "gpt-4o" 或别名 "gpt4o"
+ * @param userCallType - 用户意图接口类型（由请求路径决定），用于过滤 call_type 不匹配的模型
+ * @param env - 环境变量
+ * @param channelId - 可选，指定渠道 ID（来自 x-channel-id 头）
+ * @returns ModelSelection[] 按评分降序排列的候选列表，空数组表示无可用模型
+ */
+async function selectModels(
+    modelIdentifier: string,
+    userCallType: CallType,
+    env: Env,
+    channelId?: string
+): Promise<ModelSelection[]>;
+
+/**
+ * 计算单个模型的调度评分
+ * 评分公式：score = weight * WEIGHT_FACTOR + successRate * SUCCESS_RATE_FACTOR
+ *                    - avgLatencyMs * LATENCY_PENALTY - consecutiveFailures * FAILURE_PENALTY
+ * 评分下限为 0.01（确保每个可用模型都有非零概率被选中）
+ *
+ * @param model - 模型数据库行
+ * @returns 评分数值，>= 0.01
+ */
+function calculateModelScore(model: ChannelModelRow): number;
+```
+
+### 7.6 熔断器模块
+
+```ts
+/**
+ * 检查模型是否处于冷却期
+ *
+ * @param model - 模型数据库行
+ * @returns true 表示正在冷却中，不可用；false 表示可用
+ */
+function checkCooldown(model: ChannelModelRow): boolean;
+
+/**
+ * 根据连续失败次数获取冷却时间（毫秒）
+ * 遍历 COOLDOWN_TIERS，返回匹配的冷却时间
+ *
+ * @param consecutiveFailures - 连续失败次数
+ * @returns 冷却时间（毫秒），若 < 2 次返回 0
+ */
+function getCooldownDuration(consecutiveFailures: number): number;
+
+/**
+ * 记录一次成功请求，更新模型统计数据
+ * 1. consecutive_failures 重置为 0
+ * 2. open_end_at 重置为 NULL
+ * 3. status 设为 'active'
+ * 4. 使用 EMA 更新 avg_latency_ms
+ * 5. 使用 EMA 更新 success_rate, error_rate
+ * 6. 更新 last_updated
+ *
+ * @param modelId - 模型记录 ID
+ * @param latencyMs - 本次请求耗时（毫秒）
+ * @param env - 环境变量
+ */
+async function recordSuccess(modelId: string, latencyMs: number, env: Env): Promise<void>;
+
+/**
+ * 记录一次失败请求，更新模型统计数据
+ * 1. consecutive_failures += 1
+ * 2. 使用 EMA 更新 success_rate, error_rate
+ * 3. 若 consecutive_failures >= 2，计算冷却时间，设置 open_end_at 和 status='open'
+ * 4. 更新 last_updated
+ *
+ * @param modelId - 模型记录 ID
+ * @param env - 环境变量
+ */
+async function recordFailure(modelId: string, env: Env): Promise<void>;
+```
+
+### 7.7 模型实例化与 AI 请求
+
+```ts
+/**
+ * 根据渠道 provider + 模型 callType 实例化 Vercel AI SDK 的 Model 对象
+ *
+ * 不同 provider 支持的 callType 不同，具体映射见 Provider-CallType 支持矩阵（§5）。
+ * 此函数先根据 provider 创建 SDK provider 实例，再根据 callType 调用对应方法获取 Model。
+ *
+ * 所有 provider 创建时统一传参：{ apiKey, baseURL, headers, name: channelName }
+ *
+ * Provider 别名等价关系：
+ * - openai / openai-compatible / default → createOpenAI
+ * - google / gemini → createGoogleGenerativeAI
+ * - anthropic / claude → createAnthropic
+ * - openrouter → createOpenRouter
+ * - pollinations → createPollinations
+ *
+ * @param channelName - 渠道名称，传入 SDK 的 name 参数
+ * @param baseURL - 自定义 API 基础地址，空字符串使用 SDK 默认值
+ * @param apiKey - API 密钥
+ * @param headers - 模型级别的额外请求头（已从 JSON 解析为 Record<string, string>）
+ * @param provider - 渠道的 provider 标识
+ * @param callType - 模型的 callType（决定调用 SDK 的哪个方法）
+ * @param model - 模型代码（如 "gpt-4o"）
+ * @returns Vercel AI SDK Model 对象（LanguageModel / ImageModel / EmbeddingModel 等）
+ * @throws 当 provider 不支持指定 callType 时抛出 Error
+ */
+function instantiateLanguageModel(
+    channelName: string,
+    baseURL: string,
+    apiKey: string,
+    headers: Record<string, string>,
+    provider: Provider,
+    callType: CallType,
+    model: string
+): AIModel;
+
+/**
+ * 执行 AI 请求
+ * 根据 callType 使用实例化好的 Model 对象调用不同的 Vercel AI SDK 顶层函数
+ *
+ * 映射关系：
+ * - chat       → stream=true 时 streamText(), 否则 generateText()
+ * - image_gen  → experimental_generateImage()
+ * - audio_gen  → generateSpeech()
+ * - video_gen  → 使用 provider 的 video API（provider 特定实现）
+ * - transcribe → transcribe()
+ * - embedding  → embed() 或 embedMany()
+ *
+ * @param aiModel - instantiateLanguageModel 返回的 Model 对象
+ * @param callType - 模型的 callType
+ * @param body - 请求体（已解析的 JSON 对象）
+ * @returns AI 请求结果对象（不同 callType 返回结构不同）
+ * @throws AI provider 返回错误时抛出异常
+ */
+async function executeAIRequest(
+    aiModel: AIModel,
+    callType: CallType,
+    body: Record<string, any>
+): Promise<AIRequestResult>;
+
+/**
+ * 将 AI SDK 的响应转换为 OpenAI 兼容的 Response 对象
+ *
+ * - chat 流式：转为 SSE 格式的 ReadableStream
+ * - chat 非流式：转为 OpenAI chat completion 响应 JSON
+ * - image_gen：转为 OpenAI images 响应格式
+ * - embedding：转为 OpenAI embeddings 响应格式
+ * - 其他：直接返回 JSON
+ *
+ * @param result - executeAIRequest 的返回值
+ * @param callType - 接口类型
+ * @param modelCode - 模型代码（用于响应中的 model 字段）
+ * @returns Response 对象
+ */
+function formatAIResponse(result: AIRequestResult, callType: CallType, modelCode: string): Response;
+```
+
+
+### 7.8 日志模块
+
+```ts
+/**
+ * 写入一条请求日志到 request_logs 表
+ * 使用 env.DB.prepare + bind 防 SQL 注入
+ * 此函数使用 waitUntil 异步执行，不阻塞响应返回
+ *
+ * @param log - 日志数据，包含渠道/模型/状态/耗时等全部字段
+ * @param env - 环境变量
+ */
+async function writeLog(log: Omit<RequestLogRow, 'id' | 'created_at'>, env: Env): Promise<void>;
+```
+
+### 7.9 工具函数
+
+```ts
+/**
+ * 生成 UUID v4
+ * 使用 crypto.randomUUID()
+ *
+ * @returns UUID v4 字符串
+ */
+function generateUUID(): string;
+
+/**
+ * 创建 JSON 响应，自动附加 CORS 头
+ *
+ * @param data - 响应数据，会被 JSON.stringify
+ * @param status - HTTP 状态码，默认 200
+ * @returns Response 对象，Content-Type 为 application/json
+ */
+function jsonResponse(data: any, status?: number): Response;
+
+/**
+ * 创建错误响应
+ *
+ * @param message - 错误消息
+ * @param status - HTTP 状态码，默认 500
+ * @returns Response 对象，格式为 { success: false, error: message }
+ */
+function errorResponse(message: string, status?: number): Response;
+
+/**
+ * 创建 CORS 预检响应
+ *
+ * @returns 204 状态的 Response，附带 CORS 头
+ */
+function handleCorsPreflightRequest(): Response;
+
+/**
+ * 从 URL 查询参数中解析分页信息
+ * 使用 PaginationSchema 校验和设置默认值
+ *
+ * @param url - URL 对象
+ * @returns PaginationParams 对象
+ */
+function parsePagination(url: URL): PaginationParams;
+
+/**
+ * 安全解析请求体 JSON
+ *
+ * @param request - Request 对象
+ * @returns 解析后的 JSON 对象
+ * @throws JSON 解析失败时返回 null
+ */
+async function parseRequestBody(request: Request): Promise<Record<string, any> | null>;
+
+/**
+ * 从请求头提取 Bearer Token
+ *
+ * @param request - Request 对象
+ * @returns token 字符串，无 Authorization 头或格式不对时返回 null
+ */
+function extractBearerToken(request: Request): string | null;
+
+/**
+ * 从 URL pathname 中提取路径参数
+ * 例如从 "/api/channel/abc-123" 提取 "abc-123"
+ *
+ * @param pathname - URL pathname
+ * @param prefix - 路径前缀，如 "/api/channel/"
+ * @returns 参数值字符串，未匹配返回 null
+ */
+function extractPathParam(pathname: string, prefix: string): string | null;
+
+/**
+ * 构建分页 SQL 子句
+ *
+ * @param pagination - 分页参数
+ * @returns { limitClause: string, offset: number } 如 { limitClause: 'LIMIT 20 OFFSET 40', offset: 40 }
+ */
+function buildPaginationSQL(pagination: PaginationParams): { limitClause: string; offset: number };
+
+/**
+ * 构建分页响应数据
+ *
+ * @param data - 当前页数据数组
+ * @param total - 总记录数
+ * @param pagination - 分页参数
+ * @returns PaginatedResponse 对象
+ */
+function buildPaginatedResponse<T>(data: T[], total: number, pagination: PaginationParams): PaginatedResponse<T>;
+```
+
+
+---
+
+## 8. API 规范
+
+### 8.1 V1 API（OpenAI 兼容）
+
+所有 V1 API 需要在请求头携带 `Authorization: Bearer <ADMIN_KEY>` 鉴权。
+可选头 `x-channel-id: <channel_id>` 指定走特定渠道。
+
+#### POST /v1/chat/completions
+
+**请求体**（OpenAI 兼容格式）：
+```json
+{
+    "model": "gpt-4o",
+    "messages": [
+        { "role": "system", "content": "You are a helpful assistant." },
+        { "role": "user", "content": "Hello" }
+    ],
+    "stream": false,
+    "temperature": 0.7,
+    "max_tokens": 1024
+}
+```
+
+**非流式响应** (stream=false)：
+```json
+{
+    "id": "chatcmpl-xxx",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "gpt-4o",
+    "choices": [{
+        "index": 0,
+        "message": { "role": "assistant", "content": "Hello! How can I help you?" },
+        "finish_reason": "stop"
+    }],
+    "usage": { "prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30 }
+}
+```
+
+**流式响应** (stream=true)：SSE 格式，每个 chunk：
+```
+data: {"id":"chatcmpl-xxx","object":"chat.completion.chunk","created":1700000000,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
+
+data: [DONE]
+```
+
+#### POST /v1/images/generations
+
+**请求体**：
+```json
+{
+    "model": "dall-e-3",
+    "prompt": "a white siamese cat",
+    "n": 1,
+    "size": "1024x1024"
+}
+```
+
+**响应**：
+```json
+{
+    "created": 1700000000,
+    "data": [{ "url": "https://...", "revised_prompt": "..." }]
+}
+```
+
+#### POST /v1/embeddings
+
+**请求体**：
+```json
+{
+    "model": "text-embedding-3-small",
+    "input": "The food was delicious"
+}
+```
+
+**响应**：
+```json
+{
+    "object": "list",
+    "data": [{ "object": "embedding", "embedding": [0.0023, -0.0094, ...], "index": 0 }],
+    "model": "text-embedding-3-small",
+    "usage": { "prompt_tokens": 5, "total_tokens": 5 }
+}
+```
+
+#### GET /v1/models
+
+**响应**：
+```json
+{
+    "object": "list",
+    "data": [
+        {
+            "id": "gpt-4o",
+            "object": "model",
+            "created": 1700000000,
+            "owned_by": "openai"
+        }
+    ]
+}
+```
+
+#### POST /v1/audio/speech
+
+**请求体**：
+```json
+{ "model": "tts-1", "input": "Hello world", "voice": "alloy" }
+```
+
+**响应**：audio/mpeg 二进制流
+
+#### POST /v1/audio/transcriptions
+
+**请求体**：multipart/form-data，包含 file（音频文件）和 model 字段
+
+**响应**：
+```json
+{ "text": "transcribed text content" }
+```
+
+#### POST /v1/video/generations
+
+**请求体**：
+```json
+{ "model": "gen-3", "prompt": "A cat playing piano" }
+```
+
+**响应**：
+```json
+{ "created": 1700000000, "data": [{ "url": "https://..." }] }
+```
+
+
+### 8.2 管理 API
+
+所有管理 API 需要 `Authorization: Bearer <ADMIN_KEY>` 鉴权。
+
+#### POST /api/channel
+
+**请求体**：
+```json
+{
+    "name": "OpenAI 官方",
+    "key": "openai-official",
+    "provider": "openai",
+    "apiKey": "sk-xxx",
+    "baseURL": "",
+    "models": [
+        {
+            "code": "gpt-4o",
+            "name": "GPT-4o",
+            "desc": "最新多模态模型",
+            "aliases": ["gpt4o", "gpt-4-omni"],
+            "callType": "chat",
+            "capabilities": ["chat", "image_in"],
+            "cost": "2.5/M",
+            "weight": 1.0,
+            "headers": {}
+        }
+    ]
+}
+```
+
+**响应** (201)：
+```json
+{
+    "success": true,
+    "data": {
+        "id": "uuid-xxx",
+        "name": "OpenAI 官方",
+        "key": "openai-official",
+        "provider": "openai",
+        "api_key": "sk-xxx",
+        "base_url": "",
+        "created_at": "2026-04-08T00:00:00Z",
+        "updated_at": "2026-04-08T00:00:00Z",
+        "models": [{ "id": "uuid-yyy", "code": "gpt-4o", ... }]
+    }
+}
+```
+
+#### GET /api/channel/{id}
+
+**响应** (200)：同上 `data` 字段结构
+
+#### PUT /api/channel/{id}
+
+**请求体**：同 POST，所有字段可选
+
+**响应** (200)：同 POST 响应
+
+#### DELETE /api/channel/{id}
+
+**响应** (200)：
+```json
+{ "success": true }
+```
+
+#### GET /api/channels?page=1&limit=20
+
+**响应** (200)：
+```json
+{
+    "success": true,
+    "data": [...],
+    "total": 50,
+    "page": 1,
+    "limit": 20,
+    "total_pages": 3
+}
+```
+
+#### GET /api/model/{id}
+
+**响应** (200)：
+```json
+{
+    "success": true,
+    "data": { "id": "uuid-yyy", "code": "gpt-4o", "name": "GPT-4o", ... }
+}
+```
+
+#### PUT /api/model/{id}
+
+**请求体**：UpdateModelSchema 字段（均可选）
+
+**响应** (200)：同 GET /api/model/{id}
+
+#### DELETE /api/model/{id}
+
+**响应** (200)：`{ "success": true }`
+
+#### GET /api/log?page=1&limit=20&status=error&channel_id=xxx
+
+**响应** (200)：
+```json
+{
+    "success": true,
+    "data": [
+        {
+            "id": "uuid-log",
+            "channel_id": "uuid-ch",
+            "channel_name": "OpenAI 官方",
+            "model_id": "uuid-m",
+            "model_code": "gpt-4o",
+            "call_type": "chat",
+            "request_model": "gpt-4o",
+            "status": "success",
+            "error_message": "",
+            "latency_ms": 1200,
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "created_at": "2026-04-08T00:00:00Z"
+        }
+    ],
+    "total": 1000,
+    "page": 1,
+    "limit": 20,
+    "total_pages": 50
+}
+```
+
+### 8.3 公开 API
+
+#### GET /status
+
+**无需鉴权**
+
+**响应** (200)：
+```json
+{
+    "models": [
+        {
+            "code": "gpt-4o",
+            "name": "GPT-4o",
+            "status": "active",
+            "channel_name": "OpenAI 官方",
+            "success_rate": 0.98,
+            "avg_latency_ms": 1200,
+            "consecutive_failures": 0
+        }
+    ]
+}
+```
+
+### 8.4 错误响应格式
+
+所有错误统一格式：
+```json
+{
+    "success": false,
+    "error": "Error message description"
+}
+```
+
+
+---
+
+## 9. 时序图
+
+### 9.1 V1 聊天请求时序
+
+```mermaid
+sequenceDiagram
+    participant C as 客户端
+    participant GW as AI Gateway
+    participant Auth as 鉴权模块
+    participant Sel as 模型选择器
+    participant CB as 熔断器
+    participant DB as D1 数据库
+    participant P as AI Provider
+
+    C->>GW: POST /v1/chat/completions (Authorization: Bearer token)
+    GW->>Auth: authenticate(request, env)
+    Auth-->>GW: true/false
+    alt 鉴权失败
+        GW-->>C: 401 Unauthorized
+    end
+    GW->>GW: parseRequestBody(request) → { model, messages, stream }
+    GW->>Sel: selectModels("gpt-4o", "chat", env, channelId?)
+    Sel->>DB: SELECT channel_models + channels WHERE code/alias = "gpt-4o"
+    DB-->>Sel: 候选模型列表
+    loop 过滤每个候选模型
+        Sel->>CB: checkCooldown(model)
+        CB-->>Sel: 是否冷却中
+    end
+    Sel->>Sel: calculateModelScore() → 评分
+    Sel->>Sel: 按评分降序排序
+    Sel-->>GW: ModelSelection[] 排序列表
+    alt 列表为空
+        GW-->>C: 503 No model available
+    end
+    alt stream=true（chat场景）
+        GW->>GW: ai-fallback 包并行回退
+    else 非 stream
+        loop 按评分顺序依次重试每个候选
+            GW->>GW: instantiateLanguageModel(channel, model)
+            GW->>P: executeAIRequest(aiModel, callType, body)
+            alt 请求成功
+                P-->>GW: AI 响应
+                GW->>GW: formatAIResponse(result, callType, modelCode)
+                GW->>DB: recordSuccess(modelId, latencyMs) [waitUntil]
+                GW->>DB: writeLog({...status:'success'}) [waitUntil]
+                GW-->>C: 200 OpenAI 格式响应
+            else 请求失败
+                P-->>GW: 错误
+                GW->>DB: recordFailure(modelId) [waitUntil]
+                GW->>DB: writeLog({...status:'error'}) [waitUntil]
+                GW->>GW: 继续重试下一个候选
+            end
+        end
+        GW-->>C: 502 所有候选均失败
+    end
+```
+
+### 9.2 管理员创建渠道时序
+
+```mermaid
+sequenceDiagram
+    participant A as 管理员
+    participant GW as AI Gateway
+    participant Auth as 鉴权模块
+    participant V as Zod 校验
+    participant DB as D1 数据库
+
+    A->>GW: POST /api/channel (body + Authorization)
+    GW->>Auth: isAdmin(request, env)
+    Auth-->>GW: true
+    GW->>GW: parseRequestBody(request)
+    GW->>V: CreateChannelSchema.parse(body)
+    alt 校验失败
+        V-->>GW: ZodError
+        GW-->>A: 400 Invalid request body
+    end
+    V-->>GW: validated data
+    GW->>GW: generateUUID() → channelId
+    GW->>DB: INSERT INTO channels VALUES (...)
+    loop 每个 model
+        GW->>GW: generateUUID() → modelId
+        GW->>DB: INSERT INTO channel_models VALUES (...)
+    end
+    GW->>DB: SELECT channel + models WHERE id = channelId
+    DB-->>GW: ChannelWithModels
+    GW-->>A: 201 { success: true, data: ChannelWithModels }
+```
+
+
+---
+
+## 10. 流程图
+
+### 10.1 请求主流程
+
+```mermaid
+flowchart TD
+    A[收到请求] --> B{OPTIONS 预检?}
+    B -->|是| C[返回 CORS 204]
+    B -->|否| D{匹配路径}
+    D -->|/status| E[handleStatus 无需鉴权]
+    D -->|/v1/*| F{鉴权}
+    D -->|/api/*| G{管理员鉴权}
+    D -->|其他| H[404 Not Found]
+    F -->|失败| I[401 Unauthorized]
+    F -->|成功| J{路径匹配}
+    J -->|/v1/models| K[handleModelsList]
+    J -->|/v1/chat/completions| L[handleV1Proxy chat]
+    J -->|/v1/images/generations| M[handleV1Proxy image_gen]
+    J -->|/v1/embeddings| N[handleV1Proxy embedding]
+    J -->|其他 /v1/*| O[handleV1Proxy 对应类型]
+    G -->|失败| I
+    G -->|成功| P[routeAdminApi]
+```
+
+### 10.2 模型选择与 Failover 流程
+
+```mermaid
+flowchart TD
+    A[输入: modelIdentifier, userCallType, channelId?] --> B{指定了 channelId?}
+    B -->|是| C[查询指定渠道的匹配模型]
+    B -->|否| D[查询所有渠道的匹配模型]
+    C --> E[候选模型列表]
+    D --> E
+    E --> F{候选列表为空?}
+    F -->|是| G[返回空列表 → 404]
+    F -->|否| H[过滤 status=disable]
+    H --> I[过滤 call_type 与 userCallType 不匹配]
+    I --> J[过滤冷却中模型 checkCooldown]
+    J --> K{可用模型为空?}
+    K -->|是| L[返回空列表 → 503]
+    K -->|否| M[calculateModelScore 评分]
+    M --> N[按评分降序排序]
+    N --> O[返回 ModelSelection 排序列表]
+    O --> P{chat 且 stream=true?}
+    P -->|是| Q[ai-fallback 包并行回退]
+    P -->|否| R[按顺序依次重试]
+    Q --> S[instantiateLanguageModel → executeAIRequest]
+    R --> S
+```
+
+### 10.3 熔断器流程
+
+```mermaid
+flowchart TD
+    A[请求完成] --> B{请求成功?}
+    B -->|是| C[recordSuccess]
+    C --> D[consecutive_failures = 0]
+    D --> E[open_end_at = NULL]
+    E --> F[status = active]
+    F --> G[EMA 更新 avg_latency_ms]
+    G --> H[EMA 更新 success_rate]
+    B -->|否| I[recordFailure]
+    I --> J[consecutive_failures += 1]
+    J --> K[EMA 更新 success_rate]
+    K --> L{failures >= 2?}
+    L -->|否| M[保持 active]
+    L -->|是| N[查找冷却时间级别]
+    N --> O[设置 open_end_at]
+    O --> P[status = open]
+```
+
+
+---
+
+## 11. 伪代码示例
+
+### 11.1 handleRequest 主入口
+
+```ts
+async function handleRequest(request, env) {
+    try {
+        if (request.method === 'OPTIONS') {
+            return handleCorsPreflightRequest();
+        }
+        return await routeRequest(request, env);
+    } catch (error) {
+        console.error('Unhandled error:', error);
+        return errorResponse(ERROR_MESSAGES.INTERNAL_ERROR, HTTP_STATUS.INTERNAL_ERROR);
+    }
+}
+```
+
+### 11.2 handleV1Proxy 核心代理（含 Failover）
+
+```ts
+async function handleV1Proxy(request, env, userCallType) {
+    // 1. 解析请求
+    const body = await parseRequestBody(request);
+    if (!body || !body.model) {
+        return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+    }
+    const channelId = request.headers.get('x-channel-id') || undefined;
+    const isStream = userCallType === CALL_TYPES.CHAT && body.stream === true;
+
+    // 2. 获取排序后的候选模型列表
+    const candidates = await selectModels(body.model, userCallType, env, channelId);
+    if (candidates.length === 0) {
+        return errorResponse(ERROR_MESSAGES.NO_MODEL_AVAILABLE, HTTP_STATUS.SERVICE_UNAVAILABLE);
+    }
+
+    // 3. Failover 策略
+    if (isStream) {
+        // 3a. stream=true: 使用 ai-fallback 包
+        // ai-fallback 接收多个 model 对象，自动尝试第一个，失败后切换下一个
+        const models = candidates.map(c => instantiateLanguageModel(
+            c.channel.name, c.channel.base_url, c.channel.api_key,
+            JSON.parse(c.model.headers || '{}'),
+            c.channel.provider, c.model.call_type, c.model.code
+        ));
+        // 使用 ai-fallback 的 fallback() 创建 fallback model，传入 streamText
+        // 具体用法参考 ai-fallback 文档
+        // 异步记录日志和统计由 ai-fallback 的回调处理
+        // ... 返回 SSE 格式 Response
+    } else {
+        // 3b. 非 stream: 按顺序依次重试
+        let lastError = null;
+        for (const selection of candidates) {
+            const startTime = Date.now();
+            try {
+                const aiModel = instantiateLanguageModel(
+                    selection.channel.name, selection.channel.base_url,
+                    selection.channel.api_key, JSON.parse(selection.model.headers || '{}'),
+                    selection.channel.provider, selection.model.call_type, selection.model.code
+                );
+                const result = await executeAIRequest(aiModel, selection.model.call_type, body);
+                const latencyMs = Date.now() - startTime;
+
+                // 异步记录成功
+                const ctx = env.ctx || { waitUntil: (p) => p };
+                ctx.waitUntil(recordSuccess(selection.model.id, latencyMs, env));
+                ctx.waitUntil(writeLog({
+                    channel_id: selection.channel.id,
+                    channel_name: selection.channel.name,
+                    model_id: selection.model.id,
+                    model_code: selection.model.code,
+                    call_type: userCallType,
+                    request_model: body.model,
+                    status: 'success',
+                    error_message: '',
+                    latency_ms: latencyMs,
+                    input_tokens: result.usage?.promptTokens || 0,
+                    output_tokens: result.usage?.completionTokens || 0,
+                }, env));
+
+                return formatAIResponse(result, selection.model.call_type, selection.model.code);
+            } catch (error) {
+                const latencyMs = Date.now() - startTime;
+                lastError = error;
+                const ctx = env.ctx || { waitUntil: (p) => p };
+                ctx.waitUntil(recordFailure(selection.model.id, env));
+                ctx.waitUntil(writeLog({
+                    channel_id: selection.channel.id,
+                    channel_name: selection.channel.name,
+                    model_id: selection.model.id,
+                    model_code: selection.model.code,
+                    call_type: userCallType,
+                    request_model: body.model,
+                    status: 'error',
+                    error_message: error.message || 'Unknown error',
+                    latency_ms: latencyMs,
+                    input_tokens: 0,
+                    output_tokens: 0,
+                }, env));
+                // 继续重试下一个候选模型
+            }
+        }
+        // 所有候选模型均失败
+        return errorResponse(ERROR_MESSAGES.PROVIDER_ERROR, HTTP_STATUS.INTERNAL_ERROR);
+    }
+}
+```
+
+### 11.3 selectModels 模型选择（返回排序列表）
+
+```ts
+async function selectModels(modelIdentifier, userCallType, env, channelId) {
+    // 1. 查询候选模型（不在 SQL 中过滤 call_type，在应用层过滤）
+    let query = `
+        SELECT cm.*, c.id as ch_id, c.name as ch_name, c.key as ch_key,
+               c.provider, c.api_key, c.base_url
+        FROM channel_models cm
+        JOIN channels c ON cm.channel_id = c.id
+        WHERE (cm.code = ?1 OR cm.aliases LIKE ?2)
+          AND cm.status != 'disable'
+    `;
+    const params = [modelIdentifier, `%"${modelIdentifier}"%`];
+    if (channelId) {
+        query += ` AND cm.channel_id = ?3`;
+        params.push(channelId);
+    }
+    const { results } = await env.DB.prepare(query).bind(...params).all();
+    if (!results || results.length === 0) return [];
+
+    // 2. 应用层过滤
+    const available = results.filter(m => {
+        // 过滤 call_type 不匹配的模型（当前版本直接跳过，后期实现跨类型转换）
+        if (m.call_type !== userCallType) return false;
+        // 过滤冷却中的模型
+        if (checkCooldown(m)) return false;
+        return true;
+    });
+    if (available.length === 0) return [];
+
+    // 3. 评分 + 按评分降序排序（用于 Failover 顺序重试）
+    const candidates = available.map(row => ({
+        channel: { id: row.ch_id, name: row.ch_name, key: row.ch_key, provider: row.provider, api_key: row.api_key, base_url: row.base_url },
+        model: row,
+        score: calculateModelScore(row),
+    }));
+    return candidates.sort((a, b) => b.score - a.score);
+}
+```
+
+### 11.4 recordFailure 熔断记录
+
+```ts
+async function recordFailure(modelId, env) {
+    // 1. 读取当前状态
+    const model = await env.DB.prepare('SELECT * FROM channel_models WHERE id = ?').bind(modelId).first();
+    if (!model) return;
+
+    // 2. 更新统计
+    const newFailures = model.consecutive_failures + 1;
+    const newSuccessRate = model.success_rate * (1 - EMA_ALPHA) + 0 * EMA_ALPHA; // 本次失败 = 0
+    const newErrorRate = 1.0 - newSuccessRate;
+
+    // 3. 判断是否触发熔断
+    const cooldownMs = getCooldownDuration(newFailures);
+    const openEndAt = cooldownMs > 0 ? new Date(Date.now() + cooldownMs).toISOString() : null;
+    const newStatus = cooldownMs > 0 ? MODEL_STATUS.OPEN : model.status;
+
+    // 4. 写入数据库
+    await env.DB.prepare(`
+        UPDATE channel_models
+        SET consecutive_failures = ?, success_rate = ?, error_rate = ?,
+            open_end_at = ?, status = ?, last_updated = datetime('now')
+        WHERE id = ?
+    `).bind(newFailures, newSuccessRate, newErrorRate, openEndAt, newStatus, modelId).run();
+}
+```
+
+
+---
+
+## 12. 开发计划
+
+### 阶段 1：基础设施（预计 1 天）
+
+| 序号 | 任务 | 产出 | 依赖 |
+|------|------|------|------|
+| 1.1 | 配置 wrangler.toml D1 绑定 | wrangler.toml 添加 `[[d1_databases]]` | 无 |
+| 1.2 | 创建 D1 数据库 migration | `wrangler d1 migrations create` 生成 SQL | 1.1 |
+| 1.3 | 实现常量定义 | worker.js 中所有 `const` 常量 | 无 |
+| 1.4 | 实现 Zod Schema | worker.js 中所有 Schema 定义 | 1.3 |
+| 1.5 | 实现工具函数 | §7.9 全部工具函数 | 1.3 |
+| 1.6 | 编写基础设施测试 | worker.test.js: 常量、工具函数、Schema 测试 | 1.3-1.5 |
+
+### 阶段 2：管理 API（预计 1.5 天）
+
+| 序号 | 任务 | 产出 | 依赖 |
+|------|------|------|------|
+| 2.1 | 实现鉴权模块 | authenticate, isAdmin, extractBearerToken | 1.5 |
+| 2.2 | 实现渠道 CRUD | handleCreateChannel, handleGetChannel, handleUpdateChannel, handleDeleteChannel, handleListChannels | 1.4, 1.5, 2.1 |
+| 2.3 | 实现模型 CRUD | handleGetModel, handleUpdateModel, handleDeleteModel | 1.4, 1.5, 2.1 |
+| 2.4 | 实现日志查询 | handleGetLogs | 1.4, 1.5, 2.1 |
+| 2.5 | 实现状态查询 | handleStatus | 1.5 |
+| 2.6 | 实现管理路由 | routeAdminApi | 2.1-2.5 |
+| 2.7 | 编写管理 API 测试 | 所有管理 API 的完整测试用例 | 2.1-2.6 |
+
+### 阶段 3：核心代理（预计 2 天）
+
+| 序号 | 任务 | 产出 | 依赖 |
+|------|------|------|------|
+| 3.1 | 实现模型实例化 | instantiateLanguageModel（支持全部 Provider 别名 + CallType 矩阵） | 1.3 |
+| 3.2 | 实现模型选择器 | selectModels, calculateModelScore（返回排序列表，不含加权随机） | 1.3, 1.5 |
+| 3.3 | 实现熔断器 | checkCooldown, getCooldownDuration, recordSuccess, recordFailure（open_end_at） | 1.3, 1.5 |
+| 3.4 | 实现 AI 请求执行 | executeAIRequest (chat/image/audio/video/transcribe/embedding) | 3.1 |
+| 3.5 | 实现响应格式化 | formatAIResponse (各类型转 OpenAI 格式) | 1.3 |
+| 3.6 | 实现日志写入 | writeLog | 1.5 |
+| 3.7 | 实现 Failover 回退 | stream 用 ai-fallback 包、非 stream 用队列重试 | 3.1-3.6 |
+| 3.8 | 实现 V1 代理主函数 | handleV1Proxy（含 Failover）, handleModelsList | 3.1-3.7 |
+| 3.9 | 实现主路由 | handleRequest, routeRequest | 2.6, 3.8 |
+| 3.10 | 编写核心代理测试 | Provider 实例化、模型选择排序、熔断器、Failover、代理的完整测试 | 3.1-3.9 |
+
+### 阶段 4：前端管理界面（预计 1.5 天）
+
+| 序号 | 任务 | 产出 | 依赖 |
+|------|------|------|------|
+| 4.1 | 登录鉴权页面 | 密钥输入 + 验证 | 2.1 |
+| 4.2 | 渠道管理页面 | 渠道列表 + 创建/编辑/删除 | 2.2 |
+| 4.3 | 模型管理页面 | 模型列表 + 编辑/删除 | 2.3 |
+| 4.4 | 日志查询页面 | 日志列表 + 过滤 + 分页 | 2.4 |
+| 4.5 | 状态仪表盘 | 模型状态概览 | 2.5 |
+
+### 阶段 5：联调与部署（预计 0.5 天）
+
+| 序号 | 任务 | 产出 | 依赖 |
+|------|------|------|------|
+| 5.1 | 端到端测试 | 使用真实 API Key 验证所有 provider | 3.9 |
+| 5.2 | 部署到 Cloudflare | `npm run cf:deploy` | 5.1 |
+| 5.3 | 生产环境验证 | 验证所有端点正常工作 | 5.2 |
+
+### 开发顺序总览
+
+```
+阶段1 基础设施 ─┬─ 阶段2 管理API ─┬─ 阶段4 前端
+               └─ 阶段3 核心代理 ─┘       │
+                                          └── 阶段5 联调部署
+```
+
+**总预计工期：6.5 天**
