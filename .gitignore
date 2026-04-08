@@ -9,3 +9,5 @@ node_modules
 
 .codex
 .claude
+AGENTS.md
+claude.md
