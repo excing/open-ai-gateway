@@ -141,7 +141,7 @@ CREATE TABLE channels (
 | `success_rate` | REAL | NOT NULL, DEFAULT 1.0 | 请求成功率，范围 `[0.0, 1.0]`，由系统自动计算更新。值越大被选中概率越大。初始为 1.0（乐观初始值） |
 | `error_rate` | REAL | NOT NULL, DEFAULT 0.0 | 请求失败率，范围 `[0.0, 1.0]`，`= 1.0 - success_rate`，冗余字段用于快速查询 |
 | `consecutive_failures` | INTEGER | NOT NULL, DEFAULT 0 | 最近连续失败次数。任何一次成功请求会将此值重置为 0。当 `>= 2` 时触发熔断器，进入冷却期 |
-| `open_end_at` | TEXT | DEFAULT NULL | 冷却结束时间，ISO 8601 格式。当 `status === 'open'` 时此值必不为空。仅当 `consecutive_failures >= 2` 时设置。为 NULL 或早于当前时间表示不在冷却期 |
+| `cooldown_until` | TEXT | DEFAULT NULL | 冷却期结束时间，ISO 8601 格式。当 `status === 'open'` 时此值必不为空。仅当 `consecutive_failures >= 2` 时设置。为 NULL 或早于当前时间表示不在冷却期。可直接在 SQL 中用 `cooldown_until IS NULL OR cooldown_until < datetime('now')` 过滤 |
 | `last_updated` | TEXT | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 模型统计数据最后更新时间 |
 | `headers` | TEXT | DEFAULT '{}' | JSON 对象字符串，请求该模型时附加的额外 HTTP 头，如 `{"x-custom":"value"}` |
 
@@ -162,7 +162,7 @@ CREATE TABLE channel_models (
     success_rate REAL NOT NULL DEFAULT 1.0,
     error_rate REAL NOT NULL DEFAULT 0.0,
     consecutive_failures INTEGER NOT NULL DEFAULT 0,
-    open_end_at TEXT DEFAULT NULL,
+    cooldown_until TEXT DEFAULT NULL,
     last_updated TEXT NOT NULL DEFAULT (datetime('now')),
     headers TEXT DEFAULT '{}',
     FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
@@ -292,7 +292,7 @@ interface ChannelModelRow {
     success_rate: number;
     error_rate: number;
     consecutive_failures: number;
-    open_end_at: string | null;
+    cooldown_until: string | null;
     last_updated: string;
     headers: string;          // JSON 字符串，运行时解析为 Record<string, string>
 }
@@ -763,12 +763,14 @@ async function handleStatus(env: Env): Promise<Response>;
  * 若指定了 x-channel-id 头，则只在该渠道中查找。
  *
  * 查找逻辑：
- * 1. SELECT 所有 channel_models + channels WHERE code = modelIdentifier OR aliases LIKE '%modelIdentifier%'
- * 2. 过滤 status = 'disable' 的模型
- * 3. 过滤正在冷却中的模型（checkCooldown）
- * 4. 过滤 call_type 与用户意图 callType 不匹配的模型（当前版本直接跳过，后期实现跨类型转换）
- * 5. 对剩余模型计算评分（calculateModelScore）
- * 6. 按评分降序排序
+ * 1. SQL 层过滤：SELECT channel_models + channels
+ *    WHERE (code = modelIdentifier OR aliases LIKE '%modelIdentifier%')
+ *      AND status != 'disable'
+ *      AND (cooldown_until IS NULL OR cooldown_until < datetime('now'))
+ *    若指定 channelId，追加 AND channel_id = channelId
+ * 2. 应用层过滤：call_type 与 userCallType 不匹配的模型直接跳过（后期实现跨类型转换）
+ * 3. 对剩余模型计算评分（calculateModelScore）
+ * 4. 按评分降序排序
  *
  * @param modelIdentifier - 用户请求中的 model 字段值，如 "gpt-4o" 或别名 "gpt4o"
  * @param userCallType - 用户意图接口类型（由请求路径决定），用于过滤 call_type 不匹配的模型
@@ -818,7 +820,7 @@ function getCooldownDuration(consecutiveFailures: number): number;
 /**
  * 记录一次成功请求，更新模型统计数据
  * 1. consecutive_failures 重置为 0
- * 2. open_end_at 重置为 NULL
+ * 2. cooldown_until 重置为 NULL
  * 3. status 设为 'active'
  * 4. 使用 EMA 更新 avg_latency_ms
  * 5. 使用 EMA 更新 success_rate, error_rate
@@ -834,7 +836,7 @@ async function recordSuccess(modelId: string, latencyMs: number, env: Env): Prom
  * 记录一次失败请求，更新模型统计数据
  * 1. consecutive_failures += 1
  * 2. 使用 EMA 更新 success_rate, error_rate
- * 3. 若 consecutive_failures >= 2，计算冷却时间，设置 open_end_at 和 status='open'
+ * 3. 若 consecutive_failures >= 2，计算冷却时间，设置 cooldown_until 和 status='open'
  * 4. 更新 last_updated
  *
  * @param modelId - 模型记录 ID
@@ -1352,12 +1354,8 @@ sequenceDiagram
     end
     GW->>GW: parseRequestBody(request) → { model, messages, stream }
     GW->>Sel: selectModels("gpt-4o", "chat", env, channelId?)
-    Sel->>DB: SELECT channel_models + channels WHERE code/alias = "gpt-4o"
-    DB-->>Sel: 候选模型列表
-    loop 过滤每个候选模型
-        Sel->>CB: checkCooldown(model)
-        CB-->>Sel: 是否冷却中
-    end
+    Sel->>DB: SELECT ... WHERE code/alias匹配 AND status!='disable' AND callType匹配 AND cooldown_until过期或NULL
+    DB-->>Sel: 可用模型列表（已在SQL层过滤）
     Sel->>Sel: calculateModelScore() → 评分
     Sel->>Sel: 按评分降序排序
     Sel-->>GW: ModelSelection[] 排序列表
@@ -1458,7 +1456,7 @@ flowchart TD
     F -->|是| G[返回空列表 → 404]
     F -->|否| H[过滤 status=disable]
     H --> I[过滤 call_type 与 userCallType 不匹配]
-    I --> J[过滤冷却中模型 checkCooldown]
+    I --> J[SQL过滤: cooldown_until IS NULL<br/>OR cooldown_until < now]
     J --> K{可用模型为空?}
     K -->|是| L[返回空列表 → 503]
     K -->|否| M[calculateModelScore 评分]
@@ -1478,7 +1476,7 @@ flowchart TD
     A[请求完成] --> B{请求成功?}
     B -->|是| C[recordSuccess]
     C --> D[consecutive_failures = 0]
-    D --> E[open_end_at = NULL]
+    D --> E[cooldown_until = NULL]
     E --> F[status = active]
     F --> G[EMA 更新 avg_latency_ms]
     G --> H[EMA 更新 success_rate]
@@ -1488,7 +1486,7 @@ flowchart TD
     K --> L{failures >= 2?}
     L -->|否| M[保持 active]
     L -->|是| N[查找冷却时间级别]
-    N --> O[设置 open_end_at]
+    N --> O[设置 cooldown_until]
     O --> P[status = open]
 ```
 
@@ -1607,7 +1605,7 @@ async function handleV1Proxy(request, env, userCallType) {
 
 ```ts
 async function selectModels(modelIdentifier, userCallType, env, channelId) {
-    // 1. 查询候选模型（不在 SQL 中过滤 call_type，在应用层过滤）
+    // 1. SQL 层过滤：code/alias 匹配、非 disable、非冷却中
     let query = `
         SELECT cm.*, c.id as ch_id, c.name as ch_name, c.key as ch_key,
                c.provider, c.api_key, c.base_url
@@ -1615,6 +1613,7 @@ async function selectModels(modelIdentifier, userCallType, env, channelId) {
         JOIN channels c ON cm.channel_id = c.id
         WHERE (cm.code = ?1 OR cm.aliases LIKE ?2)
           AND cm.status != 'disable'
+          AND (cm.cooldown_until IS NULL OR cm.cooldown_until < datetime('now'))
     `;
     const params = [modelIdentifier, `%"${modelIdentifier}"%`];
     if (channelId) {
@@ -1624,18 +1623,12 @@ async function selectModels(modelIdentifier, userCallType, env, channelId) {
     const { results } = await env.DB.prepare(query).bind(...params).all();
     if (!results || results.length === 0) return [];
 
-    // 2. 应用层过滤
-    const available = results.filter(m => {
-        // 过滤 call_type 不匹配的模型（当前版本直接跳过，后期实现跨类型转换）
-        if (m.call_type !== userCallType) return false;
-        // 过滤冷却中的模型
-        if (checkCooldown(m)) return false;
-        return true;
-    });
-    if (available.length === 0) return [];
+    // 2. 应用层过滤：call_type 不匹配的跳过（后期实现跨类型转换）
+    const matched = results.filter(m => m.call_type === userCallType);
+    if (matched.length === 0) return [];
 
     // 3. 评分 + 按评分降序排序（用于 Failover 顺序重试）
-    const candidates = available.map(row => ({
+    const candidates = matched.map(row => ({
         channel: { id: row.ch_id, name: row.ch_name, key: row.ch_key, provider: row.provider, api_key: row.api_key, base_url: row.base_url },
         model: row,
         score: calculateModelScore(row),
@@ -1666,7 +1659,7 @@ async function recordFailure(modelId, env) {
     await env.DB.prepare(`
         UPDATE channel_models
         SET consecutive_failures = ?, success_rate = ?, error_rate = ?,
-            open_end_at = ?, status = ?, last_updated = datetime('now')
+            cooldown_until = ?, status = ?, last_updated = datetime('now')
         WHERE id = ?
     `).bind(newFailures, newSuccessRate, newErrorRate, openEndAt, newStatus, modelId).run();
 }
@@ -1706,7 +1699,7 @@ async function recordFailure(modelId, env) {
 |------|------|------|------|
 | 3.1 | 实现模型实例化 | instantiateLanguageModel（支持全部 Provider 别名 + CallType 矩阵） | 1.3 |
 | 3.2 | 实现模型选择器 | selectModels, calculateModelScore（返回排序列表，不含加权随机） | 1.3, 1.5 |
-| 3.3 | 实现熔断器 | checkCooldown, getCooldownDuration, recordSuccess, recordFailure（open_end_at） | 1.3, 1.5 |
+| 3.3 | 实现熔断器 | checkCooldown, getCooldownDuration, recordSuccess, recordFailure | 1.3, 1.5 |
 | 3.4 | 实现 AI 请求执行 | executeAIRequest (chat/image/audio/video/transcribe/embedding) | 3.1 |
 | 3.5 | 实现响应格式化 | formatAIResponse (各类型转 OpenAI 格式) | 1.3 |
 | 3.6 | 实现日志写入 | writeLog | 1.5 |

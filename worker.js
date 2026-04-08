@@ -35,7 +35,7 @@ interface Channel {
     errorRate: float; // 请求平均失败率
     consecutiveFailures: number; // 最近连续失败次数, 但 `2<=` 时进入冷却期, 2 ~ 4 次冷却时间 60s, 4 ~ 8 次冷却时间 300s, 8 ~ 24次冷却时间 1h, 24 ~ 32次冷却时间 1day, 32<=次冷却时间 3day
     lastUpdated: timestamp; // 最近更新时间
-    openEndAt: timestamp; // 冷却结束时间, 如果为空表示无冷却时间, 如果 status === open, 则此值必不可为空, 默认为空
+    cooldownUntil: timestamp; // 冷却结束时间, 如果为空表示无冷却时间, 如果 status === open, 则此值必不可为空, 默认为空
     headers: Record<string, any>; // 模型请求时额外的头信息
   }[];
 }
