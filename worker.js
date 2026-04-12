@@ -124,6 +124,7 @@ const CONSTANTS = {
     API_PREFIX: '/api',
     API_CHANNEL: '/api/channel',
     API_CHANNEL_PREFIX: '/api/channel/',
+    API_CHANNEL_MODELS: '/api/channel/models',
     API_CHANNELS: '/api/channels',
     API_MODEL: '/api/model',
     API_MODEL_PREFIX: '/api/model/',
@@ -347,12 +348,21 @@ const SCHEMAS = (() => {
     end_date: z.string().optional(),
   });
 
-  const ModelCheckSchema = z.object({
-    channelId: z.string().min(1),
+  const UpstreamConnectionSchema = z.object({
+    provider: ProviderEnum.default(PROVIDERS.OPENAI),
+    apiKey: z.string().min(1),
+    baseURL: z.string().url().or(z.literal('')).default(''),
+  });
+
+  const UpstreamModelListSchema = UpstreamConnectionSchema;
+
+  const UpstreamModelCheckSchema = UpstreamConnectionSchema.extend({
     model: z.string().min(1),
     callType: CallTypeEnum,
     headers: z.record(z.string()).default({}),
   });
+
+  const ModelCheckSchema = UpstreamModelCheckSchema;
 
   return {
     ProviderEnum,
@@ -362,11 +372,22 @@ const SCHEMAS = (() => {
     UpdateModelSchema,
     PaginationSchema,
     LogQuerySchema,
+    UpstreamModelListSchema,
+    UpstreamModelCheckSchema,
     ModelCheckSchema,
   };
 })();
 
-const { CreateChannelSchema, UpdateChannelSchema, UpdateModelSchema, PaginationSchema, LogQuerySchema, ModelCheckSchema } = SCHEMAS;
+const {
+  CreateChannelSchema,
+  UpdateChannelSchema,
+  UpdateModelSchema,
+  PaginationSchema,
+  LogQuerySchema,
+  UpstreamModelListSchema,
+  UpstreamModelCheckSchema,
+  ModelCheckSchema,
+} = SCHEMAS;
 
 /** 模型可用性检测的测试 prompt */
 const CHECK_TEST_PROMPT = 'Say "OK" if you can read this message.';
@@ -976,6 +997,7 @@ function createApp(deps = {}) {
 
         return formatAIResponse(result, selection.model.call_type, selection.model.code);
       } catch (error) {
+        console.error(error);
         const latencyMs = nowFn().getTime() - startTime;
         lastError = error;
         waitUntil(recordFailure(selection.model.id, env));
@@ -1299,6 +1321,30 @@ function createApp(deps = {}) {
       return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
     }
 
+    return getChannelModels(channel);
+  }
+
+  async function handleGetChannelModelsByConnection(request) {
+    const body = await parseRequestBody(request);
+    if (!body) return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+
+    let parsed;
+    try {
+      parsed = UpstreamModelListSchema.parse(body);
+    } catch (error) {
+      return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+    }
+
+    const channel = {
+      provider: parsed.provider,
+      api_key: parsed.apiKey,
+      base_url: parsed.baseURL,
+    };
+
+    return getChannelModels(channel);
+  }
+
+  async function getChannelModels(channel) {
     try {
       const models = await fetchUpstreamModels(channel);
       return jsonResponse({ success: true, data: models }, HTTP_STATUS.OK);
@@ -1443,21 +1489,22 @@ function createApp(deps = {}) {
       return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
     }
 
-    // 2. 验证渠道存在
-    const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(parsed.channelId).first();
-    if (!channel) {
-      return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
-    }
+    const transientChannel = {
+      name: 'transient-channel',
+      provider: parsed.provider,
+      api_key: parsed.apiKey,
+      base_url: parsed.baseURL,
+    };
 
     // 3. 实例化模型
     let aiModel;
     try {
       aiModel = instantiateLanguageModel(
-        channel.name,
-        channel.base_url,
-        channel.api_key,
+        transientChannel.name,
+        transientChannel.base_url,
+        transientChannel.api_key,
         parsed.headers,
-        channel.provider,
+        transientChannel.provider,
         parsed.callType,
         parsed.model,
       );
@@ -1582,7 +1629,11 @@ function createApp(deps = {}) {
       return handleCreateChannel(request, env);
     }
 
-    // 新路由: GET /api/channel/:id/models - 获取指定渠道上游的模型列表
+    if (pathname === ROUTES.API_CHANNEL_MODELS && request.method === METHODS.POST) {
+      return handleGetChannelModelsByConnection(request);
+    }
+
+    // 兼容路由: GET /api/channel/:id/models - 获取已保存渠道的上游模型列表
     const channelModelsMatch = pathname.match(
       new RegExp(`^${ROUTES.API_CHANNEL_PREFIX}([^/]+)${ROUTES.API_CHANNEL_MODELS_SUFFIX}$`)
     );

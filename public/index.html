@@ -1091,10 +1091,17 @@
             },
             fetchChannelModels: async () => {
               try {
-                if (!state.channelForm.id) {
-                  throw new Error('请先保存渠道后再获取模型');
+                if (!state.channelForm.apiKey) {
+                  throw new Error('请先填写 API Key');
                 }
-                const res = await apiRequest(`${constants.API.CHANNEL}/${state.channelForm.id}/models`);
+                const res = await apiRequest(constants.API.CHANNEL_MODELS, {
+                  method: constants.METHODS.POST,
+                  body: {
+                    provider: state.channelForm.provider,
+                    apiKey: state.channelForm.apiKey,
+                    baseURL: state.channelForm.baseURL,
+                  },
+                });
                 if (res.status === 200 && res.data?.success) {
                   const discoveredModels = (res.data.data || []).map((item) => ({
                     ...createEmptyChannelModel(),
@@ -1118,14 +1125,16 @@
                 if (!currentModel?.code) {
                   throw new Error('请先填写模型 code');
                 }
-                if (!state.channelForm.id) {
-                  throw new Error('请先保存渠道后再检测模型');
+                if (!state.channelForm.apiKey) {
+                  throw new Error('请先填写 API Key');
                 }
                 actions.setChannelModelDetectState(index, constants.DETECT_STATUS.LOADING, '检测中...');
                 const res = await apiRequest(constants.API.MODEL_CHECK, {
                   method: constants.METHODS.POST,
                   body: {
-                    channelId: state.channelForm.id,
+                    provider: state.channelForm.provider,
+                    apiKey: state.channelForm.apiKey,
+                    baseURL: state.channelForm.baseURL,
                     model: currentModel.code,
                     callType: currentModel.callType,
                     headers: parseJsonInput(currentModel.headersRaw, constants.EMPTY_OBJECT_JSON, '模型请求头'),
