@@ -421,11 +421,6 @@ function extractPathParam(pathname, prefix) {
   return value.length > 0 ? value : null;
 }
 
-function buildPaginationSQL(pagination) {
-  const limitClause = `LIMIT ${pagination.limit} OFFSET ${(pagination.page - 1) * pagination.limit}`;
-  return { limitClause, offset: (pagination.page - 1) * pagination.limit };
-}
-
 function buildPaginatedResponse(data, total, pagination) {
   const totalPages = Math.ceil(total / pagination.limit) || 1;
   return {
@@ -478,214 +473,6 @@ function getCooldownDuration(failures) {
   return 0;
 }
 
-function ensureArray(value) {
-  return Array.isArray(value) ? value : [];
-}
-
-function createMemoryDb(seed = {}) {
-  const data = {
-    channels: ensureArray(seed.channels).map((item) => ({ ...item })),
-    channel_models: ensureArray(seed.channel_models).map((item) => ({ ...item })),
-    request_logs: ensureArray(seed.request_logs).map((item) => ({ ...item })),
-  };
-
-  const normalizeSql = (sql) => sql.replace(/\s+/g, ' ').trim();
-
-  const SQL_PREFIX = {
-    UPDATE_CHANNEL: normalizeSql(SQL.UPDATE_CHANNEL_BASE),
-    UPDATE_MODEL: normalizeSql(SQL.UPDATE_MODEL_BASE),
-    UPDATE_MODEL_STATS: normalizeSql(SQL.UPDATE_MODEL_STATS_BASE),
-  };
-
-  function prepare(sql) {
-    const normalized = normalizeSql(sql);
-    let boundParams = [];
-
-    const api = {
-      bind: (...params) => {
-        boundParams = params;
-        return api;
-      },
-      all: async () => {
-        const results = runQuery(normalized, boundParams);
-        return { results };
-      },
-      first: async () => {
-        const results = runQuery(normalized, boundParams);
-        return results[0] || null;
-      },
-      run: async () => {
-        runMutation(normalized, boundParams);
-        return { success: true };
-      },
-    };
-
-    return api;
-  }
-
-  function runQuery(sql, params) {
-    if (sql === normalizeSql(SQL.SELECT_CHANNEL_BY_ID)) {
-      return data.channels.filter((row) => row.id === params[0]);
-    }
-    if (sql === normalizeSql(SQL.SELECT_CHANNEL_BY_KEY)) {
-      return data.channels.filter((row) => row.key === params[0]);
-    }
-    if (sql === normalizeSql(SQL.SELECT_MODELS_BY_CHANNEL_ID)) {
-      return data.channel_models.filter((row) => row.channel_id === params[0]);
-    }
-    if (sql === normalizeSql(SQL.COUNT_CHANNELS)) {
-      return [{ total: data.channels.length }];
-    }
-    if (sql === normalizeSql(SQL.SELECT_CHANNELS_PAGED)) {
-      const limit = params[0];
-      const offset = params[1];
-      return data.channels.slice(offset, offset + limit);
-    }
-    if (sql === normalizeSql(SQL.SELECT_MODEL_BY_ID)) {
-      return data.channel_models.filter((row) => row.id === params[0]);
-    }
-    if (sql === normalizeSql(SQL.SELECT_MODEL_FOR_STATS)) {
-      return data.channel_models.filter((row) => row.id === params[0]);
-    }
-    if (sql === normalizeSql(SQL.SELECT_STATUS_BASE)) {
-      return data.channel_models.map((model) => {
-        const channel = data.channels.find((ch) => ch.id === model.channel_id);
-        return { ...model, channel_name: channel?.name || '' };
-      });
-    }
-    if (sql.startsWith(normalizeSql(SQL.SELECT_LOGS_BASE))) {
-      return data.request_logs.slice();
-    }
-    if (sql.startsWith(normalizeSql(SQL.COUNT_LOGS_BASE))) {
-      return [{ total: data.request_logs.length }];
-    }
-    if (sql.startsWith(normalizeSql(SQL.SELECT_MODELS_BY_IDENTIFIER_BASE))) {
-      const identifier = params[0];
-      const aliasPattern = params[1]?.replace(/%/g, '').replace(/"/g, '');
-      const disabledStatus = params[2];
-      const nowValue = params[3];
-      const channelFilter = params[4];
-      return data.channel_models
-        .filter((row) => row.status !== disabledStatus)
-        .filter((row) => !row.cooldown_until || row.cooldown_until < nowValue)
-        .filter((row) => row.code === identifier || safeJsonParse(row.aliases, []).includes(aliasPattern))
-        .filter((row) => (channelFilter ? row.channel_id === channelFilter : true))
-        .map((row) => {
-          const channel = data.channels.find((ch) => ch.id === row.channel_id);
-          return {
-            ...row,
-            ch_id: channel?.id,
-            ch_name: channel?.name,
-            ch_key: channel?.key,
-            provider: channel?.provider,
-            api_key: channel?.api_key,
-            base_url: channel?.base_url,
-          };
-        });
-    }
-    return [];
-  }
-
-  function runMutation(sql, params) {
-    if (sql === normalizeSql(SQL.INSERT_CHANNEL)) {
-      data.channels.push({
-        id: params[0],
-        name: params[1],
-        key: params[2],
-        provider: params[3],
-        api_key: params[4],
-        base_url: params[5],
-        created_at: params[6],
-        updated_at: params[7],
-      });
-      return;
-    }
-    if (sql === normalizeSql(SQL.INSERT_MODEL)) {
-      data.channel_models.push({
-        id: params[0],
-        channel_id: params[1],
-        code: params[2],
-        name: params[3],
-        desc: params[4],
-        aliases: params[5],
-        call_type: params[6],
-        capabilities: params[7],
-        cost: params[8],
-        status: params[9],
-        weight: params[10],
-        avg_latency_ms: params[11],
-        success_rate: params[12],
-        error_rate: params[13],
-        consecutive_failures: params[14],
-        cooldown_until: params[15],
-        last_updated: params[16],
-        headers: params[17],
-      });
-      return;
-    }
-    if (sql === normalizeSql(SQL.DELETE_MODELS_BY_CHANNEL_ID)) {
-      data.channel_models = data.channel_models.filter((row) => row.channel_id !== params[0]);
-      return;
-    }
-    if (sql === normalizeSql(SQL.DELETE_CHANNEL)) {
-      data.channels = data.channels.filter((row) => row.id !== params[0]);
-      return;
-    }
-    if (sql === normalizeSql(SQL.DELETE_MODEL)) {
-      data.channel_models = data.channel_models.filter((row) => row.id !== params[0]);
-      return;
-    }
-    if (sql === normalizeSql(SQL.INSERT_LOG)) {
-      data.request_logs.push({
-        id: params[0],
-        channel_id: params[1],
-        channel_name: params[2],
-        model_id: params[3],
-        model_code: params[4],
-        call_type: params[5],
-        request_model: params[6],
-        status: params[7],
-        error_message: params[8],
-        latency_ms: params[9],
-        input_tokens: params[10],
-        output_tokens: params[11],
-        created_at: params[12],
-      });
-      return;
-    }
-    if (sql.startsWith(SQL_PREFIX.UPDATE_CHANNEL)) {
-      const id = params[params.length - 1];
-      const channel = data.channels.find((row) => row.id === id);
-      if (!channel) return;
-      const updates = params.slice(0, params.length - 1);
-      const setSegments = sql.replace(SQL_PREFIX.UPDATE_CHANNEL, '').split(',').map((s) => s.trim());
-      setSegments.forEach((segment, index) => {
-        const field = segment.split('=')[0].trim();
-        channel[field] = updates[index];
-      });
-      return;
-    }
-    if (sql.startsWith(SQL_PREFIX.UPDATE_MODEL_STATS) || sql.startsWith(SQL_PREFIX.UPDATE_MODEL)) {
-      const id = params[params.length - 1];
-      const model = data.channel_models.find((row) => row.id === id);
-      if (!model) return;
-      const updates = params.slice(0, params.length - 1);
-      const setSegments = sql
-        .replace(SQL_PREFIX.UPDATE_MODEL_STATS, '')
-        .replace(SQL_PREFIX.UPDATE_MODEL, '')
-        .split(',')
-        .map((s) => s.trim());
-      setSegments.forEach((segment, index) => {
-        const field = segment.split('=')[0].trim();
-        model[field] = updates[index];
-      });
-      return;
-    }
-  }
-
-  return { prepare, data };
-}
-
 async function initializeDatabase(env) {
   if (!env?.DB) {
     throw new Error('Database is not configured');
@@ -714,14 +501,6 @@ async function initializeDatabase(env) {
   }
 
   env.__dbInitialized = true;
-}
-
-function makeTestEnv({ db }) {
-  return {
-    ADMIN_KEY: 'admin-key',
-    DB: db,
-    ctx: { waitUntil: (promise) => promise },
-  };
 }
 
 function createApp(deps = {}) {
@@ -1591,4 +1370,4 @@ function createApp(deps = {}) {
 const worker = createApp();
 
 export default worker;
-export { CONSTANTS, SCHEMAS, CALL_TYPE_TO_PATH, PATH_TO_CALL_TYPE, createApp, createMemoryDb, makeTestEnv, initializeDatabase };
+export { CONSTANTS, SCHEMAS, CALL_TYPE_TO_PATH, PATH_TO_CALL_TYPE, createApp, initializeDatabase };
