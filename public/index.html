@@ -1,13 +1,664 @@
 <!doctype html>
-<!-- 
-管理员界面
-需要输入密钥才可进入
--->
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light" />
-    <title>Open AI Gateway</title>
+    <title>Open AI Gateway 管理台</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/ai@6/dist/index.mjs" type="module"></script>
+    <style>
+      :root {
+        --brand-ink: #0f172a;
+        --brand-accent: #0ea5e9;
+        --brand-muted: #e2e8f0;
+        --brand-surface: #f8fafc;
+      }
+      body {
+        font-family: "Space Grotesk", "Noto Sans SC", sans-serif;
+        background: radial-gradient(circle at top, #e0f2fe 0%, #f8fafc 45%, #ffffff 100%);
+        color: var(--brand-ink);
+      }
+      .card {
+        background: white;
+        border: 1px solid var(--brand-muted);
+        border-radius: 16px;
+        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+      }
+    </style>
   </head>
+  <body class="min-h-screen">
+    <div id="app" class="min-h-screen">
+      <div class="max-w-7xl mx-auto px-6 py-10" v-if="!state.ready">
+        <div class="card p-8 max-w-xl mx-auto">
+          <h1 class="text-3xl font-semibold mb-2">Open AI Gateway</h1>
+          <p class="text-slate-600 mb-6">请输入管理员密钥以进入管理台。</p>
+          <div class="space-y-3">
+            <label class="text-sm font-medium text-slate-700">管理员密钥</label>
+            <input v-model="state.tokenInput" type="password" class="w-full rounded-lg border border-slate-300 px-4 py-2" placeholder="Bearer token" />
+            <button @click="actions.login" class="w-full bg-sky-500 hover:bg-sky-600 text-white font-medium py-2 rounded-lg">进入管理台</button>
+            <p v-if="state.error" class="text-sm text-rose-500">{{ state.error }}</p>
+          </div>
+        </div>
+      </div>
+
+      <div v-else class="max-w-7xl mx-auto px-6 py-10">
+        <header class="flex items-center justify-between mb-8">
+          <div>
+            <h1 class="text-3xl font-semibold">Open AI Gateway 管理台</h1>
+            <p class="text-slate-500">统一管理渠道、模型与调用日志</p>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="text-sm text-slate-500">已登录</span>
+            <button @click="actions.logout" class="text-sm text-slate-600 border border-slate-300 px-3 py-1 rounded-full">退出</button>
+          </div>
+        </header>
+
+        <div v-if="state.notice" class="mb-6 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+          {{ state.notice }}
+        </div>
+
+        <div class="grid lg:grid-cols-[220px_1fr] gap-6">
+          <aside class="card p-4 space-y-2">
+            <button v-for="item in constants.NAV_ITEMS" :key="item.key" @click="state.view = item.key"
+              class="w-full text-left px-3 py-2 rounded-lg font-medium"
+              :class="state.view === item.key ? 'bg-sky-500 text-white' : 'text-slate-700 hover:bg-slate-100'">
+              {{ item.label }}
+            </button>
+          </aside>
+
+          <main class="space-y-6">
+            <section class="card p-6">
+              <div class="flex items-center justify-between gap-4 flex-col md:flex-row">
+                <div>
+                  <h2 class="text-xl font-semibold">使用说明</h2>
+                  <p class="text-slate-500">先登录，再创建渠道；渠道里可以直接配置一个或多个模型；模型也可以在“模型管理”里单独修改。</p>
+                </div>
+                <div class="text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+                  `Authorization: Bearer &lt;ADMIN_KEY&gt;`
+                </div>
+              </div>
+              <div class="mt-4 grid md:grid-cols-3 gap-4 text-sm text-slate-600">
+                <div class="rounded-xl border border-slate-200 p-4">
+                  <p class="font-semibold text-slate-900">1. 创建渠道</p>
+                  <p class="mt-2">填写渠道基础信息，并在下方模型编辑器里添加该渠道可用模型。</p>
+                </div>
+                <div class="rounded-xl border border-slate-200 p-4">
+                  <p class="font-semibold text-slate-900">2. 编辑渠道</p>
+                  <p class="mt-2">点击渠道卡片上的“编辑”会把该渠道和其模型完整载入表单，修改后提交即可覆盖更新。</p>
+                </div>
+                <div class="rounded-xl border border-slate-200 p-4">
+                  <p class="font-semibold text-slate-900">3. 编辑单个模型</p>
+                  <p class="mt-2">在模型概览中点“编辑模型”，会加载模型详情，可单独修改状态、能力、请求头、别名等字段。</p>
+                </div>
+              </div>
+            </section>
+
+            <section v-if="state.view === constants.VIEWS.STATUS" class="card p-6">
+              <div class="flex items-center justify-between">
+                <h2 class="text-xl font-semibold">模型状态</h2>
+                <button @click="actions.loadStatus" class="text-sm text-sky-600">刷新</button>
+              </div>
+              <div class="mt-4 grid gap-4 md:grid-cols-2">
+                <div v-for="model in state.statusModels" :key="model.code" class="border border-slate-200 rounded-xl p-4">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <p class="font-semibold">{{ model.name }}</p>
+                      <p class="text-sm text-slate-500">{{ model.channel_name }}</p>
+                    </div>
+                    <span class="text-xs px-2 py-1 rounded-full" :class="model.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'">{{ model.status }}</span>
+                  </div>
+                  <div class="mt-3 text-sm text-slate-600 grid grid-cols-3 gap-2">
+                    <div>
+                      <p class="text-xs text-slate-400">成功率</p>
+                      <p>{{ model.success_rate }}</p>
+                    </div>
+                    <div>
+                      <p class="text-xs text-slate-400">延迟(ms)</p>
+                      <p>{{ model.avg_latency_ms }}</p>
+                    </div>
+                    <div>
+                      <p class="text-xs text-slate-400">连续失败</p>
+                      <p>{{ model.consecutive_failures }}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section v-if="state.view === constants.VIEWS.CHANNELS" class="card p-6 space-y-6">
+              <div class="flex items-center justify-between">
+                <h2 class="text-xl font-semibold">渠道管理</h2>
+                <button @click="actions.loadChannels" class="text-sm text-sky-600">刷新</button>
+              </div>
+
+              <div class="grid md:grid-cols-2 gap-4">
+                <div class="space-y-3">
+                  <h3 class="font-semibold">创建/更新渠道</h3>
+                  <p class="text-sm text-slate-500">更新时先从右侧点击“编辑”，避免手填 `id`。</p>
+                  <input v-model="state.channelForm.id" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="渠道ID (更新时填写)" />
+                  <input v-model="state.channelForm.name" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="渠道名称" />
+                  <input v-model="state.channelForm.key" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="渠道 key" />
+                  <select v-model="state.channelForm.provider" class="w-full rounded-lg border border-slate-300 px-3 py-2">
+                    <option v-for="p in constants.PROVIDERS" :key="p" :value="p">{{ p }}</option>
+                  </select>
+                  <input v-model="state.channelForm.apiKey" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="API Key" />
+                  <input v-model="state.channelForm.baseURL" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="Base URL" />
+                  <div class="rounded-2xl border border-slate-200 p-4 space-y-4 bg-slate-50/80">
+                    <div class="flex items-center justify-between">
+                      <h4 class="font-semibold text-slate-900">渠道模型配置</h4>
+                      <button @click="actions.addChannelModel" class="text-sm text-sky-600">新增模型</button>
+                    </div>
+                    <div v-if="state.channelForm.models.length === 0" class="text-sm text-slate-500">
+                      还没有模型，点击“新增模型”开始配置。
+                    </div>
+                    <div v-for="(model, index) in state.channelForm.models" :key="model.localId" class="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+                      <div class="flex items-center justify-between">
+                        <p class="font-medium text-slate-900">模型 {{ index + 1 }}</p>
+                        <button @click="actions.removeChannelModel(index)" class="text-xs text-rose-600">移除</button>
+                      </div>
+                      <div class="grid md:grid-cols-2 gap-3">
+                        <input v-model="model.code" type="text" class="rounded-lg border border-slate-300 px-3 py-2" placeholder="模型 code" />
+                        <input v-model="model.name" type="text" class="rounded-lg border border-slate-300 px-3 py-2" placeholder="模型名称" />
+                        <input v-model="model.desc" type="text" class="rounded-lg border border-slate-300 px-3 py-2" placeholder="模型描述" />
+                        <input v-model="model.cost" type="text" class="rounded-lg border border-slate-300 px-3 py-2" placeholder="成本，例如 2.5/M" />
+                        <select v-model="model.callType" class="rounded-lg border border-slate-300 px-3 py-2">
+                          <option v-for="callType in constants.CALL_TYPES" :key="callType" :value="callType">{{ callType }}</option>
+                        </select>
+                        <input v-model.number="model.weight" type="number" step="0.1" min="0" max="100" class="rounded-lg border border-slate-300 px-3 py-2" placeholder="权重" />
+                      </div>
+                      <textarea v-model="model.aliasesRaw" class="w-full rounded-lg border border-slate-300 px-3 py-2 h-20" placeholder='别名 JSON 数组，例如 ["gpt4o","gpt-4-omni"]'></textarea>
+                      <textarea v-model="model.capabilitiesRaw" class="w-full rounded-lg border border-slate-300 px-3 py-2 h-20" placeholder='能力 JSON 数组，例如 ["chat","image_in"]'></textarea>
+                      <textarea v-model="model.headersRaw" class="w-full rounded-lg border border-slate-300 px-3 py-2 h-20" placeholder='请求头 JSON 对象，例如 {"x-custom":"value"}'></textarea>
+                    </div>
+                  </div>
+                  <details class="rounded-xl border border-slate-200 p-3 text-sm text-slate-600">
+                    <summary class="cursor-pointer font-medium text-slate-900">查看原始模型 JSON</summary>
+                    <textarea v-model="state.channelForm.modelsRaw" class="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 h-32" placeholder='模型 JSON 数组'></textarea>
+                  </details>
+                  <div class="flex gap-3">
+                    <button @click="actions.createChannel" class="flex-1 bg-sky-500 hover:bg-sky-600 text-white font-medium py-2 rounded-lg">创建</button>
+                    <button @click="actions.updateChannel" class="flex-1 border border-slate-300 text-slate-700 font-medium py-2 rounded-lg">更新</button>
+                    <button @click="actions.resetChannelForm" class="border border-slate-300 text-slate-700 font-medium px-4 rounded-lg">清空</button>
+                  </div>
+                </div>
+                <div class="space-y-3">
+                  <h3 class="font-semibold">渠道列表</h3>
+                  <div class="space-y-3 max-h-[420px] overflow-auto pr-2">
+                    <div v-for="channel in state.channels" :key="channel.id" class="border border-slate-200 rounded-xl p-3">
+                      <div class="flex items-center justify-between">
+                        <div>
+                          <p class="font-semibold">{{ channel.name }}</p>
+                          <p class="text-xs text-slate-500">{{ channel.key }} · {{ channel.provider }}</p>
+                        </div>
+                        <div class="flex items-center gap-3">
+                          <button @click="actions.editChannel(channel)" class="text-xs text-sky-600">编辑</button>
+                          <button @click="actions.deleteChannel(channel.id)" class="text-xs text-rose-600">删除</button>
+                        </div>
+                      </div>
+                      <p class="text-xs text-slate-500 mt-2">模型数量: {{ channel.models?.length || 0 }}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section v-if="state.view === constants.VIEWS.MODELS" class="card p-6 space-y-6">
+              <div class="flex items-center justify-between">
+                <h2 class="text-xl font-semibold">模型管理</h2>
+                <button @click="actions.loadChannels" class="text-sm text-sky-600">刷新渠道与模型</button>
+              </div>
+              <div class="grid md:grid-cols-2 gap-4">
+                <div class="space-y-3">
+                  <h3 class="font-semibold">更新模型</h3>
+                  <p class="text-sm text-slate-500">建议从右侧点击“编辑模型”自动载入，不要手动拼字段。</p>
+                  <input v-model="state.modelForm.id" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="模型ID" />
+                  <input v-model="state.modelForm.name" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="模型名称" />
+                  <input v-model="state.modelForm.code" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="模型 code" />
+                  <input v-model="state.modelForm.desc" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="模型描述" />
+                  <div class="grid md:grid-cols-2 gap-3">
+                    <input v-model.number="state.modelForm.weight" type="number" step="0.1" min="0" max="100" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="权重" />
+                    <select v-model="state.modelForm.status" class="w-full rounded-lg border border-slate-300 px-3 py-2">
+                      <option v-for="s in constants.MODEL_STATUS" :key="s" :value="s">{{ s }}</option>
+                    </select>
+                    <select v-model="state.modelForm.callType" class="w-full rounded-lg border border-slate-300 px-3 py-2">
+                      <option v-for="callType in constants.CALL_TYPES" :key="callType" :value="callType">{{ callType }}</option>
+                    </select>
+                    <input v-model="state.modelForm.cost" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="成本，例如 0.02/img" />
+                  </div>
+                  <textarea v-model="state.modelForm.aliasesRaw" class="w-full rounded-lg border border-slate-300 px-3 py-2 h-24" placeholder='别名 JSON 数组，例如 ["gpt4o"]'></textarea>
+                  <textarea v-model="state.modelForm.capabilitiesRaw" class="w-full rounded-lg border border-slate-300 px-3 py-2 h-24" placeholder='能力 JSON 数组，例如 ["chat","image_out"]'></textarea>
+                  <textarea v-model="state.modelForm.headersRaw" class="w-full rounded-lg border border-slate-300 px-3 py-2 h-24" placeholder='请求头 JSON 对象，例如 {"x-api-version":"2024-01"}'></textarea>
+                  <button @click="actions.updateModel" class="w-full bg-slate-900 text-white py-2 rounded-lg">更新模型</button>
+                  <button @click="actions.resetModelForm" class="w-full border border-slate-300 text-slate-700 py-2 rounded-lg">清空模型表单</button>
+                </div>
+                <div class="space-y-3">
+                  <h3 class="font-semibold">渠道模型概览</h3>
+                  <div class="space-y-3 max-h-[420px] overflow-auto pr-2">
+                    <div v-for="channel in state.channels" :key="channel.id" class="border border-slate-200 rounded-xl p-3">
+                      <p class="font-semibold">{{ channel.name }}</p>
+                      <div class="mt-2 space-y-2">
+                        <div v-for="model in channel.models" :key="model.id" class="text-sm text-slate-600 flex items-center justify-between">
+                          <span>{{ model.name }} ({{ model.code }})</span>
+                          <div class="flex items-center gap-3">
+                            <button @click="actions.editModel(model)" class="text-xs text-sky-600">编辑模型</button>
+                            <button @click="actions.deleteModel(model.id)" class="text-xs text-rose-600">删除</button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <section v-if="state.view === constants.VIEWS.LOGS" class="card p-6 space-y-6">
+              <div class="flex items-center justify-between">
+                <h2 class="text-xl font-semibold">调用日志</h2>
+                <button @click="actions.loadLogs" class="text-sm text-sky-600">刷新</button>
+              </div>
+              <div class="grid md:grid-cols-4 gap-3">
+                <input v-model="state.logFilters.channel_id" type="text" class="rounded-lg border border-slate-300 px-3 py-2" placeholder="渠道ID" />
+                <input v-model="state.logFilters.model_id" type="text" class="rounded-lg border border-slate-300 px-3 py-2" placeholder="模型ID" />
+                <select v-model="state.logFilters.status" class="rounded-lg border border-slate-300 px-3 py-2">
+                  <option value="">全部状态</option>
+                  <option v-for="s in constants.LOG_STATUS_LIST" :key="s" :value="s">{{ s }}</option>
+                </select>
+                <button @click="actions.loadLogs" class="bg-sky-500 text-white rounded-lg">查询</button>
+              </div>
+              <div class="space-y-3">
+                <div v-for="log in state.logs" :key="log.id" class="border border-slate-200 rounded-xl p-3 text-sm">
+                  <div class="flex items-center justify-between">
+                    <p class="font-medium">{{ log.model_code }} · {{ log.status }}</p>
+                    <span class="text-xs text-slate-400">{{ log.created_at }}</span>
+                  </div>
+                  <p class="text-slate-500">{{ log.error_message || '无错误' }}</p>
+                </div>
+              </div>
+            </section>
+          </main>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const { createApp, reactive, onMounted } = Vue;
+
+      const constants = {
+        STORAGE_KEY: 'open-ai-gateway-token',
+        METHODS: {
+          GET: 'GET',
+          POST: 'POST',
+          PUT: 'PUT',
+          DELETE: 'DELETE',
+        },
+        DEFAULT_PAGE: '1',
+        DEFAULT_LIMIT: '50',
+        EMPTY_ARRAY_JSON: '[]',
+        EMPTY_OBJECT_JSON: '{}',
+        CALL_TYPES: ['chat', 'image_gen', 'audio_gen', 'video_gen', 'transcribe', 'embedding'],
+        VIEWS: {
+          STATUS: 'status',
+          CHANNELS: 'channels',
+          MODELS: 'models',
+          LOGS: 'logs',
+        },
+        NAV_ITEMS: [
+          { key: 'status', label: '状态概览' },
+          { key: 'channels', label: '渠道管理' },
+          { key: 'models', label: '模型管理' },
+          { key: 'logs', label: '调用日志' },
+        ],
+        API: {
+          STATUS: '/status',
+          CHANNEL: '/api/channel',
+          CHANNELS: '/api/channels',
+          MODEL: '/api/model',
+          LOG: '/api/log',
+        },
+        PROVIDERS: ['openai', 'openai-compatible', 'google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations'],
+        MODEL_STATUS: ['active', 'open', 'disable'],
+        LOG_STATUS_LIST: ['success', 'error'],
+      };
+
+      createApp({
+        setup() {
+          const createEmptyChannelModel = () => ({
+            localId: crypto.randomUUID(),
+            code: '',
+            name: '',
+            desc: '',
+            aliasesRaw: constants.EMPTY_ARRAY_JSON,
+            callType: constants.CALL_TYPES[0],
+            capabilitiesRaw: constants.EMPTY_ARRAY_JSON,
+            cost: '',
+            weight: 1,
+            headersRaw: constants.EMPTY_OBJECT_JSON,
+          });
+
+          const createEmptyChannelForm = () => ({
+            id: '',
+            name: '',
+            key: '',
+            provider: constants.PROVIDERS[0],
+            apiKey: '',
+            baseURL: '',
+            models: [createEmptyChannelModel()],
+            modelsRaw: constants.EMPTY_ARRAY_JSON,
+          });
+
+          const createEmptyModelForm = () => ({
+            id: '',
+            name: '',
+            code: '',
+            desc: '',
+            weight: 1,
+            status: constants.MODEL_STATUS[0],
+            callType: constants.CALL_TYPES[0],
+            cost: '',
+            aliasesRaw: constants.EMPTY_ARRAY_JSON,
+            capabilitiesRaw: constants.EMPTY_ARRAY_JSON,
+            headersRaw: constants.EMPTY_OBJECT_JSON,
+          });
+
+          const state = reactive({
+            ready: false,
+            token: localStorage.getItem(constants.STORAGE_KEY) || '',
+            tokenInput: '',
+            error: '',
+            view: constants.VIEWS.STATUS,
+            channels: [],
+            statusModels: [],
+            logs: [],
+            notice: '',
+            channelForm: createEmptyChannelForm(),
+            modelForm: createEmptyModelForm(),
+            logFilters: {
+              channel_id: '',
+              model_id: '',
+              status: '',
+            },
+          });
+
+          const syncChannelModelsRaw = () => {
+            state.channelForm.modelsRaw = JSON.stringify(
+              state.channelForm.models.map((model) => ({
+                code: model.code,
+                name: model.name,
+                desc: model.desc,
+                aliases: JSON.parse(model.aliasesRaw || constants.EMPTY_ARRAY_JSON),
+                callType: model.callType,
+                capabilities: JSON.parse(model.capabilitiesRaw || constants.EMPTY_ARRAY_JSON),
+                cost: model.cost,
+                weight: Number(model.weight || 0),
+                headers: JSON.parse(model.headersRaw || constants.EMPTY_OBJECT_JSON),
+              })),
+              null,
+              2,
+            );
+          };
+
+          const parseRawModelsToEditor = (modelsRaw) => {
+            const parsedModels = JSON.parse(modelsRaw || constants.EMPTY_ARRAY_JSON);
+            return parsedModels.map((model) => ({
+              localId: crypto.randomUUID(),
+              code: model.code || '',
+              name: model.name || '',
+              desc: model.desc || '',
+              aliasesRaw: JSON.stringify(model.aliases || [], null, 2),
+              callType: model.callType || constants.CALL_TYPES[0],
+              capabilitiesRaw: JSON.stringify(model.capabilities || [], null, 2),
+              cost: model.cost || '',
+              weight: model.weight ?? 1,
+              headersRaw: JSON.stringify(model.headers || {}, null, 2),
+            }));
+          };
+
+          const parseJsonInput = (rawValue, fallbackValue, errorLabel) => {
+            try {
+              return JSON.parse(rawValue || fallbackValue);
+            } catch (error) {
+              throw new Error(`${errorLabel} 不是合法 JSON`);
+            }
+          };
+
+          const headersWithAuth = () => ({
+            Authorization: `Bearer ${state.token}`,
+            'Content-Type': 'application/json',
+          });
+
+          const apiRequest = async (path, options = {}) => {
+            const res = await fetch(path, {
+              method: options.method || constants.METHODS.GET,
+              headers: options.auth === false ? {} : headersWithAuth(),
+              body: options.body ? JSON.stringify(options.body) : undefined,
+            });
+            const text = await res.text();
+            return { status: res.status, data: text ? JSON.parse(text) : null };
+          };
+
+          const actions = {
+            setNotice: (message) => {
+              state.notice = message;
+              window.setTimeout(() => {
+                if (state.notice === message) {
+                  state.notice = '';
+                }
+              }, 3000);
+            },
+            login: async () => {
+              state.error = '';
+              state.token = state.tokenInput.trim();
+              if (!state.token) {
+                state.error = '请输入密钥';
+                return;
+              }
+              localStorage.setItem(constants.STORAGE_KEY, state.token);
+              state.ready = true;
+              await actions.loadStatus();
+              await actions.loadChannels();
+              await actions.loadLogs();
+              actions.setNotice('已加载状态、渠道和日志数据。');
+            },
+            logout: () => {
+              localStorage.removeItem(constants.STORAGE_KEY);
+              state.ready = false;
+              state.token = '';
+              state.tokenInput = '';
+            },
+            resetChannelForm: () => {
+              state.channelForm = createEmptyChannelForm();
+              syncChannelModelsRaw();
+            },
+            resetModelForm: () => {
+              state.modelForm = createEmptyModelForm();
+            },
+            addChannelModel: () => {
+              state.channelForm.models.push(createEmptyChannelModel());
+              syncChannelModelsRaw();
+            },
+            removeChannelModel: (index) => {
+              state.channelForm.models.splice(index, 1);
+              if (state.channelForm.models.length === 0) {
+                state.channelForm.models.push(createEmptyChannelModel());
+              }
+              syncChannelModelsRaw();
+            },
+            loadStatus: async () => {
+              const res = await apiRequest(constants.API.STATUS, { auth: false });
+              state.statusModels = res.data?.models || [];
+            },
+            loadChannels: async () => {
+              const res = await apiRequest(`${constants.API.CHANNELS}?page=${constants.DEFAULT_PAGE}&limit=${constants.DEFAULT_LIMIT}`);
+              state.channels = res.data?.data || [];
+            },
+            createChannel: async () => {
+              try {
+                syncChannelModelsRaw();
+                const models = parseJsonInput(state.channelForm.modelsRaw, constants.EMPTY_ARRAY_JSON, '渠道模型配置');
+                const res = await apiRequest(constants.API.CHANNEL, {
+                  method: constants.METHODS.POST,
+                  body: {
+                    name: state.channelForm.name,
+                    key: state.channelForm.key,
+                    provider: state.channelForm.provider,
+                    apiKey: state.channelForm.apiKey,
+                    baseURL: state.channelForm.baseURL,
+                    models,
+                  },
+                });
+                if (res.status === 201) {
+                  await actions.loadChannels();
+                  actions.setNotice('渠道已创建。');
+                  actions.resetChannelForm();
+                } else {
+                  actions.setNotice(res.data?.error || '渠道创建失败。');
+                }
+              } catch (error) {
+                actions.setNotice(error.message);
+              }
+            },
+            updateChannel: async () => {
+              if (!state.channelForm.id) return;
+              try {
+                syncChannelModelsRaw();
+                const models = parseJsonInput(state.channelForm.modelsRaw, constants.EMPTY_ARRAY_JSON, '渠道模型配置');
+                const res = await apiRequest(`${constants.API.CHANNEL}/${state.channelForm.id}`, {
+                  method: constants.METHODS.PUT,
+                  body: {
+                    name: state.channelForm.name,
+                    key: state.channelForm.key,
+                    provider: state.channelForm.provider,
+                    apiKey: state.channelForm.apiKey,
+                    baseURL: state.channelForm.baseURL,
+                    models,
+                  },
+                });
+                if (res.status === 200) {
+                  await actions.loadChannels();
+                  actions.setNotice('渠道已更新。');
+                } else {
+                  actions.setNotice(res.data?.error || '渠道更新失败。');
+                }
+              } catch (error) {
+                actions.setNotice(error.message);
+              }
+            },
+            editChannel: (channel) => {
+              const modelsRaw = JSON.stringify(
+                (channel.models || []).map((model) => ({
+                  code: model.code,
+                  name: model.name,
+                  desc: model.desc,
+                  aliases: JSON.parse(model.aliases || constants.EMPTY_ARRAY_JSON),
+                  callType: model.call_type,
+                  capabilities: JSON.parse(model.capabilities || constants.EMPTY_ARRAY_JSON),
+                  cost: model.cost,
+                  weight: model.weight,
+                  headers: JSON.parse(model.headers || constants.EMPTY_OBJECT_JSON),
+                })),
+                null,
+                2,
+              );
+              state.channelForm = {
+                id: channel.id,
+                name: channel.name,
+                key: channel.key,
+                provider: channel.provider,
+                apiKey: channel.api_key,
+                baseURL: channel.base_url,
+                models: parseRawModelsToEditor(modelsRaw),
+                modelsRaw,
+              };
+              state.view = constants.VIEWS.CHANNELS;
+              actions.setNotice('渠道已载入表单，可直接更新。');
+            },
+            deleteChannel: async (id) => {
+              await apiRequest(`${constants.API.CHANNEL}/${id}`, { method: constants.METHODS.DELETE });
+              await actions.loadChannels();
+              actions.setNotice('渠道已删除。');
+            },
+            editModel: (model) => {
+              state.modelForm = {
+                id: model.id,
+                name: model.name || '',
+                code: model.code || '',
+                desc: model.desc || '',
+                weight: model.weight ?? 1,
+                status: model.status || constants.MODEL_STATUS[0],
+                callType: model.call_type || constants.CALL_TYPES[0],
+                cost: model.cost || '',
+                aliasesRaw: JSON.stringify(JSON.parse(model.aliases || constants.EMPTY_ARRAY_JSON), null, 2),
+                capabilitiesRaw: JSON.stringify(JSON.parse(model.capabilities || constants.EMPTY_ARRAY_JSON), null, 2),
+                headersRaw: JSON.stringify(JSON.parse(model.headers || constants.EMPTY_OBJECT_JSON), null, 2),
+              };
+              state.view = constants.VIEWS.MODELS;
+              actions.setNotice('模型已载入表单，可单独修改。');
+            },
+            updateModel: async () => {
+              if (!state.modelForm.id) return;
+              try {
+                const aliases = parseJsonInput(state.modelForm.aliasesRaw, constants.EMPTY_ARRAY_JSON, '模型别名');
+                const capabilities = parseJsonInput(state.modelForm.capabilitiesRaw, constants.EMPTY_ARRAY_JSON, '模型能力');
+                const headers = parseJsonInput(state.modelForm.headersRaw, constants.EMPTY_OBJECT_JSON, '模型请求头');
+                const res = await apiRequest(`${constants.API.MODEL}/${state.modelForm.id}`, {
+                  method: constants.METHODS.PUT,
+                  body: {
+                    name: state.modelForm.name,
+                    code: state.modelForm.code,
+                    desc: state.modelForm.desc,
+                    weight: state.modelForm.weight,
+                    status: state.modelForm.status,
+                    callType: state.modelForm.callType,
+                    cost: state.modelForm.cost,
+                    aliases,
+                    capabilities,
+                    headers,
+                  },
+                });
+                if (res.status === 200) {
+                  await actions.loadChannels();
+                  actions.setNotice('模型已更新。');
+                } else {
+                  actions.setNotice(res.data?.error || '模型更新失败。');
+                }
+              } catch (error) {
+                actions.setNotice(error.message);
+              }
+            },
+            deleteModel: async (id) => {
+              await apiRequest(`${constants.API.MODEL}/${id}`, { method: constants.METHODS.DELETE });
+              await actions.loadChannels();
+              actions.setNotice('模型已删除。');
+            },
+            loadLogs: async () => {
+              const params = new URLSearchParams({ page: constants.DEFAULT_PAGE, limit: constants.DEFAULT_LIMIT });
+              if (state.logFilters.channel_id) params.set('channel_id', state.logFilters.channel_id);
+              if (state.logFilters.model_id) params.set('model_id', state.logFilters.model_id);
+              if (state.logFilters.status) params.set('status', state.logFilters.status);
+              const res = await apiRequest(`${constants.API.LOG}?${params.toString()}`);
+              state.logs = res.data?.data || [];
+            },
+          };
+
+          onMounted(async () => {
+            if (state.token) {
+              state.ready = true;
+              await actions.loadStatus();
+              await actions.loadChannels();
+              await actions.loadLogs();
+            }
+            syncChannelModelsRaw();
+          });
+
+          return { state, actions, constants };
+        },
+      }).mount('#app');
+    </script>
+  </body>
 </html>

@@ -1,200 +1,1594 @@
+import { z } from 'zod';
+import {
+  generateText,
+  streamText,
+  generateImage,
+  experimental_generateVideo,
+  experimental_generateSpeech,
+  experimental_transcribe,
+  embed,
+} from 'ai';
+import { createFallback } from 'ai-fallback';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createPollinations } from 'ai-sdk-pollinations';
 
-/**
- * Cloudflare Workers 脚本
- * 主要功能, 使用统一的 API 接口请求不同 AI 渠道的模型
- * - 除特殊说明外, 所有请求默认都需要鉴权
- * 
- * ### 渠道数据结构
- *
- * ```ts
-interface Channel {
-  id: string;
-  name: string;
-  key: string;
-  provider: string; // AI 平台, openai/openai-compatible, google/gemini, anthropic/claude, openrouter, pollinations, 默认为 openai
-  apiKey: string;
-  baseURL: string;
-  models: {
-    id: string;
-    code: string;
-    name: string;
-    desc: string;
-    aliases: string[]; // 模型别名
-    callType: string; // 请求该模型时需要调用的接口类型, 支持 chat, image_gen, audio_gen, video_gen, transcribe, embedding, 默认 chat
-    capabilities: string[]; // 该模型的能力, 支持 chat, image_in, image_out, audio_in, audio_out, video_in, video_out, embedding
-    cost: string; // 成本, 值格式, /img = flat rate per image, /M = per million tokens, /sec = per second of video/audio, /req = flat rate per request
-    status: string; // 状态, 值有: active, open, disable. action: 正常参与调度, open: 处于冷却期, 完全不参与调度, disable: 人工禁用, 默认 active
-    weight: float; // 权重, 要优先选择该模型
-    avgLatencyMs: float; // 模型平均响应时间, 值越大, 选中的概率越小
-    successRate: float; // 请求平均成功率, 值越大, 选中的概率越大
-    errorRate: float; // 请求平均失败率
-    consecutiveFailures: number; // 最近连续失败次数, 但 `2<=` 时进入冷却期, 2 ~ 4 次冷却时间 60s, 4 ~ 8 次冷却时间 300s, 8 ~ 24次冷却时间 1h, 24 ~ 32次冷却时间 1day, 32<=次冷却时间 3day
-    lastUpdated: timestamp; // 最近更新时间
-    cooldownUntil: timestamp; // 冷却结束时间, 如果为空表示无冷却时间, 如果 status === open, 则此值必不可为空, 默认为空
-    headers: Record<string, any>; // 模型请求时额外的头信息
-  }[];
+const CONSTANTS = {
+  PROVIDERS: {
+    OPENAI: 'openai',
+    OPENAI_COMPATIBLE: 'openai-compatible',
+    GOOGLE: 'google',
+    GEMINI: 'gemini',
+    ANTHROPIC: 'anthropic',
+    CLAUDE: 'claude',
+    OPENROUTER: 'openrouter',
+    POLLINATIONS: 'pollinations',
+  },
+  CALL_TYPES: {
+    CHAT: 'chat',
+    IMAGE_GEN: 'image_gen',
+    AUDIO_GEN: 'audio_gen',
+    VIDEO_GEN: 'video_gen',
+    TRANSCRIBE: 'transcribe',
+    EMBEDDING: 'embedding',
+  },
+  MODEL_CAPABILITIES: {
+    CHAT: 'chat',
+    IMAGE_IN: 'image_in',
+    IMAGE_OUT: 'image_out',
+    AUDIO_IN: 'audio_in',
+    AUDIO_OUT: 'audio_out',
+    VIDEO_IN: 'video_in',
+    VIDEO_OUT: 'video_out',
+    EMBEDDING: 'embedding',
+  },
+  MODEL_STATUS: {
+    ACTIVE: 'active',
+    OPEN: 'open',
+    DISABLE: 'disable',
+  },
+  LOG_STATUS: {
+    SUCCESS: 'success',
+    ERROR: 'error',
+  },
+  COST_UNITS: {
+    IMAGE: '/img',
+    MILLION: '/M',
+    SECOND: '/sec',
+    REQUEST: '/req',
+  },
+  COOLDOWN_TIERS: [
+    { minFailures: 2, maxFailures: 4, durationMs: 60_000 },
+    { minFailures: 4, maxFailures: 8, durationMs: 300_000 },
+    { minFailures: 8, maxFailures: 24, durationMs: 3_600_000 },
+    { minFailures: 24, maxFailures: 32, durationMs: 86_400_000 },
+    { minFailures: 32, maxFailures: Infinity, durationMs: 259_200_000 },
+  ],
+  DEFAULT_PAGE: 1,
+  DEFAULT_PAGE_SIZE: 20,
+  MAX_PAGE_SIZE: 100,
+  SCORE_WEIGHTS: {
+    WEIGHT_FACTOR: 10,
+    SUCCESS_RATE_FACTOR: 50,
+    LATENCY_PENALTY: 0.01,
+    FAILURE_PENALTY: 20,
+  },
+  EMA_ALPHA: 0.3,
+  HTTP_STATUS: {
+    OK: 200,
+    CREATED: 201,
+    BAD_REQUEST: 400,
+    UNAUTHORIZED: 401,
+    FORBIDDEN: 403,
+    NOT_FOUND: 404,
+    METHOD_NOT_ALLOWED: 405,
+    INTERNAL_ERROR: 500,
+    SERVICE_UNAVAILABLE: 503,
+  },
+  ERROR_MESSAGES: {
+    UNAUTHORIZED: 'Missing or invalid authorization token',
+    FORBIDDEN: 'Insufficient permissions',
+    NOT_FOUND: 'Resource not found',
+    MODEL_NOT_FOUND: 'No available model found for the requested model identifier',
+    CHANNEL_NOT_FOUND: 'Channel not found',
+    METHOD_NOT_ALLOWED: 'Method not allowed',
+    INVALID_REQUEST_BODY: 'Invalid request body',
+    NO_MODEL_AVAILABLE: 'All models for this identifier are currently unavailable (cooldown or disabled)',
+    PROVIDER_ERROR: 'Upstream AI provider returned an error',
+    INTERNAL_ERROR: 'Internal server error',
+  },
+  CORS_HEADERS: {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-channel-id, *',
+    'Access-Control-Max-Age': '86400',
+  },
+  METHODS: {
+    GET: 'GET',
+    POST: 'POST',
+    PUT: 'PUT',
+    DELETE: 'DELETE',
+    OPTIONS: 'OPTIONS',
+  },
+  ROUTES: {
+    STATUS: '/status',
+    V1_MODELS: '/v1/models',
+    V1_CHAT: '/v1/chat/completions',
+    V1_IMAGES: '/v1/images/generations',
+    V1_VIDEO: '/v1/video/generations',
+    V1_AUDIO: '/v1/audio/speech',
+    V1_TRANSCRIBE: '/v1/audio/transcriptions',
+    V1_EMBEDDINGS: '/v1/embeddings',
+    API_PREFIX: '/api',
+    API_CHANNEL: '/api/channel',
+    API_CHANNEL_PREFIX: '/api/channel/',
+    API_CHANNELS: '/api/channels',
+    API_MODEL: '/api/model',
+    API_MODEL_PREFIX: '/api/model/',
+    API_LOG: '/api/log',
+  },
+  HEADERS: {
+    AUTHORIZATION: 'authorization',
+    CONTENT_TYPE: 'content-type',
+    CHANNEL_ID: 'x-channel-id',
+  },
+  BEARER_PREFIX: 'Bearer ',
+  JSON_CONTENT_TYPE: 'application/json',
+  MULTIPART_CONTENT_TYPE: 'multipart/form-data',
+  SSE_CONTENT_TYPE: 'text/event-stream',
+  OPENAI_OBJECTS: {
+    LIST: 'list',
+    MODEL: 'model',
+    EMBEDDING: 'embedding',
+    CHAT_COMPLETION: 'chat.completion',
+    CHAT_COMPLETION_CHUNK: 'chat.completion.chunk',
+  },
+  STREAM_DONE: '[DONE]',
+  UUID_PREFIX: 'uuid-',
+  SQL: {
+    INSERT_CHANNEL: `INSERT INTO channels (id, name, key, provider, api_key, base_url, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+    INSERT_MODEL: `INSERT INTO channel_models (id, channel_id, code, name, desc, aliases, call_type, capabilities, cost, status, weight, avg_latency_ms, success_rate, error_rate, consecutive_failures, cooldown_until, last_updated, headers) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
+    SELECT_CHANNEL_BY_ID: `SELECT * FROM channels WHERE id = ?1`,
+    SELECT_CHANNEL_BY_KEY: `SELECT * FROM channels WHERE key = ?1`,
+    SELECT_MODELS_BY_CHANNEL_ID: `SELECT * FROM channel_models WHERE channel_id = ?1`,
+    DELETE_MODELS_BY_CHANNEL_ID: `DELETE FROM channel_models WHERE channel_id = ?1`,
+    DELETE_CHANNEL: `DELETE FROM channels WHERE id = ?1`,
+    COUNT_CHANNELS: `SELECT COUNT(*) as total FROM channels`,
+    SELECT_CHANNELS_PAGED: `SELECT * FROM channels ORDER BY created_at DESC LIMIT ?1 OFFSET ?2`,
+    SELECT_MODEL_BY_ID: `SELECT * FROM channel_models WHERE id = ?1`,
+    DELETE_MODEL: `DELETE FROM channel_models WHERE id = ?1`,
+    INSERT_LOG: `INSERT INTO request_logs (id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message, latency_ms, input_tokens, output_tokens, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
+    SELECT_LOGS_BASE: `SELECT * FROM request_logs`,
+    COUNT_LOGS_BASE: `SELECT COUNT(*) as total FROM request_logs`,
+    SELECT_STATUS_BASE: `SELECT cm.*, c.name as channel_name FROM channel_models cm JOIN channels c ON cm.channel_id = c.id`,
+    SELECT_MODELS_BY_IDENTIFIER_BASE: `SELECT cm.*, c.id as ch_id, c.name as ch_name, c.key as ch_key, c.provider, c.api_key, c.base_url FROM channel_models cm JOIN channels c ON cm.channel_id = c.id WHERE (cm.code = ?1 OR cm.aliases LIKE ?2) AND cm.status != ?3 AND (cm.cooldown_until IS NULL OR cm.cooldown_until < ?4)`,
+    UPDATE_MODEL_STATS_BASE: `UPDATE channel_models SET `,
+    UPDATE_CHANNEL_BASE: `UPDATE channels SET `,
+    UPDATE_MODEL_BASE: `UPDATE channel_models SET `,
+    SELECT_MODEL_FOR_STATS: `SELECT * FROM channel_models WHERE id = ?1`,
+    DDL: {
+      CREATE_CHANNELS_TABLE: `CREATE TABLE IF NOT EXISTS channels (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        key TEXT NOT NULL UNIQUE,
+        provider TEXT NOT NULL DEFAULT 'openai',
+        api_key TEXT NOT NULL,
+        base_url TEXT DEFAULT '',
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`,
+      CREATE_CHANNEL_MODELS_TABLE: `CREATE TABLE IF NOT EXISTS channel_models (
+        id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        code TEXT NOT NULL,
+        name TEXT NOT NULL,
+        desc TEXT DEFAULT '',
+        aliases TEXT DEFAULT '[]',
+        call_type TEXT NOT NULL DEFAULT 'chat',
+        capabilities TEXT DEFAULT '["chat"]',
+        cost TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'active',
+        weight REAL NOT NULL DEFAULT 1.0,
+        avg_latency_ms REAL NOT NULL DEFAULT 0.0,
+        success_rate REAL NOT NULL DEFAULT 1.0,
+        error_rate REAL NOT NULL DEFAULT 0.0,
+        consecutive_failures INTEGER NOT NULL DEFAULT 0,
+        cooldown_until TEXT DEFAULT NULL,
+        last_updated TEXT NOT NULL DEFAULT (datetime('now')),
+        headers TEXT DEFAULT '{}',
+        FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
+      )`,
+      CREATE_REQUEST_LOGS_TABLE: `CREATE TABLE IF NOT EXISTS request_logs (
+        id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        channel_name TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        model_code TEXT NOT NULL,
+        call_type TEXT NOT NULL,
+        request_model TEXT NOT NULL,
+        status TEXT NOT NULL,
+        error_message TEXT DEFAULT '',
+        latency_ms INTEGER NOT NULL DEFAULT 0,
+        input_tokens INTEGER DEFAULT 0,
+        output_tokens INTEGER DEFAULT 0,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      )`,
+      CREATE_INDEX_CHANNEL_MODELS_CHANNEL_ID: `CREATE INDEX IF NOT EXISTS idx_channel_models_channel_id ON channel_models(channel_id)`,
+      CREATE_INDEX_CHANNEL_MODELS_CODE: `CREATE INDEX IF NOT EXISTS idx_channel_models_code ON channel_models(code)`,
+      CREATE_INDEX_CHANNEL_MODELS_STATUS: `CREATE INDEX IF NOT EXISTS idx_channel_models_status ON channel_models(status)`,
+      CREATE_INDEX_CHANNEL_MODELS_CALL_TYPE: `CREATE INDEX IF NOT EXISTS idx_channel_models_call_type ON channel_models(call_type)`,
+      CREATE_INDEX_REQUEST_LOGS_CREATED_AT: `CREATE INDEX IF NOT EXISTS idx_request_logs_created_at ON request_logs(created_at)`,
+      CREATE_INDEX_REQUEST_LOGS_CHANNEL_ID: `CREATE INDEX IF NOT EXISTS idx_request_logs_channel_id ON request_logs(channel_id)`,
+      CREATE_INDEX_REQUEST_LOGS_MODEL_ID: `CREATE INDEX IF NOT EXISTS idx_request_logs_model_id ON request_logs(model_id)`,
+      CREATE_INDEX_REQUEST_LOGS_STATUS: `CREATE INDEX IF NOT EXISTS idx_request_logs_status ON request_logs(status)`,
+    },
+  },
+};
+
+const {
+  PROVIDERS,
+  CALL_TYPES,
+  MODEL_STATUS,
+  LOG_STATUS,
+  SCORE_WEIGHTS,
+  EMA_ALPHA,
+  HTTP_STATUS,
+  ERROR_MESSAGES,
+  CORS_HEADERS,
+  METHODS,
+  ROUTES,
+  HEADERS,
+  BEARER_PREFIX,
+  JSON_CONTENT_TYPE,
+  MULTIPART_CONTENT_TYPE,
+  SSE_CONTENT_TYPE,
+  OPENAI_OBJECTS,
+  STREAM_DONE,
+  SQL,
+} = CONSTANTS;
+
+const CALL_TYPE_TO_PATH = {
+  [CALL_TYPES.CHAT]: ROUTES.V1_CHAT,
+  [CALL_TYPES.IMAGE_GEN]: ROUTES.V1_IMAGES,
+  [CALL_TYPES.VIDEO_GEN]: ROUTES.V1_VIDEO,
+  [CALL_TYPES.AUDIO_GEN]: ROUTES.V1_AUDIO,
+  [CALL_TYPES.TRANSCRIBE]: ROUTES.V1_TRANSCRIBE,
+  [CALL_TYPES.EMBEDDING]: ROUTES.V1_EMBEDDINGS,
+};
+
+const PATH_TO_CALL_TYPE = Object.fromEntries(
+  Object.entries(CALL_TYPE_TO_PATH).map(([callType, path]) => [path, callType]),
+);
+
+CONSTANTS.CALL_TYPE_TO_PATH = CALL_TYPE_TO_PATH;
+CONSTANTS.PATH_TO_CALL_TYPE = PATH_TO_CALL_TYPE;
+
+const SCHEMAS = (() => {
+  const ProviderEnum = z.enum([
+    PROVIDERS.OPENAI,
+    PROVIDERS.OPENAI_COMPATIBLE,
+    PROVIDERS.GOOGLE,
+    PROVIDERS.GEMINI,
+    PROVIDERS.ANTHROPIC,
+    PROVIDERS.CLAUDE,
+    PROVIDERS.OPENROUTER,
+    PROVIDERS.POLLINATIONS,
+  ]);
+
+  const CallTypeEnum = z.enum([
+    CALL_TYPES.CHAT,
+    CALL_TYPES.IMAGE_GEN,
+    CALL_TYPES.AUDIO_GEN,
+    CALL_TYPES.VIDEO_GEN,
+    CALL_TYPES.TRANSCRIBE,
+    CALL_TYPES.EMBEDDING,
+  ]);
+
+  const CreateChannelSchema = z.object({
+    name: z.string().min(1).max(100),
+    key: z.string().regex(/^[a-z0-9-]+$/).min(1).max(50),
+    provider: ProviderEnum.default(PROVIDERS.OPENAI),
+    apiKey: z.string(),
+    baseURL: z.string().url().or(z.literal('')).default(''),
+    models: z
+      .array(
+        z.object({
+          code: z.string().min(1),
+          name: z.string().min(1),
+          desc: z.string().default(''),
+          aliases: z.array(z.string()).default([]),
+          callType: CallTypeEnum.default(CALL_TYPES.CHAT),
+          capabilities: z.array(z.string()).default([CALL_TYPES.CHAT]),
+          cost: z.string().default(''),
+          weight: z.number().min(0).max(100).default(1.0),
+          headers: z.record(z.string()).default({}),
+        }),
+      )
+      .default([]),
+  });
+
+  const UpdateChannelSchema = CreateChannelSchema.partial();
+
+  const UpdateModelSchema = z
+    .object({
+      code: z.string().min(1).optional(),
+      name: z.string().min(1).optional(),
+      desc: z.string().optional(),
+      aliases: z.array(z.string()).optional(),
+      callType: CallTypeEnum.optional(),
+      capabilities: z.array(z.string()).optional(),
+      cost: z.string().optional(),
+      status: z.enum([MODEL_STATUS.ACTIVE, MODEL_STATUS.OPEN, MODEL_STATUS.DISABLE]).optional(),
+      weight: z.number().min(0).max(100).optional(),
+      headers: z.record(z.string()).optional(),
+    })
+    .partial();
+
+  const PaginationSchema = z.object({
+    page: z.coerce.number().int().min(1).default(CONSTANTS.DEFAULT_PAGE),
+    limit: z
+      .coerce
+      .number()
+      .int()
+      .min(1)
+      .max(CONSTANTS.MAX_PAGE_SIZE)
+      .default(CONSTANTS.DEFAULT_PAGE_SIZE),
+  });
+
+  const LogQuerySchema = PaginationSchema.extend({
+    channel_id: z.string().optional(),
+    model_id: z.string().optional(),
+    status: z.enum([LOG_STATUS.SUCCESS, LOG_STATUS.ERROR]).optional(),
+    start_date: z.string().optional(),
+    end_date: z.string().optional(),
+  });
+
+  return {
+    ProviderEnum,
+    CallTypeEnum,
+    CreateChannelSchema,
+    UpdateChannelSchema,
+    UpdateModelSchema,
+    PaginationSchema,
+    LogQuerySchema,
+  };
+})();
+
+const { CreateChannelSchema, UpdateChannelSchema, UpdateModelSchema, PaginationSchema, LogQuerySchema } = SCHEMAS;
+
+function generateUUID() {
+  return crypto.randomUUID();
 }
- * ```
- * 
- * ### 渠道回退(failover)策略
- * 在模型选择阶段, 按最终评分给模型排序, 依次重试.
- * - 请求 chat 且 stream == true 时, 使用 ai-fallback 包做 failover 业务, github: https://github.com/remorses/ai-fallback
- * - 其他情况, 用队列
- * 
- * ### 渠道的 provider 参数
- * - anthropic: 使用 @ai-sdk/anthropic 的 createAnthropic 创建
- * - google: 使用 @ai-sdk/google 的 createGoogleGenerativeAI 创建
- * - openai: 使用 @ai-sdk/openai 的 createOpenAI 创建
- * - openrouter: 使用 @openrouter/ai-sdk-provider 的 createOpenRouter 创建
- * - pollinations: 使用 ai-sdk-pollinations 的 createPollinations 创建
- * 
- * ### 模型的 callType 参数
- * 请求该模型时需要调用的接口类型, 支持 chat, image_gen, audio_gen, video_gen, transcribe, embedding, 默认 chat
- * 该参数不与用户请求API绑定, 仅与模型请求接口绑定
- * 比如用户请求图片生成, 但找到的模型有 `callType == "chat"`, 就使用 chat 接口处理该请求
- * 提示: 当前遇到模型 callType 与用户请求API不一致时, 直接跳过, 先不处理, 后期再实现.
- * 比如用户请求图片生成, 但找到的模型有 `callType == "chat"`, 则跳过, 后期再实现.
- * 注意: 不同 provider 创建的 AIProvider 支持的接口函数可能是不同的, 需要单独处理
- * 
- * #### 根据 provider 和 callType 获取 Model 对象的伪代码
- * 
- * ```js
-function instantiateLanguageModel(channelName, baseURL, apiKey, headers, provider, callType, model) {
-  const unsupportedCallType = () => {
-    throw new Error(`Provider \`${provider}\` does not support callType \`${callType}\` for model \`${model}\`.`);
+
+function applyCors(response) {
+  const headers = new Headers(response.headers);
+  Object.entries(CORS_HEADERS).forEach(([key, value]) => {
+    headers.set(key, value);
+  });
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
+function jsonResponse(data, status = HTTP_STATUS.OK) {
+  const headers = new Headers({ [HEADERS.CONTENT_TYPE]: JSON_CONTENT_TYPE });
+  Object.entries(CORS_HEADERS).forEach(([key, value]) => headers.set(key, value));
+  return new Response(JSON.stringify(data), { status, headers });
+}
+
+function errorResponse(message, status = HTTP_STATUS.INTERNAL_ERROR) {
+  return jsonResponse({ success: false, error: message }, status);
+}
+
+function handleCorsPreflightRequest() {
+  return new Response(null, { status: 204, headers: CORS_HEADERS });
+}
+
+function parsePagination(url) {
+  const params = Object.fromEntries(url.searchParams.entries());
+  return PaginationSchema.parse(params);
+}
+
+async function parseRequestBody(request) {
+  try {
+    const contentType = request.headers.get(HEADERS.CONTENT_TYPE) || '';
+    if (contentType.includes(JSON_CONTENT_TYPE)) {
+      return await request.json();
+    }
+    if (contentType.includes(MULTIPART_CONTENT_TYPE)) {
+      const form = await request.formData();
+      const body = {};
+      for (const [key, value] of form.entries()) {
+        body[key] = value;
+      }
+      return body;
+    }
+    return await request.json();
+  } catch (error) {
+    return null;
+  }
+}
+
+function extractBearerToken(request) {
+  const auth = request.headers.get(HEADERS.AUTHORIZATION);
+  if (!auth || !auth.startsWith(BEARER_PREFIX)) return null;
+  return auth.slice(BEARER_PREFIX.length).trim();
+}
+
+function extractPathParam(pathname, prefix) {
+  if (!pathname.startsWith(prefix)) return null;
+  const value = pathname.slice(prefix.length);
+  return value.length > 0 ? value : null;
+}
+
+function buildPaginationSQL(pagination) {
+  const limitClause = `LIMIT ${pagination.limit} OFFSET ${(pagination.page - 1) * pagination.limit}`;
+  return { limitClause, offset: (pagination.page - 1) * pagination.limit };
+}
+
+function buildPaginatedResponse(data, total, pagination) {
+  const totalPages = Math.ceil(total / pagination.limit) || 1;
+  return {
+    data,
+    total,
+    page: pagination.page,
+    limit: pagination.limit,
+    total_pages: totalPages,
+  };
+}
+
+function normalizeProvider(provider) {
+  if (provider === PROVIDERS.GEMINI) return PROVIDERS.GOOGLE;
+  if (provider === PROVIDERS.CLAUDE) return PROVIDERS.ANTHROPIC;
+  if (provider === PROVIDERS.OPENAI_COMPATIBLE) return PROVIDERS.OPENAI;
+  return provider;
+}
+
+function nowIso(nowFn) {
+  return nowFn().toISOString();
+}
+
+function toEpochSeconds(date) {
+  return Math.floor(date.getTime() / 1000);
+}
+
+function safeJsonParse(value, fallback) {
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    return fallback;
+  }
+}
+
+function calculateModelScore(modelRow) {
+  return (
+    modelRow.weight * SCORE_WEIGHTS.WEIGHT_FACTOR +
+    modelRow.success_rate * SCORE_WEIGHTS.SUCCESS_RATE_FACTOR -
+    modelRow.avg_latency_ms * SCORE_WEIGHTS.LATENCY_PENALTY -
+    modelRow.consecutive_failures * SCORE_WEIGHTS.FAILURE_PENALTY
+  );
+}
+
+function getCooldownDuration(failures) {
+  for (const tier of CONSTANTS.COOLDOWN_TIERS) {
+    if (failures >= tier.minFailures && failures < tier.maxFailures) {
+      return tier.durationMs;
+    }
+  }
+  return 0;
+}
+
+function ensureArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function createMemoryDb(seed = {}) {
+  const data = {
+    channels: ensureArray(seed.channels).map((item) => ({ ...item })),
+    channel_models: ensureArray(seed.channel_models).map((item) => ({ ...item })),
+    request_logs: ensureArray(seed.request_logs).map((item) => ({ ...item })),
   };
 
-  switch (provider) {
-    case 'gemini':
-    case 'google': {
-      const provider = createGoogleGenerativeAI({ apiKey, baseURL, headers, name: channelName });
-      switch (callType) {
-        case CALL_TYPES.IMAGE_GEN:
-          return provider.image(model);
-        case CALL_TYPES.VIDEO_GEN:
-          return provider.video(model);
-        case CALL_TYPES.AUDIO_GEN:
-        case CALL_TYPES.CHAT:
-          return provider.chat(model);
-        case CALL_TYPES.EMBEDDING:
-          return provider.embedding(model);
-        default:
-          return unsupportedCallType();
-      }
-    }
+  const normalizeSql = (sql) => sql.replace(/\s+/g, ' ').trim();
 
-    case 'claude':
-    case 'anthropic': {
-      const provider = createAnthropic({ apiKey, baseURL, headers, name: channelName });
-      switch (callType) {
-        case CALL_TYPES.CHAT:
-          return provider.chat(model);
-        case CALL_TYPES.EMBEDDING:
-          return provider.embeddingModel(model);
-        default:
-          return unsupportedCallType();
-      }
-    }
+  const SQL_PREFIX = {
+    UPDATE_CHANNEL: normalizeSql(SQL.UPDATE_CHANNEL_BASE),
+    UPDATE_MODEL: normalizeSql(SQL.UPDATE_MODEL_BASE),
+    UPDATE_MODEL_STATS: normalizeSql(SQL.UPDATE_MODEL_STATS_BASE),
+  };
 
-    case 'openrouter': {
-      const provider = createOpenRouter({ apiKey, baseURL, headers, name: channelName });
-      switch (callType) {
-        case CALL_TYPES.IMAGE_GEN:
-          return provider.imageModel(model);
-        case CALL_TYPES.CHAT:
-          return provider.chat(model);
-        case CALL_TYPES.EMBEDDING:
-          return provider.textEmbeddingModel(model);
-        default:
-          return unsupportedCallType();
-      }
-    }
+  function prepare(sql) {
+    const normalized = normalizeSql(sql);
+    let boundParams = [];
 
-    case 'pollinations': {
-      const provider = createPollinations({ apiKey, baseURL, headers, name: channelName });
-      switch (callType) {
-        case CALL_TYPES.IMAGE_GEN:
-          return provider.image(model);
-        case CALL_TYPES.AUDIO_GEN:
-          return provider.speechModel(model);
-        case CALL_TYPES.CHAT:
-          return provider.chat(model);
-        default:
-          return unsupportedCallType();
-      }
-    }
+    const api = {
+      bind: (...params) => {
+        boundParams = params;
+        return api;
+      },
+      all: async () => {
+        const results = runQuery(normalized, boundParams);
+        return { results };
+      },
+      first: async () => {
+        const results = runQuery(normalized, boundParams);
+        return results[0] || null;
+      },
+      run: async () => {
+        runMutation(normalized, boundParams);
+        return { success: true };
+      },
+    };
 
-    case 'openai':
-    case 'openai-compatible':
-    default: {
-      const provider = createOpenAI({ apiKey, baseURL, headers, name: channelName });
-      switch (callType) {
-        case CALL_TYPES.IMAGE_GEN:
-          return provider.image(model);
-        case CALL_TYPES.AUDIO_GEN:
-          return provider.speech(model);
-        case CALL_TYPES.CHAT:
-          return provider.chat(model);
-        case CALL_TYPES.EMBEDDING:
-          return provider.embedding(model);
-        case CALL_TYPES.TRANSCRIBE:
-          return provider.transcription(model);
-        default:
-          return unsupportedCallType();
+    return api;
+  }
+
+  function runQuery(sql, params) {
+    if (sql === normalizeSql(SQL.SELECT_CHANNEL_BY_ID)) {
+      return data.channels.filter((row) => row.id === params[0]);
+    }
+    if (sql === normalizeSql(SQL.SELECT_CHANNEL_BY_KEY)) {
+      return data.channels.filter((row) => row.key === params[0]);
+    }
+    if (sql === normalizeSql(SQL.SELECT_MODELS_BY_CHANNEL_ID)) {
+      return data.channel_models.filter((row) => row.channel_id === params[0]);
+    }
+    if (sql === normalizeSql(SQL.COUNT_CHANNELS)) {
+      return [{ total: data.channels.length }];
+    }
+    if (sql === normalizeSql(SQL.SELECT_CHANNELS_PAGED)) {
+      const limit = params[0];
+      const offset = params[1];
+      return data.channels.slice(offset, offset + limit);
+    }
+    if (sql === normalizeSql(SQL.SELECT_MODEL_BY_ID)) {
+      return data.channel_models.filter((row) => row.id === params[0]);
+    }
+    if (sql === normalizeSql(SQL.SELECT_MODEL_FOR_STATS)) {
+      return data.channel_models.filter((row) => row.id === params[0]);
+    }
+    if (sql === normalizeSql(SQL.SELECT_STATUS_BASE)) {
+      return data.channel_models.map((model) => {
+        const channel = data.channels.find((ch) => ch.id === model.channel_id);
+        return { ...model, channel_name: channel?.name || '' };
+      });
+    }
+    if (sql.startsWith(normalizeSql(SQL.SELECT_LOGS_BASE))) {
+      return data.request_logs.slice();
+    }
+    if (sql.startsWith(normalizeSql(SQL.COUNT_LOGS_BASE))) {
+      return [{ total: data.request_logs.length }];
+    }
+    if (sql.startsWith(normalizeSql(SQL.SELECT_MODELS_BY_IDENTIFIER_BASE))) {
+      const identifier = params[0];
+      const aliasPattern = params[1]?.replace(/%/g, '').replace(/"/g, '');
+      const disabledStatus = params[2];
+      const nowValue = params[3];
+      const channelFilter = params[4];
+      return data.channel_models
+        .filter((row) => row.status !== disabledStatus)
+        .filter((row) => !row.cooldown_until || row.cooldown_until < nowValue)
+        .filter((row) => row.code === identifier || safeJsonParse(row.aliases, []).includes(aliasPattern))
+        .filter((row) => (channelFilter ? row.channel_id === channelFilter : true))
+        .map((row) => {
+          const channel = data.channels.find((ch) => ch.id === row.channel_id);
+          return {
+            ...row,
+            ch_id: channel?.id,
+            ch_name: channel?.name,
+            ch_key: channel?.key,
+            provider: channel?.provider,
+            api_key: channel?.api_key,
+            base_url: channel?.base_url,
+          };
+        });
+    }
+    return [];
+  }
+
+  function runMutation(sql, params) {
+    if (sql === normalizeSql(SQL.INSERT_CHANNEL)) {
+      data.channels.push({
+        id: params[0],
+        name: params[1],
+        key: params[2],
+        provider: params[3],
+        api_key: params[4],
+        base_url: params[5],
+        created_at: params[6],
+        updated_at: params[7],
+      });
+      return;
+    }
+    if (sql === normalizeSql(SQL.INSERT_MODEL)) {
+      data.channel_models.push({
+        id: params[0],
+        channel_id: params[1],
+        code: params[2],
+        name: params[3],
+        desc: params[4],
+        aliases: params[5],
+        call_type: params[6],
+        capabilities: params[7],
+        cost: params[8],
+        status: params[9],
+        weight: params[10],
+        avg_latency_ms: params[11],
+        success_rate: params[12],
+        error_rate: params[13],
+        consecutive_failures: params[14],
+        cooldown_until: params[15],
+        last_updated: params[16],
+        headers: params[17],
+      });
+      return;
+    }
+    if (sql === normalizeSql(SQL.DELETE_MODELS_BY_CHANNEL_ID)) {
+      data.channel_models = data.channel_models.filter((row) => row.channel_id !== params[0]);
+      return;
+    }
+    if (sql === normalizeSql(SQL.DELETE_CHANNEL)) {
+      data.channels = data.channels.filter((row) => row.id !== params[0]);
+      return;
+    }
+    if (sql === normalizeSql(SQL.DELETE_MODEL)) {
+      data.channel_models = data.channel_models.filter((row) => row.id !== params[0]);
+      return;
+    }
+    if (sql === normalizeSql(SQL.INSERT_LOG)) {
+      data.request_logs.push({
+        id: params[0],
+        channel_id: params[1],
+        channel_name: params[2],
+        model_id: params[3],
+        model_code: params[4],
+        call_type: params[5],
+        request_model: params[6],
+        status: params[7],
+        error_message: params[8],
+        latency_ms: params[9],
+        input_tokens: params[10],
+        output_tokens: params[11],
+        created_at: params[12],
+      });
+      return;
+    }
+    if (sql.startsWith(SQL_PREFIX.UPDATE_CHANNEL)) {
+      const id = params[params.length - 1];
+      const channel = data.channels.find((row) => row.id === id);
+      if (!channel) return;
+      const updates = params.slice(0, params.length - 1);
+      const setSegments = sql.replace(SQL_PREFIX.UPDATE_CHANNEL, '').split(',').map((s) => s.trim());
+      setSegments.forEach((segment, index) => {
+        const field = segment.split('=')[0].trim();
+        channel[field] = updates[index];
+      });
+      return;
+    }
+    if (sql.startsWith(SQL_PREFIX.UPDATE_MODEL_STATS) || sql.startsWith(SQL_PREFIX.UPDATE_MODEL)) {
+      const id = params[params.length - 1];
+      const model = data.channel_models.find((row) => row.id === id);
+      if (!model) return;
+      const updates = params.slice(0, params.length - 1);
+      const setSegments = sql
+        .replace(SQL_PREFIX.UPDATE_MODEL_STATS, '')
+        .replace(SQL_PREFIX.UPDATE_MODEL, '')
+        .split(',')
+        .map((s) => s.trim());
+      setSegments.forEach((segment, index) => {
+        const field = segment.split('=')[0].trim();
+        model[field] = updates[index];
+      });
+      return;
+    }
+  }
+
+  return { prepare, data };
+}
+
+async function initializeDatabase(env) {
+  if (!env?.DB) {
+    throw new Error('Database is not configured');
+  }
+  if (env.__dbInitialized) {
+    return;
+  }
+
+  const ddl = SQL.DDL;
+  const statements = [
+    ddl.CREATE_CHANNELS_TABLE,
+    ddl.CREATE_CHANNEL_MODELS_TABLE,
+    ddl.CREATE_REQUEST_LOGS_TABLE,
+    ddl.CREATE_INDEX_CHANNEL_MODELS_CHANNEL_ID,
+    ddl.CREATE_INDEX_CHANNEL_MODELS_CODE,
+    ddl.CREATE_INDEX_CHANNEL_MODELS_STATUS,
+    ddl.CREATE_INDEX_CHANNEL_MODELS_CALL_TYPE,
+    ddl.CREATE_INDEX_REQUEST_LOGS_CREATED_AT,
+    ddl.CREATE_INDEX_REQUEST_LOGS_CHANNEL_ID,
+    ddl.CREATE_INDEX_REQUEST_LOGS_MODEL_ID,
+    ddl.CREATE_INDEX_REQUEST_LOGS_STATUS,
+  ];
+
+  for (const statement of statements) {
+    await env.DB.prepare(statement).run();
+  }
+
+  env.__dbInitialized = true;
+}
+
+function makeTestEnv({ db }) {
+  return {
+    ADMIN_KEY: 'admin-key',
+    DB: db,
+    ctx: { waitUntil: (promise) => promise },
+  };
+}
+
+function createApp(deps = {}) {
+  const providers = {
+    createOpenAI: deps.providers?.createOpenAI || createOpenAI,
+    createGoogleGenerativeAI: deps.providers?.createGoogleGenerativeAI || createGoogleGenerativeAI,
+    createAnthropic: deps.providers?.createAnthropic || createAnthropic,
+    createOpenRouter: deps.providers?.createOpenRouter || createOpenRouter,
+    createPollinations: deps.providers?.createPollinations || createPollinations,
+  };
+
+  const ai = {
+    generateText: deps.ai?.generateText || generateText,
+    streamText: deps.ai?.streamText || streamText,
+    generateImage: deps.ai?.generateImage || generateImage,
+    experimental_generateVideo: deps.ai?.experimental_generateVideo || experimental_generateVideo,
+    experimental_generateSpeech: deps.ai?.experimental_generateSpeech || experimental_generateSpeech,
+    experimental_transcribe: deps.ai?.experimental_transcribe || experimental_transcribe,
+    embed: deps.ai?.embed || embed,
+  };
+
+  const createFallbackModel = deps.createFallback || createFallback;
+  const nowFn = deps.now || (() => new Date());
+  const uuidFn = deps.uuid || generateUUID;
+
+  function authenticate(request, env) {
+    const token = extractBearerToken(request);
+    return Boolean(token && env.ADMIN_KEY && token === env.ADMIN_KEY);
+  }
+
+  function isAdmin(request, env) {
+    return authenticate(request, env);
+  }
+
+  function getWaitUntil(env) {
+    return env?.ctx?.waitUntil ? env.ctx.waitUntil.bind(env.ctx) : (promise) => promise;
+  }
+
+  function instantiateLanguageModel(channelName, baseURL, apiKey, headers, provider, callType, modelCode) {
+    const normalizedProvider = normalizeProvider(provider);
+    const unsupportedCallType = () => {
+      throw new Error(`Provider ${normalizedProvider} does not support callType ${callType} for model ${modelCode}`);
+    };
+
+    switch (normalizedProvider) {
+      case PROVIDERS.GOOGLE: {
+        const providerInstance = providers.createGoogleGenerativeAI({ apiKey, baseURL, headers, name: channelName });
+        switch (callType) {
+          case CALL_TYPES.IMAGE_GEN:
+            return providerInstance.image(modelCode);
+          case CALL_TYPES.VIDEO_GEN:
+            return providerInstance.video(modelCode);
+          case CALL_TYPES.AUDIO_GEN:
+          case CALL_TYPES.CHAT:
+            return providerInstance.chat(modelCode);
+          case CALL_TYPES.EMBEDDING:
+            return providerInstance.embedding(modelCode);
+          default:
+            return unsupportedCallType();
+        }
+      }
+      case PROVIDERS.ANTHROPIC: {
+        const providerInstance = providers.createAnthropic({ apiKey, baseURL, headers, name: channelName });
+        switch (callType) {
+          case CALL_TYPES.CHAT:
+            return providerInstance.chat(modelCode);
+          case CALL_TYPES.EMBEDDING:
+            return providerInstance.embeddingModel(modelCode);
+          default:
+            return unsupportedCallType();
+        }
+      }
+      case PROVIDERS.OPENROUTER: {
+        const providerInstance = providers.createOpenRouter({ apiKey, baseURL, headers, name: channelName });
+        switch (callType) {
+          case CALL_TYPES.IMAGE_GEN:
+            return providerInstance.imageModel(modelCode);
+          case CALL_TYPES.CHAT:
+            return providerInstance.chat(modelCode);
+          case CALL_TYPES.EMBEDDING:
+            return providerInstance.textEmbeddingModel(modelCode);
+          default:
+            return unsupportedCallType();
+        }
+      }
+      case PROVIDERS.POLLINATIONS: {
+        const providerInstance = providers.createPollinations({ apiKey, baseURL, headers, name: channelName });
+        switch (callType) {
+          case CALL_TYPES.IMAGE_GEN:
+            return providerInstance.image(modelCode);
+          case CALL_TYPES.AUDIO_GEN:
+            return providerInstance.speechModel(modelCode);
+          case CALL_TYPES.CHAT:
+            return providerInstance.chat(modelCode);
+          default:
+            return unsupportedCallType();
+        }
+      }
+      case PROVIDERS.OPENAI:
+      default: {
+        const providerInstance = providers.createOpenAI({ apiKey, baseURL, headers, name: channelName });
+        switch (callType) {
+          case CALL_TYPES.IMAGE_GEN:
+            return providerInstance.image(modelCode);
+          case CALL_TYPES.AUDIO_GEN:
+            return providerInstance.speech(modelCode);
+          case CALL_TYPES.CHAT:
+            return providerInstance.chat(modelCode);
+          case CALL_TYPES.EMBEDDING:
+            return providerInstance.embedding(modelCode);
+          case CALL_TYPES.TRANSCRIBE:
+            return providerInstance.transcription(modelCode);
+          default:
+            return unsupportedCallType();
+        }
       }
     }
   }
-}
- * ```
- *
- * @param {*} request 
- * 
- * ### /v1/* 
- * OpenAI /v1 请求格式, 完全兼容模式, 支持 `x-channel-id`, 表示该请求走指定的渠道代理
- * 
- * - `/v1/chat/completions`: 聊天
- * - `/v1/images/generations`: 图片生成
- * - `/v1/video/generations`: 视频生成
- * - `/v1/audio/speech`: 语音生成
- * - `/v1/audio/transcriptions`: 语音识别
- * - `/v1/embeddings`: 向量化
- * - `/v1/models`: 模型列表
- * 
- * ### /api/*
- * 管理员操作
- * 
- * #### POST /api/channel
- * 提交一个AI渠道
- * 
- * #### GET/DELETE/PUT /api/channel/{id}
- * 获取/删除/更新一个指定的AI渠道
- * 
- * #### GET /api/channels
- * 获取渠道列表, 支持分页
- * 
- * #### GET/DELETE/PUT /api/model/{id}
- * 获取/删除/更新一个指定的AI模型
- * 
- * #### GET /api/log
- * 获取AI请求日志, 支持分页
- * 
- * #### GET /status
- * 获取所有模型的状态, 不需要鉴权
- * 
- * @param {*} env ### 环境变量
- * - ADMIN_KEY 管理员使用秘钥
- */
-async function handleRequest(request, env) {
 
+  async function executeAIRequest(aiModel, callType, body) {
+    if (callType === CALL_TYPES.CHAT) {
+      return ai.generateText({ model: aiModel, messages: body.messages, prompt: body.prompt, maxTokens: body.max_tokens, temperature: body.temperature });
+    }
+    if (callType === CALL_TYPES.IMAGE_GEN) {
+      return ai.generateImage({ model: aiModel, prompt: body.prompt, n: body.n, size: body.size, aspectRatio: body.aspect_ratio, seed: body.seed });
+    }
+    if (callType === CALL_TYPES.VIDEO_GEN) {
+      return ai.experimental_generateVideo({ model: aiModel, prompt: body.prompt });
+    }
+    if (callType === CALL_TYPES.AUDIO_GEN) {
+      return ai.experimental_generateSpeech({ model: aiModel, text: body.input, voice: body.voice, outputFormat: body.format, speed: body.speed });
+    }
+    if (callType === CALL_TYPES.TRANSCRIBE) {
+      return ai.experimental_transcribe({ model: aiModel, audio: body.file });
+    }
+    if (callType === CALL_TYPES.EMBEDDING) {
+      return ai.embed({ model: aiModel, value: body.input });
+    }
+    throw new Error(`Unsupported call type ${callType}`);
+  }
+
+  function formatAIResponse(result, callType, modelCode) {
+    const created = toEpochSeconds(nowFn());
+    if (callType === CALL_TYPES.CHAT) {
+      return jsonResponse({
+        id: `${CONSTANTS.UUID_PREFIX}${uuidFn()}`,
+        object: OPENAI_OBJECTS.CHAT_COMPLETION,
+        created,
+        model: modelCode,
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: result.text || '' },
+            finish_reason: 'stop',
+          },
+        ],
+        usage: {
+          prompt_tokens: result.usage?.promptTokens || 0,
+          completion_tokens: result.usage?.completionTokens || 0,
+          total_tokens: result.usage?.totalTokens || 0,
+        },
+      });
+    }
+
+    if (callType === CALL_TYPES.IMAGE_GEN) {
+      const data = (result.images || []).map((image) => ({ b64_json: image.base64 }));
+      return jsonResponse({ created, data });
+    }
+
+    if (callType === CALL_TYPES.VIDEO_GEN) {
+      const data = (result.videos || []).map((video) => ({ url: `data:${video.mediaType};base64,${video.base64}` }));
+      return jsonResponse({ created, data });
+    }
+
+    if (callType === CALL_TYPES.AUDIO_GEN) {
+      const mediaType = result.audio?.mediaType || 'audio/mpeg';
+      const headers = new Headers({ [HEADERS.CONTENT_TYPE]: mediaType });
+      Object.entries(CORS_HEADERS).forEach(([key, value]) => headers.set(key, value));
+      return new Response(result.audio?.data || new Uint8Array(), { status: HTTP_STATUS.OK, headers });
+    }
+
+    if (callType === CALL_TYPES.TRANSCRIBE) {
+      return jsonResponse({ text: result.text || '' });
+    }
+
+    if (callType === CALL_TYPES.EMBEDDING) {
+      return jsonResponse({
+        object: OPENAI_OBJECTS.LIST,
+        data: [{ object: OPENAI_OBJECTS.EMBEDDING, embedding: result.embedding || [], index: 0 }],
+        model: modelCode,
+        usage: { prompt_tokens: result.usage?.promptTokens || 0, total_tokens: result.usage?.totalTokens || 0 },
+      });
+    }
+
+    return errorResponse(ERROR_MESSAGES.INTERNAL_ERROR, HTTP_STATUS.INTERNAL_ERROR);
+  }
+
+  function toSseChunk(payload) {
+    return `data: ${JSON.stringify(payload)}\n\n`;
+  }
+
+  function sseDoneChunk() {
+    return `data: ${STREAM_DONE}\n\n`;
+  }
+
+  function createSseResponse(textStream, modelCode) {
+    const created = toEpochSeconds(nowFn());
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        for await (const chunk of textStream) {
+          const payload = {
+            id: `${CONSTANTS.UUID_PREFIX}${uuidFn()}`,
+            object: OPENAI_OBJECTS.CHAT_COMPLETION_CHUNK,
+            created,
+            model: modelCode,
+            choices: [{ index: 0, delta: { content: chunk }, finish_reason: null }],
+          };
+          controller.enqueue(encoder.encode(toSseChunk(payload)));
+        }
+        controller.enqueue(encoder.encode(sseDoneChunk()));
+        controller.close();
+      },
+    });
+    const headers = new Headers({ [HEADERS.CONTENT_TYPE]: SSE_CONTENT_TYPE });
+    Object.entries(CORS_HEADERS).forEach(([key, value]) => headers.set(key, value));
+    return new Response(stream, { status: HTTP_STATUS.OK, headers });
+  }
+
+  async function writeLog(entry, env) {
+    const logId = uuidFn();
+    const createdAt = nowIso(nowFn);
+    await env.DB
+      .prepare(SQL.INSERT_LOG)
+      .bind(
+        logId,
+        entry.channel_id,
+        entry.channel_name,
+        entry.model_id,
+        entry.model_code,
+        entry.call_type,
+        entry.request_model,
+        entry.status,
+        entry.error_message,
+        entry.latency_ms,
+        entry.input_tokens,
+        entry.output_tokens,
+        createdAt,
+      )
+      .run();
+  }
+
+  async function recordSuccess(modelId, latencyMs, env) {
+    const model = await env.DB.prepare(SQL.SELECT_MODEL_FOR_STATS).bind(modelId).first();
+    if (!model) return;
+
+    const newAvg = model.avg_latency_ms * (1 - EMA_ALPHA) + latencyMs * EMA_ALPHA;
+    const newSuccess = model.success_rate * (1 - EMA_ALPHA) + 1 * EMA_ALPHA;
+    const newError = 1 - newSuccess;
+    const updatedAt = nowIso(nowFn);
+
+    const setClause = `avg_latency_ms = ?1, success_rate = ?2, error_rate = ?3, consecutive_failures = ?4, cooldown_until = ?5, status = ?6, last_updated = ?7`;
+    const sql = `${SQL.UPDATE_MODEL_STATS_BASE}${setClause} WHERE id = ?8`;
+
+    await env.DB
+      .prepare(sql)
+      .bind(newAvg, newSuccess, newError, 0, null, MODEL_STATUS.ACTIVE, updatedAt, modelId)
+      .run();
+  }
+
+  async function recordFailure(modelId, env) {
+    const model = await env.DB.prepare(SQL.SELECT_MODEL_FOR_STATS).bind(modelId).first();
+    if (!model) return;
+
+    const newFailures = model.consecutive_failures + 1;
+    const newSuccess = model.success_rate * (1 - EMA_ALPHA) + 0 * EMA_ALPHA;
+    const newError = 1 - newSuccess;
+    const cooldownMs = getCooldownDuration(newFailures);
+    const cooldownUntil = cooldownMs > 0 ? new Date(nowFn().getTime() + cooldownMs).toISOString() : null;
+    const newStatus = cooldownMs > 0 ? MODEL_STATUS.OPEN : model.status;
+    const updatedAt = nowIso(nowFn);
+
+    const setClause = `consecutive_failures = ?1, success_rate = ?2, error_rate = ?3, cooldown_until = ?4, status = ?5, last_updated = ?6`;
+    const sql = `${SQL.UPDATE_MODEL_STATS_BASE}${setClause} WHERE id = ?7`;
+
+    await env.DB
+      .prepare(sql)
+      .bind(newFailures, newSuccess, newError, cooldownUntil, newStatus, updatedAt, modelId)
+      .run();
+  }
+
+  async function selectModels(modelIdentifier, userCallType, env, channelId) {
+    const nowValue = nowIso(nowFn);
+    const baseQuery = SQL.SELECT_MODELS_BY_IDENTIFIER_BASE;
+    const hasChannel = Boolean(channelId);
+    const query = hasChannel ? `${baseQuery} AND cm.channel_id = ?5` : baseQuery;
+    const params = [modelIdentifier, `\"${modelIdentifier}\"`, MODEL_STATUS.DISABLE, nowValue];
+    if (hasChannel) params.push(channelId);
+    const { results } = await env.DB.prepare(query).bind(...params).all();
+    if (!results || results.length === 0) return [];
+
+    const matched = results.filter((row) => row.call_type === userCallType);
+    if (matched.length === 0) return [];
+
+    return matched
+      .map((row) => ({
+        channel: {
+          id: row.ch_id,
+          name: row.ch_name,
+          key: row.ch_key,
+          provider: row.provider,
+          api_key: row.api_key,
+          base_url: row.base_url,
+        },
+        model: row,
+        score: calculateModelScore(row),
+      }))
+      .sort((a, b) => b.score - a.score);
+  }
+
+  async function handleV1Proxy(request, env, userCallType) {
+    const body = await parseRequestBody(request);
+    if (!body || !body.model) {
+      return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+    }
+
+    const channelId = request.headers.get(HEADERS.CHANNEL_ID) || undefined;
+    const isStream = userCallType === CALL_TYPES.CHAT && body.stream === true;
+    const candidates = await selectModels(body.model, userCallType, env, channelId);
+    if (candidates.length === 0) {
+      return errorResponse(ERROR_MESSAGES.NO_MODEL_AVAILABLE, HTTP_STATUS.SERVICE_UNAVAILABLE);
+    }
+
+    const waitUntil = getWaitUntil(env);
+
+    if (isStream) {
+      const models = candidates.map((candidate) =>
+        instantiateLanguageModel(
+          candidate.channel.name,
+          candidate.channel.base_url,
+          candidate.channel.api_key,
+          safeJsonParse(candidate.model.headers, {}),
+          candidate.channel.provider,
+          candidate.model.call_type,
+          candidate.model.code,
+        ),
+      );
+
+      const modelMap = new Map(candidates.map((candidate) => [candidate.model.code, candidate]));
+
+      const fallbackModel = createFallbackModel({
+        models,
+        onError: async (error, modelId) => {
+          const selection = modelMap.get(modelId);
+          if (!selection) return;
+          const latencyMs = 0;
+          waitUntil(recordFailure(selection.model.id, env));
+          waitUntil(
+            writeLog(
+              {
+                channel_id: selection.channel.id,
+                channel_name: selection.channel.name,
+                model_id: selection.model.id,
+                model_code: selection.model.code,
+                call_type: userCallType,
+                request_model: body.model,
+                status: LOG_STATUS.ERROR,
+                error_message: error?.message || ERROR_MESSAGES.PROVIDER_ERROR,
+                latency_ms: latencyMs,
+                input_tokens: 0,
+                output_tokens: 0,
+              },
+              env,
+            ),
+          );
+        },
+      });
+
+      const startTime = nowFn().getTime();
+      const result = await ai.streamText({
+        model: fallbackModel,
+        messages: body.messages,
+        prompt: body.prompt,
+        maxTokens: body.max_tokens,
+        temperature: body.temperature,
+        onFinish: async (event) => {
+          const latencyMs = nowFn().getTime() - startTime;
+          const selection = modelMap.get(fallbackModel.modelId) || candidates[0];
+          waitUntil(recordSuccess(selection.model.id, latencyMs, env));
+          waitUntil(
+            writeLog(
+              {
+                channel_id: selection.channel.id,
+                channel_name: selection.channel.name,
+                model_id: selection.model.id,
+                model_code: selection.model.code,
+                call_type: userCallType,
+                request_model: body.model,
+                status: LOG_STATUS.SUCCESS,
+                error_message: '',
+                latency_ms: latencyMs,
+                input_tokens: event.usage?.promptTokens || 0,
+                output_tokens: event.usage?.completionTokens || 0,
+              },
+              env,
+            ),
+          );
+        },
+      });
+
+      return createSseResponse(result.textStream, candidates[0].model.code);
+    }
+
+    let lastError = null;
+    for (const selection of candidates) {
+      const startTime = nowFn().getTime();
+      try {
+        const aiModel = instantiateLanguageModel(
+          selection.channel.name,
+          selection.channel.base_url,
+          selection.channel.api_key,
+          safeJsonParse(selection.model.headers, {}),
+          selection.channel.provider,
+          selection.model.call_type,
+          selection.model.code,
+        );
+
+        const result = await executeAIRequest(aiModel, selection.model.call_type, body);
+        const latencyMs = nowFn().getTime() - startTime;
+
+        waitUntil(recordSuccess(selection.model.id, latencyMs, env));
+        waitUntil(
+          writeLog(
+            {
+              channel_id: selection.channel.id,
+              channel_name: selection.channel.name,
+              model_id: selection.model.id,
+              model_code: selection.model.code,
+              call_type: userCallType,
+              request_model: body.model,
+              status: LOG_STATUS.SUCCESS,
+              error_message: '',
+              latency_ms: latencyMs,
+              input_tokens: result.usage?.promptTokens || 0,
+              output_tokens: result.usage?.completionTokens || 0,
+            },
+            env,
+          ),
+        );
+
+        return formatAIResponse(result, selection.model.call_type, selection.model.code);
+      } catch (error) {
+        const latencyMs = nowFn().getTime() - startTime;
+        lastError = error;
+        waitUntil(recordFailure(selection.model.id, env));
+        waitUntil(
+          writeLog(
+            {
+              channel_id: selection.channel.id,
+              channel_name: selection.channel.name,
+              model_id: selection.model.id,
+              model_code: selection.model.code,
+              call_type: userCallType,
+              request_model: body.model,
+              status: LOG_STATUS.ERROR,
+              error_message: error?.message || ERROR_MESSAGES.PROVIDER_ERROR,
+              latency_ms: latencyMs,
+              input_tokens: 0,
+              output_tokens: 0,
+            },
+            env,
+          ),
+        );
+      }
+    }
+
+    return errorResponse(lastError?.message || ERROR_MESSAGES.PROVIDER_ERROR, HTTP_STATUS.INTERNAL_ERROR);
+  }
+
+  async function handleModelsList(request, env) {
+    const { results } = await env.DB.prepare(SQL.SELECT_STATUS_BASE).all();
+    const seen = new Set();
+    const data = results
+      .filter((row) => row.status !== MODEL_STATUS.DISABLE)
+      .filter((row) => {
+        if (seen.has(row.code)) return false;
+        seen.add(row.code);
+        return true;
+      })
+      .map((row) => ({
+        id: row.code,
+        object: OPENAI_OBJECTS.MODEL,
+        created: toEpochSeconds(nowFn()),
+        owned_by: row.channel_name || 'unknown',
+      }));
+
+    return jsonResponse({ object: OPENAI_OBJECTS.LIST, data });
+  }
+
+  async function handleCreateChannel(request, env) {
+    const body = await parseRequestBody(request);
+    if (!body) return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+
+    let parsed;
+    try {
+      parsed = CreateChannelSchema.parse(body);
+    } catch (error) {
+      return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+    }
+
+    const existing = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_KEY).bind(parsed.key).first();
+    if (existing) {
+      return errorResponse(ERROR_MESSAGES.FORBIDDEN, HTTP_STATUS.FORBIDDEN);
+    }
+
+    const channelId = uuidFn();
+    const timestamp = nowIso(nowFn);
+
+    await env.DB
+      .prepare(SQL.INSERT_CHANNEL)
+      .bind(channelId, parsed.name, parsed.key, parsed.provider, parsed.apiKey, parsed.baseURL, timestamp, timestamp)
+      .run();
+
+    for (const model of parsed.models) {
+      const modelId = uuidFn();
+      await env.DB
+        .prepare(SQL.INSERT_MODEL)
+        .bind(
+          modelId,
+          channelId,
+          model.code,
+          model.name,
+          model.desc,
+          JSON.stringify(model.aliases || []),
+          model.callType,
+          JSON.stringify(model.capabilities || []),
+          model.cost,
+          MODEL_STATUS.ACTIVE,
+          model.weight,
+          0,
+          1,
+          0,
+          0,
+          null,
+          timestamp,
+          JSON.stringify(model.headers || {}),
+        )
+        .run();
+    }
+
+    return handleGetChannel(channelId, env, HTTP_STATUS.CREATED);
+  }
+
+  async function handleGetChannel(channelId, env, status = HTTP_STATUS.OK) {
+    const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(channelId).first();
+    if (!channel) return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    const { results: models } = await env.DB.prepare(SQL.SELECT_MODELS_BY_CHANNEL_ID).bind(channelId).all();
+    return jsonResponse({ success: true, data: { ...channel, models } }, status);
+  }
+
+  async function handleUpdateChannel(channelId, request, env) {
+    const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(channelId).first();
+    if (!channel) return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+
+    const body = await parseRequestBody(request);
+    if (!body) return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+
+    let parsed;
+    try {
+      parsed = UpdateChannelSchema.parse(body);
+    } catch (error) {
+      return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+    }
+
+    const updates = [];
+    const values = [];
+    const pushUpdate = (field, value) => {
+      updates.push(`${field} = ?${updates.length + 1}`);
+      values.push(value);
+    };
+
+    if (parsed.name) pushUpdate('name', parsed.name);
+    if (parsed.key) pushUpdate('key', parsed.key);
+    if (parsed.provider) pushUpdate('provider', parsed.provider);
+    if (parsed.apiKey) pushUpdate('api_key', parsed.apiKey);
+    if (parsed.baseURL !== undefined) pushUpdate('base_url', parsed.baseURL);
+
+    pushUpdate('updated_at', nowIso(nowFn));
+
+    if (updates.length > 0) {
+      const sql = `${SQL.UPDATE_CHANNEL_BASE}${updates.join(', ')} WHERE id = ?${updates.length + 1}`;
+      await env.DB.prepare(sql).bind(...values, channelId).run();
+    }
+
+    if (parsed.models) {
+      await env.DB.prepare(SQL.DELETE_MODELS_BY_CHANNEL_ID).bind(channelId).run();
+      const timestamp = nowIso(nowFn);
+      for (const model of parsed.models) {
+        const modelId = uuidFn();
+        await env.DB
+          .prepare(SQL.INSERT_MODEL)
+          .bind(
+            modelId,
+            channelId,
+            model.code,
+            model.name,
+            model.desc || '',
+            JSON.stringify(model.aliases || []),
+            model.callType || CALL_TYPES.CHAT,
+            JSON.stringify(model.capabilities || []),
+            model.cost || '',
+            MODEL_STATUS.ACTIVE,
+            model.weight ?? 1,
+            0,
+            1,
+            0,
+            0,
+            null,
+            timestamp,
+            JSON.stringify(model.headers || {}),
+          )
+          .run();
+      }
+    }
+
+    return handleGetChannel(channelId, env, HTTP_STATUS.OK);
+  }
+
+  async function handleDeleteChannel(channelId, env) {
+    const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(channelId).first();
+    if (!channel) return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+
+    await env.DB.prepare(SQL.DELETE_MODELS_BY_CHANNEL_ID).bind(channelId).run();
+    await env.DB.prepare(SQL.DELETE_CHANNEL).bind(channelId).run();
+
+    return jsonResponse({ success: true }, HTTP_STATUS.OK);
+  }
+
+  async function handleListChannels(request, env) {
+    const url = new URL(request.url);
+    const pagination = parsePagination(url);
+    const { results } = await env.DB.prepare(SQL.COUNT_CHANNELS).all();
+    const total = results?.[0]?.total || 0;
+    const { results: channels } = await env.DB
+      .prepare(SQL.SELECT_CHANNELS_PAGED)
+      .bind(pagination.limit, (pagination.page - 1) * pagination.limit)
+      .all();
+
+    const data = [];
+    for (const channel of channels) {
+      const { results: models } = await env.DB.prepare(SQL.SELECT_MODELS_BY_CHANNEL_ID).bind(channel.id).all();
+      data.push({ ...channel, models });
+    }
+
+    return jsonResponse(buildPaginatedResponse(data, total, pagination), HTTP_STATUS.OK);
+  }
+
+  async function handleGetModel(modelId, env) {
+    const model = await env.DB.prepare(SQL.SELECT_MODEL_BY_ID).bind(modelId).first();
+    if (!model) return errorResponse(ERROR_MESSAGES.MODEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    return jsonResponse({ success: true, data: model }, HTTP_STATUS.OK);
+  }
+
+  async function handleUpdateModel(modelId, request, env) {
+    const model = await env.DB.prepare(SQL.SELECT_MODEL_BY_ID).bind(modelId).first();
+    if (!model) return errorResponse(ERROR_MESSAGES.MODEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+
+    const body = await parseRequestBody(request);
+    if (!body) return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+
+    let parsed;
+    try {
+      parsed = UpdateModelSchema.parse(body);
+    } catch (error) {
+      return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+    }
+
+    const updates = [];
+    const values = [];
+    const pushUpdate = (field, value) => {
+      updates.push(`${field} = ?${updates.length + 1}`);
+      values.push(value);
+    };
+
+    if (parsed.code) pushUpdate('code', parsed.code);
+    if (parsed.name) pushUpdate('name', parsed.name);
+    if (parsed.desc !== undefined) pushUpdate('desc', parsed.desc);
+    if (parsed.aliases) pushUpdate('aliases', JSON.stringify(parsed.aliases));
+    if (parsed.callType) pushUpdate('call_type', parsed.callType);
+    if (parsed.capabilities) pushUpdate('capabilities', JSON.stringify(parsed.capabilities));
+    if (parsed.cost !== undefined) pushUpdate('cost', parsed.cost);
+    if (parsed.status) pushUpdate('status', parsed.status);
+    if (parsed.weight !== undefined) pushUpdate('weight', parsed.weight);
+    if (parsed.headers) pushUpdate('headers', JSON.stringify(parsed.headers));
+    pushUpdate('last_updated', nowIso(nowFn));
+
+    const sql = `${SQL.UPDATE_MODEL_BASE}${updates.join(', ')} WHERE id = ?${updates.length + 1}`;
+    await env.DB.prepare(sql).bind(...values, modelId).run();
+
+    return handleGetModel(modelId, env);
+  }
+
+  async function handleDeleteModel(modelId, env) {
+    const model = await env.DB.prepare(SQL.SELECT_MODEL_BY_ID).bind(modelId).first();
+    if (!model) return errorResponse(ERROR_MESSAGES.MODEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    await env.DB.prepare(SQL.DELETE_MODEL).bind(modelId).run();
+    return jsonResponse({ success: true }, HTTP_STATUS.OK);
+  }
+
+  async function handleGetLogs(request, env) {
+    const url = new URL(request.url);
+    let parsed;
+    try {
+      parsed = LogQuerySchema.parse(Object.fromEntries(url.searchParams.entries()));
+    } catch (error) {
+      return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+    }
+
+    const { page, limit, channel_id, model_id, status, start_date, end_date } = parsed;
+    const filters = [];
+    const values = [];
+    const pushFilter = (expression, value) => {
+      filters.push(expression);
+      values.push(value);
+    };
+
+    if (channel_id) pushFilter('channel_id = ?' + (values.length + 1), channel_id);
+    if (model_id) pushFilter('model_id = ?' + (values.length + 1), model_id);
+    if (status) pushFilter('status = ?' + (values.length + 1), status);
+    if (start_date) pushFilter('created_at >= ?' + (values.length + 1), start_date);
+    if (end_date) pushFilter('created_at <= ?' + (values.length + 1), end_date);
+
+    const whereClause = filters.length ? ` WHERE ${filters.join(' AND ')}` : '';
+    const listSql = `${SQL.SELECT_LOGS_BASE}${whereClause} ORDER BY created_at DESC LIMIT ?${values.length + 1} OFFSET ?${values.length + 2}`;
+    const countSql = `${SQL.COUNT_LOGS_BASE}${whereClause}`;
+
+    const { results: totalRows } = await env.DB.prepare(countSql).bind(...values).all();
+    const total = totalRows?.[0]?.total || 0;
+
+    const { results } = await env.DB
+      .prepare(listSql)
+      .bind(...values, limit, (page - 1) * limit)
+      .all();
+
+    return jsonResponse(buildPaginatedResponse(results, total, { page, limit }), HTTP_STATUS.OK);
+  }
+
+  async function handleStatus(env) {
+    const { results } = await env.DB.prepare(SQL.SELECT_STATUS_BASE).all();
+    const models = results.map((row) => ({
+      code: row.code,
+      name: row.name,
+      status: row.status,
+      channel_name: row.channel_name,
+      success_rate: row.success_rate,
+      avg_latency_ms: row.avg_latency_ms,
+      consecutive_failures: row.consecutive_failures,
+    }));
+    return jsonResponse({ models }, HTTP_STATUS.OK);
+  }
+
+  async function routeAdminApi(request, env) {
+    const url = new URL(request.url);
+    const { pathname } = url;
+    if (!isAdmin(request, env)) {
+      return errorResponse(ERROR_MESSAGES.UNAUTHORIZED, HTTP_STATUS.UNAUTHORIZED);
+    }
+
+    if (pathname === ROUTES.API_CHANNELS && request.method === METHODS.GET) {
+      return handleListChannels(request, env);
+    }
+
+    if (pathname === ROUTES.API_LOG && request.method === METHODS.GET) {
+      return handleGetLogs(request, env);
+    }
+
+    if (pathname === ROUTES.API_CHANNEL && request.method === METHODS.POST) {
+      return handleCreateChannel(request, env);
+    }
+
+    const channelId = extractPathParam(pathname, ROUTES.API_CHANNEL_PREFIX);
+    if (channelId) {
+      if (request.method === METHODS.GET) return handleGetChannel(channelId, env);
+      if (request.method === METHODS.PUT) return handleUpdateChannel(channelId, request, env);
+      if (request.method === METHODS.DELETE) return handleDeleteChannel(channelId, env);
+    }
+
+    const modelId = extractPathParam(pathname, ROUTES.API_MODEL_PREFIX);
+    if (modelId) {
+      if (request.method === METHODS.GET) return handleGetModel(modelId, env);
+      if (request.method === METHODS.PUT) return handleUpdateModel(modelId, request, env);
+      if (request.method === METHODS.DELETE) return handleDeleteModel(modelId, env);
+    }
+
+    return errorResponse(ERROR_MESSAGES.NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+  }
+
+  async function routeRequest(request, env) {
+    const url = new URL(request.url);
+    const { pathname } = url;
+
+    if (pathname === ROUTES.STATUS && request.method === METHODS.GET) {
+      return handleStatus(env);
+    }
+
+    if (pathname === ROUTES.V1_MODELS && request.method === METHODS.GET) {
+      if (!authenticate(request, env)) return errorResponse(ERROR_MESSAGES.UNAUTHORIZED, HTTP_STATUS.UNAUTHORIZED);
+      return handleModelsList(request, env);
+    }
+
+    if (PATH_TO_CALL_TYPE[pathname] && request.method === METHODS.POST) {
+      if (!authenticate(request, env)) return errorResponse(ERROR_MESSAGES.UNAUTHORIZED, HTTP_STATUS.UNAUTHORIZED);
+      return handleV1Proxy(request, env, PATH_TO_CALL_TYPE[pathname]);
+    }
+
+    if (pathname.startsWith(ROUTES.API_PREFIX)) {
+      return routeAdminApi(request, env);
+    }
+
+    return errorResponse(ERROR_MESSAGES.NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+  }
+
+  async function handleRequest(request, env) {
+    try {
+      if (request.method === METHODS.OPTIONS) {
+        return handleCorsPreflightRequest();
+      }
+      await initializeDatabase(env);
+      const response = await routeRequest(request, env);
+      return applyCors(response);
+    } catch (error) {
+      console.error(error)
+      return errorResponse(ERROR_MESSAGES.INTERNAL_ERROR, HTTP_STATUS.INTERNAL_ERROR);
+    }
+  }
+
+  return {
+    fetch: handleRequest,
+    handleRequest,
+    routeRequest,
+    authenticate,
+    isAdmin,
+    initializeDatabase,
+    instantiateLanguageModel,
+    executeAIRequest,
+    formatAIResponse,
+    handleV1Proxy,
+    handleModelsList,
+    routeAdminApi,
+    handleCreateChannel,
+    handleGetChannel,
+    handleUpdateChannel,
+    handleDeleteChannel,
+    handleListChannels,
+    handleGetModel,
+    handleUpdateModel,
+    handleDeleteModel,
+    handleGetLogs,
+    handleStatus,
+    selectModels,
+    recordSuccess,
+    recordFailure,
+    writeLog,
+  };
 }
 
-const worker = {
-  fetch: handleRequest,
-};
+const worker = createApp();
 
 export default worker;
+export { CONSTANTS, SCHEMAS, CALL_TYPE_TO_PATH, PATH_TO_CALL_TYPE, createApp, createMemoryDb, makeTestEnv, initializeDatabase };
