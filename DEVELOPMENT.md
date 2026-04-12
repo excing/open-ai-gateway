@@ -50,6 +50,8 @@ graph TB
         AC7[更新模型 PUT /api/model/:id]
         AC8[删除模型 DELETE /api/model/:id]
         AC9[查看日志 GET /api/log]
+        AC10[获取渠道模型列表 GET /api/channel/:id/models]
+        AC11[检测模型可用性 POST /api/channel/:id/model/:modelId/check]
     end
 
     subgraph 访客用例
@@ -57,7 +59,7 @@ graph TB
     end
 
     U --> UC1 & UC2 & UC3 & UC4 & UC5 & UC6 & UC7 & UC8
-    A --> AC1 & AC2 & AC3 & AC4 & AC5 & AC6 & AC7 & AC8 & AC9
+    A --> AC1 & AC2 & AC3 & AC4 & AC5 & AC6 & AC7 & AC8 & AC9 & AC10 & AC11
     V --> VC1
 ```
 
@@ -313,6 +315,25 @@ interface RequestLogRow {
     output_tokens: number;
     created_at: string;
 }
+
+/** 模型可用性检测结果 */
+interface ModelCheckResult {
+    model_id: string;          // 模型记录 ID
+    model_code: string;        // 模型代码，如 "gpt-4o"
+    call_type: CallType;       // 调用类型
+    api_accessible: boolean;   // API 是否可访问
+    data_available: boolean;   // 响应是否有可用数据
+    latency_ms: number;        // 检测耗时（毫秒）
+    error_message: string;     // 错误信息，成功时为空字符串
+}
+
+/** 上游模型信息（来自 provider 的 /v1/models API） */
+interface UpstreamModel {
+    id: string;        // 模型 ID，如 "gpt-4o"
+    object: string;    // 对象类型，通常为 "model"
+    created: number;   // 创建时间戳（Unix 秒）
+    owned_by: string;  // 所有者，如 "openai"、"anthropic"
+}
 ```
 
 
@@ -449,6 +470,18 @@ const CORS_HEADERS = {
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-channel-id',
     'Access-Control-Max-Age': '86400',
 } as const;
+
+/** 模型可用性检测的测试 prompt */
+const CHECK_TEST_PROMPT = 'Say "OK" if you can read this message.';
+
+/** 模型可用性检测的测试 embedding 输入 */
+const CHECK_TEST_EMBEDDING_INPUT = 'test';
+
+/** 模型可用性检测的测试语音合成文本 */
+const CHECK_TEST_SPEECH_TEXT = 'test';
+
+/** 模型可用性检测的测试图片生成 prompt */
+const CHECK_TEST_IMAGE_PROMPT = 'a white circle on black background';
 ```
 
 
@@ -749,8 +782,105 @@ async function handleGetLogs(request: Request, env: Env): Promise<Response>;
 async function handleStatus(env: Env): Promise<Response>;
 ```
 
+### 7.6 渠道模型查询与检测
 
-### 7.5 模型选择与调度
+```ts
+/**
+ * 获取指定渠道上游的模型列表
+ * 
+ * 处理流程：
+ * 1. 验证渠道存在（SELECT_CHANNEL_BY_ID）
+ * 2. 调用 fetchUpstreamModels 获取上游模型列表
+ * 3. 返回模型列表
+ *
+ * @param channelId - URL 路径中的渠道 ID
+ * @param env - 环境变量
+ * @returns { success: true, data: UpstreamModel[] } 或 { success: true, data: [], error: string }
+ * @throws 渠道不存在返回 404
+ */
+async function handleGetChannelModels(channelId: string, env: Env): Promise<Response>;
+
+/**
+ * 从上游 provider 获取模型列表
+ * 
+ * 各 provider 的模型列表 API：
+ * - openai/openai-compatible: GET {baseURL}/v1/models
+ * - google/gemini: GET https://generativelanguage.googleapis.com/v1beta/v1/models?key={apiKey}
+ * - anthropic/claude: 无公开的模型列表 API，返回空数组
+ * - openrouter: GET https://openrouter.ai/api/v1/models
+ * - pollinations: GET https://gen.pollinations.ai/v1/models
+ *
+ * @param channel - 渠道数据库行
+ * @returns UpstreamModel[] 上游模型列表
+ * @throws 上游 API 调用失败时抛出异常
+ */
+async function fetchUpstreamModels(channel: ChannelRow): Promise<UpstreamModel[]>;
+
+/**
+ * 从上游 URL 获取模型列表
+ * 
+ * @param url - 上游 API URL
+ * @param headers - 请求头（包含认证信息）
+ * @returns UpstreamModel[] 模型列表
+ * @throws 上游 API 返回非 2xx 状态码时抛出异常
+ */
+async function fetchModelsFromUpstream(url: string, headers: Record<string, string>): Promise<UpstreamModel[]>;
+
+/**
+ * 获取 provider 的默认 baseURL
+ * 
+ * @param provider - provider 标识（已标准化）
+ * @returns 默认 baseURL，未知 provider 返回空字符串
+ */
+function getDefaultBaseURL(provider: Provider): string;
+
+/**
+ * 检测指定渠道下的指定模型的可用性
+ * 
+ * 检测两个维度：
+ * 1. API 是否可访问（api_accessible）：能否成功调用 AI SDK
+ * 2. 响应是否有可用数据（data_available）：
+ *    - chat: 非空文本（text.trim().length > 0）
+ *    - image_gen: 非空图片数组（images.length > 0）
+ *    - audio_gen: 非空音频数据（audio.data.length > 0）
+ *    - embedding: 非空向量数组（embedding.length > 0）
+ *    - transcribe: 非空文本（text.trim().length > 0）
+ *    - video_gen: 非空视频数组（videos.length > 0）
+ *
+ * 处理流程：
+ * 1. 验证渠道存在
+ * 2. 验证模型存在且属于该渠道
+ * 3. 实例化 AI 模型（instantiateLanguageModel）
+ * 4. 执行检测请求（executeModelCheck）
+ * 5. 返回检测结果
+ *
+ * @param channelId - URL 路径中的渠道 ID
+ * @param modelId - URL 路径中的模型 ID
+ * @param env - 环境变量
+ * @returns { success: true, data: ModelCheckResult }
+ * @throws 渠道不存在返回 404，模型不存在或不属于该渠道返回 404
+ */
+async function handleModelCheck(channelId: string, modelId: string, env: Env): Promise<Response>;
+
+/**
+ * 执行模型可用性检测
+ * 根据 callType 使用不同的测试参数调用 AI SDK：
+ * - chat: prompt = "Say 'OK' if you can read this message.", maxTokens = 10
+ * - image_gen: prompt = "a white circle on black background", n = 1
+ * - audio_gen: text = "test"
+ * - embedding: value = "test"
+ * - transcribe: 跳过实际检测（需要音频文件），直接返回 dataAvailable = true
+ * - video_gen: prompt = "a white circle on black background"
+ *
+ * @param aiModel - AI SDK 模型实例
+ * @param callType - 调用类型
+ * @returns { dataAvailable: boolean } 数据是否可用
+ * @throws AI SDK 调用失败时抛出异常
+ */
+async function executeModelCheck(aiModel: AIModel, callType: CallType): Promise<{ dataAvailable: boolean }>;
+```
+
+### 7.7 模型选择与调度
 
 ```ts
 /**
@@ -797,7 +927,7 @@ async function selectModels(
 function calculateModelScore(model: ChannelModelRow): number;
 ```
 
-### 7.6 熔断器模块
+### 7.8 熔断器模块
 
 ```ts
 /**
@@ -845,7 +975,7 @@ async function recordSuccess(modelId: string, latencyMs: number, env: Env): Prom
 async function recordFailure(modelId: string, env: Env): Promise<void>;
 ```
 
-### 7.7 模型实例化与 AI 请求
+### 7.9 模型实例化与 AI 请求
 
 ```ts
 /**
@@ -925,7 +1055,7 @@ function formatAIResponse(result: AIRequestResult, callType: CallType, modelCode
 ```
 
 
-### 7.8 日志模块
+### 7.10 日志模块
 
 ```ts
 /**
@@ -939,7 +1069,7 @@ function formatAIResponse(result: AIRequestResult, callType: CallType, modelCode
 async function writeLog(log: Omit<RequestLogRow, 'id' | 'created_at'>, env: Env): Promise<void>;
 ```
 
-### 7.9 工具函数
+### 7.11 工具函数
 
 ```ts
 /**
@@ -1296,6 +1426,99 @@ data: [DONE]
 }
 ```
 
+#### GET /api/channel/{id}/models
+
+获取指定渠道上游的模型列表。通过调用上游 provider 的 `/v1/models` API 获取可用模型列表。
+
+**支持的 Provider**：
+- `openai` / `openai-compatible`: GET `{baseURL}/v1/models`
+- `google` / `gemini`: GET `https://generativelanguage.googleapis.com/v1beta/v1/models?key={apiKey}`
+- `anthropic` / `claude`: 无公开 API，返回空数组
+- `openrouter`: GET `https://openrouter.ai/api/v1/models`
+- `pollinations`: GET `https://gen.pollinations.ai/v1/models`
+
+**响应** (200)：
+```json
+{
+    "success": true,
+    "data": [
+        {
+            "id": "gpt-4o",
+            "object": "model",
+            "created": 1700000000,
+            "owned_by": "openai"
+        },
+        {
+            "id": "gpt-4o-mini",
+            "object": "model",
+            "created": 1700000001,
+            "owned_by": "openai"
+        }
+    ]
+}
+```
+
+**上游 API 错误时的响应**：
+```json
+{
+    "success": true,
+    "data": [],
+    "error": "Upstream returned 401"
+}
+```
+
+**错误响应**：
+- 404: 渠道不存在
+- 401: 未鉴权
+
+#### POST /api/channel/{id}/model/{modelId}/check
+
+检测指定渠道下的指定模型的可用性。检测两个维度：
+1. **API 可访问性** (`api_accessible`)：API 是否能正常响应
+2. **数据可用性** (`data_available`)：响应是否包含有效数据
+   - `chat`: 非空文本
+   - `image_gen`: 非空图片数组
+   - `audio_gen`: 非空音频数据
+   - `embedding`: 非空向量数组
+   - `transcribe`: 非空文本
+   - `video_gen`: 非空视频数组
+
+**响应** (200)：
+```json
+{
+    "success": true,
+    "data": {
+        "model_id": "uuid-model",
+        "model_code": "gpt-4o",
+        "call_type": "chat",
+        "api_accessible": true,
+        "data_available": true,
+        "latency_ms": 850,
+        "error_message": ""
+    }
+}
+```
+
+**API 不可访问时的响应**：
+```json
+{
+    "success": true,
+    "data": {
+        "model_id": "uuid-model",
+        "model_code": "gpt-4o",
+        "call_type": "chat",
+        "api_accessible": false,
+        "data_available": false,
+        "latency_ms": 320,
+        "error_message": "API Error: Invalid API key"
+    }
+}
+```
+
+**错误响应**：
+- 404: 渠道或模型不存在
+- 401: 未鉴权
+
 ### 8.3 公开 API
 
 #### GET /status
@@ -1416,6 +1639,75 @@ sequenceDiagram
     GW-->>A: 201 { success: true, data: ChannelWithModels }
 ```
 
+### 9.3 模型可用性检测时序
+
+```mermaid
+sequenceDiagram
+    participant A as 管理员
+    participant GW as AI Gateway
+    participant Auth as 鉴权模块
+    participant DB as D1 数据库
+    participant AI as AI Provider
+
+    A->>GW: POST /api/channel/:id/model/:modelId/check (Authorization)
+    GW->>Auth: isAdmin(request, env)
+    Auth-->>GW: true
+    GW->>DB: SELECT * FROM channels WHERE id = :channelId
+    alt 渠道不存在
+        DB-->>GW: null
+        GW-->>A: 404 Channel not found
+    end
+    DB-->>GW: channel
+    GW->>DB: SELECT * FROM channel_models WHERE id = :modelId
+    alt 模型不存在或不属于该渠道
+        DB-->>GW: null 或 channel_id 不匹配
+        GW-->>A: 404 Model not found
+    end
+    DB-->>GW: model
+    GW->>GW: instantiateLanguageModel(channel, model)
+    alt 实例化失败
+        GW-->>A: 200 { api_accessible: false, data_available: false, error_message: ... }
+    end
+    GW->>AI: executeModelCheck(aiModel, callType)
+    alt API 调用成功
+        AI-->>GW: result
+        GW->>GW: 检查数据可用性
+        GW-->>A: 200 { api_accessible: true, data_available: true/false, latency_ms: ... }
+    else API 调用失败
+        AI-->>GW: Error
+        GW-->>A: 200 { api_accessible: false, data_available: false, error_message: ... }
+    end
+```
+
+```mermaid
+sequenceDiagram
+    participant A as 管理员
+    participant GW as AI Gateway
+    participant Auth as 鉴权模块
+    participant V as Zod 校验
+    participant DB as D1 数据库
+
+    A->>GW: POST /api/channel (body + Authorization)
+    GW->>Auth: isAdmin(request, env)
+    Auth-->>GW: true
+    GW->>GW: parseRequestBody(request)
+    GW->>V: CreateChannelSchema.parse(body)
+    alt 校验失败
+        V-->>GW: ZodError
+        GW-->>A: 400 Invalid request body
+    end
+    V-->>GW: validated data
+    GW->>GW: generateUUID() → channelId
+    GW->>DB: INSERT INTO channels VALUES (...)
+    loop 每个 model
+        GW->>GW: generateUUID() → modelId
+        GW->>DB: INSERT INTO channel_models VALUES (...)
+    end
+    GW->>DB: SELECT channel + models WHERE id = channelId
+    DB-->>GW: ChannelWithModels
+    GW-->>A: 201 { success: true, data: ChannelWithModels }
+```
+
 
 ---
 
@@ -1488,6 +1780,29 @@ flowchart TD
     L -->|是| N[查找冷却时间级别]
     N --> O[设置 cooldown_until]
     O --> P[status = open]
+```
+
+### 10.4 模型可用性检测流程
+
+```mermaid
+flowchart TD
+    A[POST /api/channel/:id/model/:modelId/check] --> B{鉴权通过?}
+    B -->|否| C[401 Unauthorized]
+    B -->|是| D{渠道存在?}
+    D -->|否| E[404 Channel not found]
+    D -->|是| F{模型存在且属于该渠道?}
+    F -->|否| G[404 Model not found]
+    F -->|是| H[instantiateLanguageModel]
+    H --> I{实例化成功?}
+    I -->|否| J[返回 api_accessible=false]
+    J --> K[error_message = 实例化错误]
+    I -->|是| L[executeModelCheck]
+    L --> M{API 调用成功?}
+    M -->|否| N[返回 api_accessible=false]
+    N --> O[error_message = API 错误]
+    M -->|是| P{数据可用?}
+    P -->|是| Q[返回 api_accessible=true<br/>data_available=true]
+    P -->|否| R[返回 api_accessible=true<br/>data_available=false]
 ```
 
 
@@ -1662,6 +1977,214 @@ async function recordFailure(modelId, env) {
             cooldown_until = ?, status = ?, last_updated = datetime('now')
         WHERE id = ?
     `).bind(newFailures, newSuccessRate, newErrorRate, openEndAt, newStatus, modelId).run();
+}
+```
+
+### 11.5 handleGetChannelModels 获取渠道上游模型列表
+
+```ts
+async function handleGetChannelModels(channelId, env) {
+    // 1. 验证渠道存在
+    const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(channelId).first();
+    if (!channel) {
+        return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    }
+
+    // 2. 调用上游 API 获取模型列表
+    try {
+        const models = await fetchUpstreamModels(channel);
+        return jsonResponse({ success: true, data: models }, HTTP_STATUS.OK);
+    } catch (error) {
+        return jsonResponse({
+            success: true,
+            data: [],
+            error: error.message || 'Failed to fetch upstream models',
+        }, HTTP_STATUS.OK);
+    }
+}
+```
+
+### 11.6 fetchUpstreamModels 从上游获取模型列表
+
+```ts
+async function fetchUpstreamModels(channel) {
+    const normalizedProvider = normalizeProvider(channel.provider);
+    
+    // Anthropic 和 Pollinations 没有公开的模型列表 API
+    if (normalizedProvider === PROVIDERS.ANTHROPIC) {
+        return [];
+    }
+
+    const baseURL = channel.base_url || getDefaultBaseURL(normalizedProvider);
+    const modelsURL = `${baseURL}${ROUTES.V1_MODELS}`;
+
+    const headers = { [HEADERS.CONTENT_TYPE]: JSON_CONTENT_TYPE };
+
+    // 设置认证头
+    if (normalizedProvider === PROVIDERS.GOOGLE) {
+        // Google 使用 query parameter 认证
+        const url = new URL(modelsURL);
+        url.searchParams.set('key', channel.api_key);
+        return fetchModelsFromUpstream(url.toString(), headers);
+    } else {
+        headers[HEADERS.AUTHORIZATION] = BEARER_PREFIX + channel.api_key;
+    }
+
+    return fetchModelsFromUpstream(modelsURL, headers);
+}
+```
+
+### 11.7 fetchModelsFromUpstream 从上游 URL 获取模型列表
+
+```ts
+async function fetchModelsFromUpstream(url, headers) {
+    const response = await fetch(url, { method: METHODS.GET, headers });
+
+    if (!response.ok) {
+        throw new Error(`Upstream returned ${response.status}`);
+    }
+
+    const data = await response.json();
+    
+    // OpenAI 兼容格式: { object: 'list', data: [{ id, object, created, owned_by }] }
+    if (data.object === OPENAI_OBJECTS.LIST && Array.isArray(data.data)) {
+        return data.data.map((model) => ({
+            id: model.id,
+            object: model.object || OPENAI_OBJECTS.MODEL,
+            created: model.created || 0,
+            owned_by: model.owned_by || 'unknown',
+        }));
+    }
+
+    // 其他格式，尝试直接返回数组
+    if (Array.isArray(data)) {
+        return data.map((model) => ({
+            id: model.id || model.name || model,
+            object: OPENAI_OBJECTS.MODEL,
+            created: 0,
+            owned_by: 'unknown',
+        }));
+    }
+
+    return [];
+}
+```
+
+### 11.8 handleModelCheck 模型可用性检测
+
+```ts
+async function handleModelCheck(channelId, modelId, env) {
+    // 1. 验证渠道存在
+    const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(channelId).first();
+    if (!channel) {
+        return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    }
+
+    // 2. 验证模型存在且属于该渠道
+    const model = await env.DB.prepare(SQL.SELECT_MODEL_BY_ID).bind(modelId).first();
+    if (!model || model.channel_id !== channelId) {
+        return errorResponse(ERROR_MESSAGES.MODEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    }
+
+    // 3. 实例化模型
+    let aiModel;
+    try {
+        aiModel = instantiateLanguageModel(
+            channel.name, channel.base_url, channel.api_key,
+            JSON.parse(model.headers || '{}'), channel.provider,
+            model.call_type, model.code
+        );
+    } catch (error) {
+        return jsonResponse({
+            success: true,
+            data: {
+                model_id: modelId, model_code: model.code, call_type: model.call_type,
+                api_accessible: false, data_available: false, latency_ms: 0,
+                error_message: error.message || 'Failed to instantiate model',
+            }
+        }, HTTP_STATUS.OK);
+    }
+
+    // 4. 执行检测请求
+    const startTime = Date.now();
+    let apiAccessible = false;
+    let dataAvailable = false;
+    let errorMessage = '';
+
+    try {
+        const result = await executeModelCheck(aiModel, model.call_type);
+        apiAccessible = true;
+        dataAvailable = result.dataAvailable;
+    } catch (error) {
+        errorMessage = error.message || 'Unknown error';
+    }
+
+    const latencyMs = Date.now() - startTime;
+
+    // 5. 返回检测结果
+    return jsonResponse({
+        success: true,
+        data: {
+            model_id: modelId, model_code: model.code, call_type: model.call_type,
+            api_accessible: apiAccessible, data_available: dataAvailable,
+            latency_ms: latencyMs, error_message: errorMessage,
+        }
+    }, HTTP_STATUS.OK);
+}
+```
+
+### 11.9 executeModelCheck 执行模型检测
+
+```ts
+async function executeModelCheck(aiModel, callType) {
+    if (callType === CALL_TYPES.CHAT) {
+        const result = await generateText({
+            model: aiModel,
+            prompt: CHECK_TEST_PROMPT,
+            maxTokens: 10,
+        });
+        return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
+    }
+
+    if (callType === CALL_TYPES.IMAGE_GEN) {
+        const result = await generateImage({
+            model: aiModel,
+            prompt: CHECK_TEST_IMAGE_PROMPT,
+            n: 1,
+        });
+        return { dataAvailable: Boolean(result.images && result.images.length > 0) };
+    }
+
+    if (callType === CALL_TYPES.AUDIO_GEN) {
+        const result = await experimental_generateSpeech({
+            model: aiModel,
+            text: CHECK_TEST_SPEECH_TEXT,
+        });
+        return { dataAvailable: Boolean(result.audio?.data?.length > 0) };
+    }
+
+    if (callType === CALL_TYPES.EMBEDDING) {
+        const result = await embed({
+            model: aiModel,
+            value: CHECK_TEST_EMBEDDING_INPUT,
+        });
+        return { dataAvailable: Boolean(result.embedding && result.embedding.length > 0) };
+    }
+
+    if (callType === CALL_TYPES.TRANSCRIBE) {
+        // transcribe 需要音频文件，跳过实际检测
+        return { dataAvailable: true };
+    }
+
+    if (callType === CALL_TYPES.VIDEO_GEN) {
+        const result = await experimental_generateVideo({
+            model: aiModel,
+            prompt: CHECK_TEST_IMAGE_PROMPT,
+        });
+        return { dataAvailable: Boolean(result.videos && result.videos.length > 0) };
+    }
+
+    throw new Error(`Unsupported call type: ${callType}`);
 }
 ```
 

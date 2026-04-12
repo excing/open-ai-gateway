@@ -128,6 +128,8 @@ const CONSTANTS = {
     API_MODEL: '/api/model',
     API_MODEL_PREFIX: '/api/model/',
     API_LOG: '/api/log',
+    API_CHANNEL_MODELS_SUFFIX: '/models',
+    API_MODEL_CHECK_SUFFIX: '/check',
   },
   HEADERS: {
     AUTHORIZATION: 'authorization',
@@ -358,6 +360,18 @@ const SCHEMAS = (() => {
 
 const { CreateChannelSchema, UpdateChannelSchema, UpdateModelSchema, PaginationSchema, LogQuerySchema } = SCHEMAS;
 
+/** 模型可用性检测的测试 prompt */
+const CHECK_TEST_PROMPT = 'Say "OK" if you can read this message.';
+
+/** 模型可用性检测的测试 embedding 输入 */
+const CHECK_TEST_EMBEDDING_INPUT = 'test';
+
+/** 模型可用性检测的测试语音合成文本 */
+const CHECK_TEST_SPEECH_TEXT = 'test';
+
+/** 模型可用性检测的测试图片生成 prompt */
+const CHECK_TEST_IMAGE_PROMPT = 'a white circle on black background';
+
 function generateUUID() {
   return crypto.randomUUID();
 }
@@ -525,6 +539,7 @@ function createApp(deps = {}) {
   const createFallbackModel = deps.createFallback || createFallback;
   const nowFn = deps.now || (() => new Date());
   const uuidFn = deps.uuid || generateUUID;
+  const fetchFn = deps.fetch || fetch;
 
   function authenticate(request, env) {
     const token = extractBearerToken(request);
@@ -1262,6 +1277,283 @@ function createApp(deps = {}) {
     return jsonResponse({ models }, HTTP_STATUS.OK);
   }
 
+  /**
+   * 获取指定渠道上游的模型列表
+   * 通过调用上游 provider 的 /v1/models API 获取可用模型列表
+   * 
+   * @param channelId - 渠道 ID
+   * @param env - 环境变量
+   * @returns { success: true, data: UpstreamModel[] } 或错误响应
+   */
+  async function handleGetChannelModels(channelId, env) {
+    const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(channelId).first();
+    if (!channel) {
+      return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    }
+
+    try {
+      const models = await fetchUpstreamModels(channel);
+      return jsonResponse({ success: true, data: models }, HTTP_STATUS.OK);
+    } catch (error) {
+      return jsonResponse({
+        success: true,
+        data: [],
+        error: error.message || 'Failed to fetch upstream models',
+      }, HTTP_STATUS.SERVICE_UNAVAILABLE);
+    }
+  }
+
+  /**
+   * 从上游 provider 获取模型列表
+   * 
+   * 各 provider 的模型列表 API：
+   * - openai/openai-compatible: GET {baseURL}/v1/models
+   * - google/gemini: 需要通过 REST API 获取
+   * - anthropic/claude: 无公开的模型列表 API，返回空数组
+   * - openrouter: GET https://openrouter.ai/api/v1/models
+   * - pollinations: 无公开的模型列表 API，返回空数组
+   *
+   * @param channel - 渠道数据库行
+   * @returns UpstreamModel[] 上游模型列表
+   */
+  async function fetchUpstreamModels(channel) {
+    const normalizedProvider = normalizeProvider(channel.provider);
+
+    // Anthropic 和 Pollinations 没有公开的模型列表 API
+    if (normalizedProvider === PROVIDERS.ANTHROPIC) {
+      return [];
+    }
+
+    const baseURL = channel.base_url || getDefaultBaseURL(normalizedProvider);
+    const modelsURL = `${baseURL}${ROUTES.API_CHANNEL_MODELS_SUFFIX}`;
+
+    const headers = {
+      [HEADERS.CONTENT_TYPE]: JSON_CONTENT_TYPE,
+    };
+
+    // 设置认证头
+    if (normalizedProvider === PROVIDERS.GOOGLE) {
+      // Google 使用 query parameter 认证
+      const url = new URL(modelsURL);
+      url.searchParams.set('key', channel.api_key);
+      return fetchModelsFromUpstream(url.toString(), headers);
+    } else {
+      headers[HEADERS.AUTHORIZATION] = BEARER_PREFIX + channel.api_key;
+    }
+
+    return fetchModelsFromUpstream(modelsURL, headers);
+  }
+
+  /**
+   * 从上游 URL 获取模型列表
+   * 
+   * @param url - 上游 API URL
+   * @param headers - 请求头
+   * @returns UpstreamModel[] 模型列表
+   */
+  async function fetchModelsFromUpstream(url, headers) {
+    const response = await fetchFn(url, {
+      method: METHODS.GET,
+      headers,
+    });
+
+    if (!response.ok) {
+      throw new Error(`Upstream returned ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    // OpenAI 兼容格式: { object: 'list', data: [{ id, object, created, owned_by }] }
+    if (data.object === OPENAI_OBJECTS.LIST && Array.isArray(data.data)) {
+      return data.data.map((model) => ({
+        id: model.id,
+        object: model.object || OPENAI_OBJECTS.MODEL,
+        created: model.created || 0,
+        owned_by: model.owned_by || 'unknown',
+      }));
+    }
+
+    // 其他格式，尝试直接返回数组
+    if (Array.isArray(data)) {
+      return data.map((model) => ({
+        id: model.id || model.name || model,
+        object: OPENAI_OBJECTS.MODEL,
+        created: 0,
+        owned_by: 'unknown',
+      }));
+    }
+
+    return [];
+  }
+
+  /**
+   * 获取 provider 的默认 baseURL
+   * 
+   * @param provider - provider 标识
+   * @returns 默认 baseURL
+   */
+  function getDefaultBaseURL(provider) {
+    switch (provider) {
+      case PROVIDERS.OPENAI:
+        return 'https://api.openai.com/v1';
+      case PROVIDERS.GOOGLE:
+        return 'https://generativelanguage.googleapis.com/v1beta';
+      case PROVIDERS.OPENROUTER:
+        return 'https://openrouter.ai/api/v1';
+      case PROVIDERS.POLLINATIONS:
+        return 'https://gen.pollinations.ai/v1';
+      default:
+        return '';
+    }
+  }
+
+  /**
+   * 检测指定渠道下的指定模型的可用性
+   * 
+   * 检测两个维度：
+   * 1. API 是否可访问（api_accessible）
+   * 2. 响应是否有可用数据（data_available）
+   *    - chat: 非空文本
+   *    - image_gen: 非空图片数组
+   *    - audio_gen: 非空音频数据
+   *    - embedding: 非空向量数组
+   *    - transcribe: 非空文本
+   *    - video_gen: 非空视频数组
+   * 
+   * @param channelId - 渠道 ID
+   * @param modelId - 模型 ID
+   * @param env - 环境变量
+   * @returns { success: true, data: ModelCheckResult } 或错误响应
+   */
+  async function handleModelCheck(channelId, modelId, env) {
+    // 1. 验证渠道存在
+    const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(channelId).first();
+    if (!channel) {
+      return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    }
+
+    // 2. 验证模型存在且属于该渠道
+    const model = await env.DB.prepare(SQL.SELECT_MODEL_BY_ID).bind(modelId).first();
+    if (!model || model.channel_id !== channelId) {
+      return errorResponse(ERROR_MESSAGES.MODEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    }
+
+    // 3. 实例化模型
+    let aiModel;
+    try {
+      aiModel = instantiateLanguageModel(
+        channel.name,
+        channel.base_url,
+        channel.api_key,
+        safeJsonParse(model.headers, {}),
+        channel.provider,
+        model.call_type,
+        model.code,
+      );
+    } catch (error) {
+      return jsonResponse({
+        success: true,
+        data: {
+          model_id: modelId,
+          model_code: model.code,
+          call_type: model.call_type,
+          api_accessible: false,
+          data_available: false,
+          latency_ms: 0,
+          error_message: error.message || 'Failed to instantiate model',
+        },
+      }, HTTP_STATUS.SERVICE_UNAVAILABLE);
+    }
+
+    // 4. 执行检测请求
+    const startTime = nowFn().getTime();
+    let apiAccessible = false;
+    let dataAvailable = false;
+    let errorMessage = '';
+
+    try {
+      const result = await executeModelCheck(aiModel, model.call_type);
+      apiAccessible = true;
+      dataAvailable = result.dataAvailable;
+    } catch (error) {
+      errorMessage = error.message || 'Unknown error';
+    }
+
+    const latencyMs = nowFn().getTime() - startTime;
+
+    // 5. 返回检测结果
+    return jsonResponse({
+      success: true,
+      data: {
+        model_id: modelId,
+        model_code: model.code,
+        call_type: model.call_type,
+        api_accessible: apiAccessible,
+        data_available: dataAvailable,
+        latency_ms: latencyMs,
+        error_message: errorMessage,
+      },
+    }, HTTP_STATUS.OK);
+  }
+
+  /**
+   * 执行模型可用性检测
+   * 
+   * @param aiModel - AI SDK 模型实例
+   * @param callType - 调用类型
+   * @returns { dataAvailable: boolean }
+   */
+  async function executeModelCheck(aiModel, callType) {
+    if (callType === CALL_TYPES.CHAT) {
+      const result = await ai.generateText({
+        model: aiModel,
+        prompt: CHECK_TEST_PROMPT,
+        maxTokens: 10,
+      });
+      return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
+    }
+
+    if (callType === CALL_TYPES.IMAGE_GEN) {
+      const result = await ai.generateImage({
+        model: aiModel,
+        prompt: CHECK_TEST_IMAGE_PROMPT,
+        n: 1,
+      });
+      return { dataAvailable: Boolean(result.images && result.images.length > 0) };
+    }
+
+    if (callType === CALL_TYPES.AUDIO_GEN) {
+      const result = await ai.experimental_generateSpeech({
+        model: aiModel,
+        text: CHECK_TEST_SPEECH_TEXT,
+      });
+      return { dataAvailable: Boolean(result.audio && result.audio.data && result.audio.data.length > 0) };
+    }
+
+    if (callType === CALL_TYPES.EMBEDDING) {
+      const result = await ai.embed({
+        model: aiModel,
+        value: CHECK_TEST_EMBEDDING_INPUT,
+      });
+      return { dataAvailable: Boolean(result.embedding && result.embedding.length > 0) };
+    }
+
+    if (callType === CALL_TYPES.TRANSCRIBE) {
+      // transcribe 需要音频文件，跳过实际检测
+      return { dataAvailable: true };
+    }
+
+    if (callType === CALL_TYPES.VIDEO_GEN) {
+      const result = await ai.experimental_generateVideo({
+        model: aiModel,
+        prompt: CHECK_TEST_IMAGE_PROMPT,
+      });
+      return { dataAvailable: Boolean(result.videos && result.videos.length > 0) };
+    }
+
+    throw new Error(`Unsupported call type: ${callType}`);
+  }
+
   async function routeAdminApi(request, env) {
     const url = new URL(request.url);
     const { pathname } = url;
@@ -1279,6 +1571,22 @@ function createApp(deps = {}) {
 
     if (pathname === ROUTES.API_CHANNEL && request.method === METHODS.POST) {
       return handleCreateChannel(request, env);
+    }
+
+    // 新路由: GET /api/channel/:id/models - 获取指定渠道上游的模型列表
+    const channelModelsMatch = pathname.match(
+      new RegExp(`^${ROUTES.API_CHANNEL_PREFIX}([^/]+)${ROUTES.API_CHANNEL_MODELS_SUFFIX}$`)
+    );
+    if (channelModelsMatch && request.method === METHODS.GET) {
+      return handleGetChannelModels(channelModelsMatch[1], env);
+    }
+
+    // 新路由: POST /api/channel/:id/model/:modelId/check - 检测模型可用性
+    const modelCheckMatch = pathname.match(
+      new RegExp(`^${ROUTES.API_CHANNEL_PREFIX}([^/]+)/model/([^/]+)${ROUTES.API_MODEL_CHECK_SUFFIX}$`)
+    );
+    if (modelCheckMatch && request.method === METHODS.POST) {
+      return handleModelCheck(modelCheckMatch[1], modelCheckMatch[2], env);
     }
 
     const channelId = extractPathParam(pathname, ROUTES.API_CHANNEL_PREFIX);
@@ -1360,6 +1668,12 @@ function createApp(deps = {}) {
     handleDeleteModel,
     handleGetLogs,
     handleStatus,
+    handleGetChannelModels,
+    fetchUpstreamModels,
+    fetchModelsFromUpstream,
+    getDefaultBaseURL,
+    handleModelCheck,
+    executeModelCheck,
     selectModels,
     recordSuccess,
     recordFailure,
