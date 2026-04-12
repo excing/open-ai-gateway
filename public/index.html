@@ -14,276 +14,775 @@
     <script src="https://cdn.jsdelivr.net/npm/ai@6/dist/index.mjs" type="module"></script>
     <style>
       :root {
-        --brand-ink: #0f172a;
-        --brand-accent: #0ea5e9;
-        --brand-muted: #e2e8f0;
-        --brand-surface: #f8fafc;
+        --bg: oklch(97.7% 0.015 95);
+        --surface: oklch(99% 0.01 95);
+        --surface-soft: rgba(255, 252, 248, 0.72);
+        --line: oklch(85% 0.025 80);
+        --line-strong: oklch(70% 0.045 70);
+        --text: oklch(24% 0.03 60);
+        --text-soft: oklch(46% 0.03 62);
+        --accent: oklch(66% 0.16 55);
+        --accent-strong: oklch(58% 0.18 45);
+        --success: oklch(68% 0.14 150);
+        --danger: oklch(62% 0.19 24);
+        --shadow-soft: 0 18px 60px rgba(102, 68, 33, 0.08);
+        --transition: 220ms cubic-bezier(0.22, 1, 0.36, 1);
       }
+
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: color-mix(in oklch, var(--accent) 36%, transparent) transparent;
+      }
+
+      html {
+        scroll-behavior: smooth;
+      }
+
       body {
         font-family: "Space Grotesk", "Noto Sans SC", sans-serif;
-        background: radial-gradient(circle at top, #e0f2fe 0%, #f8fafc 45%, #ffffff 100%);
-        color: var(--brand-ink);
+        background:
+          radial-gradient(circle at top left, rgba(244, 196, 110, 0.28), transparent 26%),
+          radial-gradient(circle at top right, rgba(232, 143, 72, 0.16), transparent 22%),
+          linear-gradient(180deg, oklch(98.4% 0.02 85) 0%, var(--bg) 46%, oklch(96.5% 0.016 92) 100%);
+        color: var(--text);
       }
-      .card {
-        background: white;
-        border: 1px solid var(--brand-muted);
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background-image:
+          linear-gradient(rgba(120, 87, 48, 0.05) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(120, 87, 48, 0.04) 1px, transparent 1px);
+        background-size: 24px 24px;
+        mask-image: radial-gradient(circle at center, black 28%, transparent 88%);
+        opacity: 0.45;
+      }
+
+      .shell {
+        position: relative;
+        isolation: isolate;
+      }
+
+      .panel {
+        background: color-mix(in oklch, var(--surface) 88%, white);
+        border: 1px solid color-mix(in oklch, var(--line) 88%, white);
+        border-radius: 28px;
+        box-shadow: var(--shadow-soft);
+      }
+
+      .panel-soft {
+        background: rgba(255, 252, 248, 0.6);
+        border: 1px solid rgba(185, 150, 117, 0.14);
+        border-radius: 24px;
+      }
+
+      .panel-quiet {
+        background: rgba(255, 251, 244, 0.72);
+        border: 1px solid rgba(185, 150, 117, 0.22);
+        border-radius: 20px;
+      }
+
+      .display-title {
+        font-size: clamp(2.6rem, 6vw, 5.8rem);
+        line-height: 0.94;
+        letter-spacing: -0.05em;
+      }
+
+      .section-title {
+        font-size: clamp(1.45rem, 2.3vw, 2rem);
+        line-height: 1;
+        letter-spacing: -0.03em;
+      }
+
+      .hero-mesh {
+        position: relative;
+        overflow: hidden;
+      }
+
+      .hero-mesh::after {
+        content: "";
+        position: absolute;
+        right: -4rem;
+        top: -3rem;
+        width: 14rem;
+        height: 14rem;
+        border-radius: 999px;
+        background: radial-gradient(circle, rgba(228, 142, 74, 0.28), transparent 68%);
+        pointer-events: none;
+      }
+
+      .field,
+      .field-area,
+      .field-select {
+        width: 100%;
+        min-height: 48px;
         border-radius: 16px;
-        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08);
+        border: 1px solid color-mix(in oklch, var(--line) 90%, white);
+        background: rgba(255, 252, 247, 0.95);
+        color: var(--text);
+        padding: 0.85rem 1rem;
+        transition:
+          border-color var(--transition),
+          box-shadow var(--transition),
+          transform var(--transition),
+          background-color var(--transition);
+      }
+
+      .field-area {
+        min-height: 112px;
+        resize: vertical;
+      }
+
+      .field-mini {
+        min-height: 42px;
+        border-radius: 999px;
+        padding: 0.65rem 0.95rem;
+      }
+
+      .field:focus,
+      .field-area:focus,
+      .field-select:focus {
+        outline: none;
+        border-color: color-mix(in oklch, var(--accent) 72%, white);
+        box-shadow: 0 0 0 4px rgba(227, 136, 56, 0.14);
+        background: rgba(255, 255, 255, 0.98);
+      }
+
+      .btn {
+        min-height: 48px;
+        border-radius: 999px;
+        padding: 0.85rem 1.2rem;
+        font-weight: 600;
+        transition:
+          transform var(--transition),
+          box-shadow var(--transition),
+          background-color var(--transition),
+          border-color var(--transition),
+          color var(--transition);
+      }
+
+      .btn:hover {
+        transform: translateY(-1px);
+      }
+
+      .btn:active {
+        transform: translateY(0);
+      }
+
+      .btn-primary {
+        background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
+        color: rgba(255, 248, 241, 0.98);
+        box-shadow: 0 16px 36px rgba(170, 92, 26, 0.22);
+      }
+
+      .btn-secondary {
+        border: 1px solid color-mix(in oklch, var(--line-strong) 55%, white);
+        background: rgba(255, 251, 245, 0.8);
+        color: var(--text);
+      }
+
+      .btn-ghost {
+        color: var(--text-soft);
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.45rem;
+        border-radius: 999px;
+        border: 1px solid rgba(185, 150, 117, 0.28);
+        background: rgba(255, 249, 240, 0.8);
+        padding: 0.5rem 0.85rem;
+      }
+
+      .nav-chip {
+        min-width: max-content;
+        border-radius: 999px;
+        border: 1px solid transparent;
+        padding: 0.82rem 1rem;
+        text-align: center;
+        font-weight: 600;
+        transition:
+          background-color var(--transition),
+          color var(--transition),
+          border-color var(--transition),
+          transform var(--transition);
+      }
+
+      .nav-chip:hover {
+        transform: translateY(-1px);
+      }
+
+      .stat-block {
+        border-radius: 20px;
+        border: 1px solid rgba(185, 150, 117, 0.2);
+        background: linear-gradient(180deg, rgba(255, 252, 246, 0.96), rgba(252, 244, 232, 0.84));
+        padding: 1rem 1.1rem;
+      }
+
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 0.75rem;
+      }
+
+      .list-card {
+        border-radius: 24px;
+        border: 1px solid rgba(185, 150, 117, 0.18);
+        background: var(--surface-soft);
+        padding: 1rem;
+        transition:
+          transform var(--transition),
+          border-color var(--transition),
+          background-color var(--transition),
+          box-shadow var(--transition);
+      }
+
+      .list-card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(185, 150, 117, 0.3);
+        box-shadow: 0 18px 40px rgba(74, 49, 24, 0.08);
+      }
+
+      .metric-inline {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.75rem;
+      }
+
+      .metric-inline > div {
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.72);
+        padding: 0.75rem 0.85rem;
+      }
+
+      .chip-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.45rem 0.75rem;
+        border-radius: 999px;
+        background: rgba(255, 245, 232, 0.92);
+        border: 1px solid rgba(185, 150, 117, 0.2);
+        font-size: 0.875rem;
+        color: var(--text);
+      }
+
+      .icon-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 44px;
+        height: 44px;
+        border-radius: 999px;
+        border: 1px solid rgba(185, 150, 117, 0.22);
+        background: rgba(255, 251, 245, 0.82);
+        color: var(--text-soft);
+        transition:
+          transform var(--transition),
+          background-color var(--transition),
+          border-color var(--transition);
+      }
+
+      .icon-btn:hover {
+        transform: translateY(-1px);
+        background: rgba(250, 240, 226, 0.96);
+      }
+
+      .drawer-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 40;
+        background: rgba(74, 49, 24, 0.22);
+        backdrop-filter: blur(10px);
+      }
+
+      .drawer {
+        position: fixed;
+        top: 0;
+        right: 0;
+        z-index: 50;
+        height: 100vh;
+        width: min(100%, 44rem);
+        overflow-y: auto;
+        background: color-mix(in oklch, var(--surface) 90%, white);
+        border-left: 1px solid rgba(185, 150, 117, 0.18);
+        box-shadow: -24px 0 80px rgba(74, 49, 24, 0.12);
+      }
+
+      .tonal-divider {
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(171, 121, 75, 0.28), transparent);
+      }
+
+      .fade-up {
+        animation: fadeUp 620ms cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+
+      .fade-up-delay {
+        animation: fadeUp 760ms cubic-bezier(0.22, 1, 0.36, 1) both;
+      }
+
+      @keyframes fadeUp {
+        from {
+          opacity: 0;
+          transform: translateY(22px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+
+      @media (max-width: 640px) {
+        .metric-inline {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        html {
+          scroll-behavior: auto;
+        }
+
+        *,
+        *::before,
+        *::after {
+          animation: none !important;
+          transition-duration: 0.01ms !important;
+        }
       }
     </style>
   </head>
   <body class="min-h-screen">
-    <div id="app" class="min-h-screen">
-      <div class="max-w-7xl mx-auto px-6 py-10" v-if="!state.ready">
-        <div class="card p-8 max-w-xl mx-auto">
-          <h1 class="text-3xl font-semibold mb-2">Open AI Gateway</h1>
-          <p class="text-slate-600 mb-6">请输入管理员密钥以进入管理台。</p>
-          <div class="space-y-3">
-            <label class="text-sm font-medium text-slate-700">管理员密钥</label>
-            <input v-model="state.tokenInput" type="password" class="w-full rounded-lg border border-slate-300 px-4 py-2" placeholder="Bearer token" />
-            <button @click="actions.login" class="w-full bg-sky-500 hover:bg-sky-600 text-white font-medium py-2 rounded-lg">进入管理台</button>
-            <p v-if="state.error" class="text-sm text-rose-500">{{ state.error }}</p>
-          </div>
+    <div id="app" class="shell min-h-screen">
+      <div v-if="!state.ready" class="mx-auto flex min-h-screen max-w-7xl items-center px-4 py-8 sm:px-6 lg:px-8">
+        <div class="grid w-full gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+          <section class="hero-mesh fade-up rounded-[2rem] border border-white/50 bg-[rgba(255,250,244,0.72)] px-6 py-8 shadow-[0_28px_100px_rgba(103,68,33,0.12)] backdrop-blur-sm sm:px-8 sm:py-10 lg:px-10 lg:py-12">
+            <h1 class="display-title max-w-3xl font-semibold text-[var(--text)]">
+              Open AI
+              <span class="block text-[var(--accent-strong)]">Gateway</span>
+            </h1>
+            <p class="mt-5 max-w-md text-sm leading-7 text-[var(--text-soft)] sm:text-base">更轻、更快的运维台。</p>
+            <div class="mt-8 grid gap-3 sm:grid-cols-3">
+              <div class="stat-block">
+                <p class="text-xs uppercase tracking-[0.24em] text-[var(--text-soft)]">Status</p>
+                <p class="mt-2 text-2xl font-semibold">Live</p>
+              </div>
+              <div class="stat-block">
+                <p class="text-xs uppercase tracking-[0.24em] text-[var(--text-soft)]">Channel</p>
+                <p class="mt-2 text-2xl font-semibold">Atomic</p>
+              </div>
+              <div class="stat-block">
+                <p class="text-xs uppercase tracking-[0.24em] text-[var(--text-soft)]">Logs</p>
+                <p class="mt-2 text-2xl font-semibold">Traceable</p>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel fade-up-delay mx-auto w-full max-w-xl p-6 sm:p-8">
+            <div class="flex items-start justify-between gap-4">
+              <h2 class="section-title font-semibold text-[var(--text)]">进入管理台</h2>
+              <div class="pill text-xs text-[var(--text-soft)]">Admin</div>
+            </div>
+            <div class="mt-8 space-y-4">
+              <input v-model="state.tokenInput" type="password" class="field" placeholder="Bearer token" autocomplete="current-password" />
+              <button @click="actions.login" class="btn btn-primary w-full">进入管理台</button>
+              <p v-if="state.error" class="rounded-2xl border border-[rgba(211,92,72,0.18)] bg-[rgba(255,240,235,0.72)] px-4 py-3 text-sm text-[var(--danger)]">
+                {{ state.error }}
+              </p>
+            </div>
+          </section>
         </div>
       </div>
 
-      <div v-else class="max-w-7xl mx-auto px-6 py-10">
-        <header class="flex items-center justify-between mb-8">
-          <div>
-            <h1 class="text-3xl font-semibold">Open AI Gateway 管理台</h1>
-            <p class="text-slate-500">统一管理渠道、模型与调用日志</p>
+      <div v-else class="mx-auto max-w-7xl px-4 py-4 sm:px-6 sm:py-6 lg:px-8 lg:py-8">
+        <section class="panel hero-mesh overflow-hidden">
+          <div class="grid gap-6 px-5 py-6 sm:px-6 lg:grid-cols-[1.3fr_0.7fr] lg:px-8 lg:py-8">
+            <div class="fade-up">
+              <h1 class="text-[clamp(2.1rem,4vw,4rem)] font-semibold leading-[0.96] tracking-[-0.05em] text-[var(--text)]">
+                Open AI Gateway
+                <span class="block text-[var(--accent-strong)]">管理台</span>
+              </h1>
+            </div>
+            <div class="fade-up-delay grid gap-3 grid-cols-3">
+              <div class="stat-block">
+                <p class="text-xs uppercase tracking-[0.24em] text-[var(--text-soft)]">Channels</p>
+                <p class="mt-2 text-3xl font-semibold">{{ state.channels.length }}</p>
+              </div>
+              <div class="stat-block">
+                <p class="text-xs uppercase tracking-[0.24em] text-[var(--text-soft)]">Models</p>
+                <p class="mt-2 text-3xl font-semibold">{{ state.statusModels.length }}</p>
+              </div>
+              <div class="stat-block">
+                <p class="text-xs uppercase tracking-[0.24em] text-[var(--text-soft)]">Logs</p>
+                <p class="mt-2 text-3xl font-semibold">{{ state.logs.length }}</p>
+              </div>
+            </div>
           </div>
-          <div class="flex items-center gap-3">
-            <span class="text-sm text-slate-500">已登录</span>
-            <button @click="actions.logout" class="text-sm text-slate-600 border border-slate-300 px-3 py-1 rounded-full">退出</button>
-          </div>
-        </header>
 
-        <div v-if="state.notice" class="mb-6 rounded-xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-800">
+          <div class="tonal-divider"></div>
+
+          <div class="flex gap-4 px-5 py-4 sm:px-6 flex-row items-center justify-between lg:px-8">
+            <div class="flex flex-wrap items-center gap-3">
+              <div class="pill text-sm text-[var(--text-soft)]">
+                <span class="inline-block h-2.5 w-2.5 rounded-full bg-[var(--success)]"></span>
+                已登录
+              </div>
+            </div>
+            <button @click="actions.logout" class="btn" aria-label="退出登录" title="退出登录">
+              <span class="text-lg leading-none text-[var(--danger)]">Logout</span>
+            </button>
+          </div>
+        </section>
+
+        <div v-if="state.notice" class="fade-up mt-5 rounded-[1.5rem] border border-[rgba(214,140,79,0.18)] bg-[rgba(255,244,231,0.82)] px-4 py-3 text-sm text-[var(--accent-strong)] shadow-[0_14px_40px_rgba(140,88,31,0.08)] sm:px-5">
           {{ state.notice }}
         </div>
 
-        <div class="grid lg:grid-cols-[220px_1fr] gap-6">
-          <aside class="card p-4 space-y-2">
-            <button v-for="item in constants.NAV_ITEMS" :key="item.key" @click="state.view = item.key"
-              class="w-full text-left px-3 py-2 rounded-lg font-medium"
-              :class="state.view === item.key ? 'bg-sky-500 text-white' : 'text-slate-700 hover:bg-slate-100'">
-              {{ item.label }}
-            </button>
+        <div class="mt-6 grid gap-6">
+          <aside class="sticky top-4 z-10 overflow-x-auto">
+            <div class="panel-soft px-2 py-2 sm:px-3">
+              <div class="flex gap-2 overflow-x-auto pb-1">
+                <button
+                  v-for="item in constants.NAV_ITEMS"
+                  :key="item.key"
+                  @click="state.view = item.key"
+                  class="nav-chip flex-1 whitespace-nowrap"
+                  :class="state.view === item.key ? 'bg-[var(--text)] text-[var(--surface)] shadow-[0_12px_28px_rgba(58,39,19,0.16)]' : 'bg-transparent text-[var(--text-soft)] hover:bg-[rgba(249,239,225,0.92)] border-[rgba(185,150,117,0.18)]'"
+                >
+                  {{ item.label }}
+                </button>
+              </div>
+            </div>
           </aside>
 
           <main class="space-y-6">
-            <section class="card p-6">
-              <div class="flex items-center justify-between gap-4 flex-col md:flex-row">
+            <section v-if="state.view === constants.VIEWS.STATUS" class="panel px-5 py-5 sm:px-6 sm:py-6">
+              <div class="toolbar justify-between">
+                <h2 class="section-title font-semibold text-[var(--text)]">模型状态</h2>
+                <button @click="actions.loadStatus" class="btn btn-secondary">刷新状态</button>
+              </div>
+              <div class="mt-5 grid gap-4 lg:grid-cols-2">
+                <article v-for="model in state.statusModels" :key="model.code" class="panel-quiet p-4 sm:p-5">
+                  <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                    <div class="min-w-0">
+                      <p class="text-lg font-semibold text-[var(--text)]">{{ model.name }}</p>
+                      <p class="mt-1 truncate text-sm text-[var(--text-soft)]">{{ model.channel_name }}</p>
+                    </div>
+                    <span class="inline-flex w-fit items-center rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]" :class="model.status === 'active' ? 'bg-[rgba(74,176,112,0.14)] text-[var(--success)]' : 'bg-[rgba(220,114,92,0.12)] text-[var(--danger)]'">
+                      {{ model.status }}
+                    </span>
+                  </div>
+                  <div class="mt-4 metric-inline">
+                    <div>
+                      <p class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">成功率</p>
+                      <p class="mt-2 text-lg font-semibold text-[var(--text)]">{{ model.success_rate }}</p>
+                    </div>
+                    <div>
+                      <p class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">延迟</p>
+                      <p class="mt-2 text-lg font-semibold text-[var(--text)]">{{ model.avg_latency_ms }} ms</p>
+                    </div>
+                    <div>
+                      <p class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">连续失败</p>
+                      <p class="mt-2 text-lg font-semibold text-[var(--text)]">{{ model.consecutive_failures }}</p>
+                    </div>
+                  </div>
+                </article>
+              </div>
+            </section>
+
+            <section v-if="state.view === constants.VIEWS.CHANNELS" class="panel px-5 py-5 sm:px-6 sm:py-6">
+              <div class="toolbar justify-between">
                 <div>
-                  <h2 class="text-xl font-semibold">使用说明</h2>
-                  <p class="text-slate-500">先登录，再创建渠道；渠道里可以直接配置一个或多个模型；模型也可以在“模型管理”里单独修改。</p>
+                  <h2 class="section-title font-semibold text-[var(--text)]">渠道管理</h2>
+                  <p class="mt-2 text-sm text-[var(--text-soft)]">列表主视图，抽屉编辑。</p>
                 </div>
-                <div class="text-sm text-slate-500 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
-                  `Authorization: Bearer &lt;ADMIN_KEY&gt;`
+                <div class="toolbar">
+                  <button @click="actions.loadChannels" class="btn btn-secondary">刷新渠道</button>
+                  <button @click="actions.openCreateChannel" class="btn btn-primary">新建渠道</button>
                 </div>
               </div>
-              <div class="mt-4 grid md:grid-cols-3 gap-4 text-sm text-slate-600">
-                <div class="rounded-xl border border-slate-200 p-4">
-                  <p class="font-semibold text-slate-900">1. 创建渠道</p>
-                  <p class="mt-2">填写渠道基础信息，并在下方模型编辑器里添加该渠道可用模型。</p>
-                </div>
-                <div class="rounded-xl border border-slate-200 p-4">
-                  <p class="font-semibold text-slate-900">2. 编辑渠道</p>
-                  <p class="mt-2">点击渠道卡片上的“编辑”会把该渠道和其模型完整载入表单，修改后提交即可覆盖更新。</p>
-                </div>
-                <div class="rounded-xl border border-slate-200 p-4">
-                  <p class="font-semibold text-slate-900">3. 编辑单个模型</p>
-                  <p class="mt-2">在模型概览中点“编辑模型”，会加载模型详情，可单独修改状态、能力、请求头、别名等字段。</p>
-                </div>
+
+              <div class="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                <article v-for="channel in state.channels" :key="channel.id" class="list-card">
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <p class="truncate text-lg font-semibold text-[var(--text)]">{{ channel.name }}</p>
+                      <p class="mt-1 text-sm text-[var(--text-soft)]">{{ channel.provider }} · {{ channel.key }}</p>
+                    </div>
+                    <span class="pill text-xs text-[var(--text-soft)]">{{ channel.models?.length || 0 }} models</span>
+                  </div>
+                  <div class="mt-4 metric-inline">
+                    <div>
+                      <p class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">Model</p>
+                      <p class="mt-2 font-semibold">{{ channel.models?.length || 0 }}</p>
+                    </div>
+                    <div>
+                      <p class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">Active</p>
+                      <p class="mt-2 font-semibold">{{ actions.getChannelActiveCount(channel) }}</p>
+                    </div>
+                    <div>
+                      <p class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">Base URL</p>
+                      <p class="mt-2 truncate font-semibold">{{ channel.base_url || '-' }}</p>
+                    </div>
+                  </div>
+                  <div v-if="channel.models?.length" class="mt-4 chip-group">
+                    <span v-for="model in channel.models.slice(0, 3)" :key="model.id || model.code" class="chip">{{ model.code }}</span>
+                    <span v-if="channel.models.length > 3" class="chip">+{{ channel.models.length - 3 }}</span>
+                  </div>
+                  <div class="mt-4 flex gap-2">
+                    <button @click="actions.editChannel(channel)" class="btn btn-primary flex-1 text-sm">编辑</button>
+                    <button @click="actions.deleteChannel(channel.id)" class="btn btn-ghost px-4 text-sm text-[var(--danger)]">删除</button>
+                  </div>
+                </article>
               </div>
             </section>
 
-            <section v-if="state.view === constants.VIEWS.STATUS" class="card p-6">
-              <div class="flex items-center justify-between">
-                <h2 class="text-xl font-semibold">模型状态</h2>
-                <button @click="actions.loadStatus" class="text-sm text-sky-600">刷新</button>
-              </div>
-              <div class="mt-4 grid gap-4 md:grid-cols-2">
-                <div v-for="model in state.statusModels" :key="model.code" class="border border-slate-200 rounded-xl p-4">
-                  <div class="flex items-center justify-between">
-                    <div>
-                      <p class="font-semibold">{{ model.name }}</p>
-                      <p class="text-sm text-slate-500">{{ model.channel_name }}</p>
-                    </div>
-                    <span class="text-xs px-2 py-1 rounded-full" :class="model.status === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'">{{ model.status }}</span>
-                  </div>
-                  <div class="mt-3 text-sm text-slate-600 grid grid-cols-3 gap-2">
-                    <div>
-                      <p class="text-xs text-slate-400">成功率</p>
-                      <p>{{ model.success_rate }}</p>
-                    </div>
-                    <div>
-                      <p class="text-xs text-slate-400">延迟(ms)</p>
-                      <p>{{ model.avg_latency_ms }}</p>
-                    </div>
-                    <div>
-                      <p class="text-xs text-slate-400">连续失败</p>
-                      <p>{{ model.consecutive_failures }}</p>
-                    </div>
-                  </div>
+            <section v-if="state.view === constants.VIEWS.MODELS" class="panel px-5 py-5 sm:px-6 sm:py-6">
+              <div class="toolbar justify-between">
+                <div>
+                  <h2 class="section-title font-semibold text-[var(--text)]">模型管理</h2>
+                  <p class="mt-2 text-sm text-[var(--text-soft)]">按渠道分组，补足上下文和操作密度。</p>
                 </div>
-              </div>
-            </section>
-
-            <section v-if="state.view === constants.VIEWS.CHANNELS" class="card p-6 space-y-6">
-              <div class="flex items-center justify-between">
-                <h2 class="text-xl font-semibold">渠道管理</h2>
-                <button @click="actions.loadChannels" class="text-sm text-sky-600">刷新</button>
+                <button @click="actions.loadChannels" class="btn btn-secondary">刷新渠道与模型</button>
               </div>
 
-              <div class="grid md:grid-cols-2 gap-4">
-                <div class="space-y-3">
-                  <h3 class="font-semibold">创建/更新渠道</h3>
-                  <p class="text-sm text-slate-500">更新时先从右侧点击“编辑”，避免手填 `id`。</p>
-                  <input v-model="state.channelForm.id" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="渠道ID (更新时填写)" />
-                  <input v-model="state.channelForm.name" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="渠道名称" />
-                  <input v-model="state.channelForm.key" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="渠道 key" />
-                  <select v-model="state.channelForm.provider" class="w-full rounded-lg border border-slate-300 px-3 py-2">
-                    <option v-for="p in constants.PROVIDERS" :key="p" :value="p">{{ p }}</option>
-                  </select>
-                  <input v-model="state.channelForm.apiKey" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="API Key" />
-                  <input v-model="state.channelForm.baseURL" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="Base URL" />
-                  <div class="rounded-2xl border border-slate-200 p-4 space-y-4 bg-slate-50/80">
-                    <div class="flex items-center justify-between">
-                      <h4 class="font-semibold text-slate-900">渠道模型配置</h4>
-                      <button @click="actions.addChannelModel" class="text-sm text-sky-600">新增模型</button>
+              <div class="mt-6 space-y-3">
+                <article v-for="channel in state.channels" :key="channel.id" class="list-card">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <p class="text-lg font-semibold text-[var(--text)]">{{ channel.name }}</p>
+                      <p class="mt-1 text-sm text-[var(--text-soft)]">{{ channel.provider }}</p>
                     </div>
-                    <div v-if="state.channelForm.models.length === 0" class="text-sm text-slate-500">
-                      还没有模型，点击“新增模型”开始配置。
-                    </div>
-                    <div v-for="(model, index) in state.channelForm.models" :key="model.localId" class="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
-                      <div class="flex items-center justify-between">
-                        <p class="font-medium text-slate-900">模型 {{ index + 1 }}</p>
-                        <button @click="actions.removeChannelModel(index)" class="text-xs text-rose-600">移除</button>
-                      </div>
-                      <div class="grid md:grid-cols-2 gap-3">
-                        <input v-model="model.code" type="text" class="rounded-lg border border-slate-300 px-3 py-2" placeholder="模型 code" />
-                        <input v-model="model.name" type="text" class="rounded-lg border border-slate-300 px-3 py-2" placeholder="模型名称" />
-                        <input v-model="model.desc" type="text" class="rounded-lg border border-slate-300 px-3 py-2" placeholder="模型描述" />
-                        <input v-model="model.cost" type="text" class="rounded-lg border border-slate-300 px-3 py-2" placeholder="成本，例如 2.5/M" />
-                        <select v-model="model.callType" class="rounded-lg border border-slate-300 px-3 py-2">
-                          <option v-for="callType in constants.CALL_TYPES" :key="callType" :value="callType">{{ callType }}</option>
-                        </select>
-                        <input v-model.number="model.weight" type="number" step="0.1" min="0" max="100" class="rounded-lg border border-slate-300 px-3 py-2" placeholder="权重" />
-                      </div>
-                      <textarea v-model="model.aliasesRaw" class="w-full rounded-lg border border-slate-300 px-3 py-2 h-20" placeholder='别名 JSON 数组，例如 ["gpt4o","gpt-4-omni"]'></textarea>
-                      <textarea v-model="model.capabilitiesRaw" class="w-full rounded-lg border border-slate-300 px-3 py-2 h-20" placeholder='能力 JSON 数组，例如 ["chat","image_in"]'></textarea>
-                      <textarea v-model="model.headersRaw" class="w-full rounded-lg border border-slate-300 px-3 py-2 h-20" placeholder='请求头 JSON 对象，例如 {"x-custom":"value"}'></textarea>
-                    </div>
+                    <span class="pill text-xs text-[var(--text-soft)]">{{ channel.models?.length || 0 }} models</span>
                   </div>
-                  <details class="rounded-xl border border-slate-200 p-3 text-sm text-slate-600">
-                    <summary class="cursor-pointer font-medium text-slate-900">查看原始模型 JSON</summary>
-                    <textarea v-model="state.channelForm.modelsRaw" class="mt-3 w-full rounded-lg border border-slate-300 px-3 py-2 h-32" placeholder='模型 JSON 数组'></textarea>
-                  </details>
-                  <div class="flex gap-3">
-                    <button @click="actions.createChannel" class="flex-1 bg-sky-500 hover:bg-sky-600 text-white font-medium py-2 rounded-lg">创建</button>
-                    <button @click="actions.updateChannel" class="flex-1 border border-slate-300 text-slate-700 font-medium py-2 rounded-lg">更新</button>
-                    <button @click="actions.resetChannelForm" class="border border-slate-300 text-slate-700 font-medium px-4 rounded-lg">清空</button>
-                  </div>
-                </div>
-                <div class="space-y-3">
-                  <h3 class="font-semibold">渠道列表</h3>
-                  <div class="space-y-3 max-h-[420px] overflow-auto pr-2">
-                    <div v-for="channel in state.channels" :key="channel.id" class="border border-slate-200 rounded-xl p-3">
-                      <div class="flex items-center justify-between">
-                        <div>
-                          <p class="font-semibold">{{ channel.name }}</p>
-                          <p class="text-xs text-slate-500">{{ channel.key }} · {{ channel.provider }}</p>
-                        </div>
-                        <div class="flex items-center gap-3">
-                          <button @click="actions.editChannel(channel)" class="text-xs text-sky-600">编辑</button>
-                          <button @click="actions.deleteChannel(channel.id)" class="text-xs text-rose-600">删除</button>
-                        </div>
-                      </div>
-                      <p class="text-xs text-slate-500 mt-2">模型数量: {{ channel.models?.length || 0 }}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-
-            <section v-if="state.view === constants.VIEWS.MODELS" class="card p-6 space-y-6">
-              <div class="flex items-center justify-between">
-                <h2 class="text-xl font-semibold">模型管理</h2>
-                <button @click="actions.loadChannels" class="text-sm text-sky-600">刷新渠道与模型</button>
-              </div>
-              <div class="grid md:grid-cols-2 gap-4">
-                <div class="space-y-3">
-                  <h3 class="font-semibold">更新模型</h3>
-                  <p class="text-sm text-slate-500">建议从右侧点击“编辑模型”自动载入，不要手动拼字段。</p>
-                  <input v-model="state.modelForm.id" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="模型ID" />
-                  <input v-model="state.modelForm.name" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="模型名称" />
-                  <input v-model="state.modelForm.code" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="模型 code" />
-                  <input v-model="state.modelForm.desc" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="模型描述" />
-                  <div class="grid md:grid-cols-2 gap-3">
-                    <input v-model.number="state.modelForm.weight" type="number" step="0.1" min="0" max="100" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="权重" />
-                    <select v-model="state.modelForm.status" class="w-full rounded-lg border border-slate-300 px-3 py-2">
-                      <option v-for="s in constants.MODEL_STATUS" :key="s" :value="s">{{ s }}</option>
-                    </select>
-                    <select v-model="state.modelForm.callType" class="w-full rounded-lg border border-slate-300 px-3 py-2">
-                      <option v-for="callType in constants.CALL_TYPES" :key="callType" :value="callType">{{ callType }}</option>
-                    </select>
-                    <input v-model="state.modelForm.cost" type="text" class="w-full rounded-lg border border-slate-300 px-3 py-2" placeholder="成本，例如 0.02/img" />
-                  </div>
-                  <textarea v-model="state.modelForm.aliasesRaw" class="w-full rounded-lg border border-slate-300 px-3 py-2 h-24" placeholder='别名 JSON 数组，例如 ["gpt4o"]'></textarea>
-                  <textarea v-model="state.modelForm.capabilitiesRaw" class="w-full rounded-lg border border-slate-300 px-3 py-2 h-24" placeholder='能力 JSON 数组，例如 ["chat","image_out"]'></textarea>
-                  <textarea v-model="state.modelForm.headersRaw" class="w-full rounded-lg border border-slate-300 px-3 py-2 h-24" placeholder='请求头 JSON 对象，例如 {"x-api-version":"2024-01"}'></textarea>
-                  <button @click="actions.updateModel" class="w-full bg-slate-900 text-white py-2 rounded-lg">更新模型</button>
-                  <button @click="actions.resetModelForm" class="w-full border border-slate-300 text-slate-700 py-2 rounded-lg">清空模型表单</button>
-                </div>
-                <div class="space-y-3">
-                  <h3 class="font-semibold">渠道模型概览</h3>
-                  <div class="space-y-3 max-h-[420px] overflow-auto pr-2">
-                    <div v-for="channel in state.channels" :key="channel.id" class="border border-slate-200 rounded-xl p-3">
-                      <p class="font-semibold">{{ channel.name }}</p>
-                      <div class="mt-2 space-y-2">
-                        <div v-for="model in channel.models" :key="model.id" class="text-sm text-slate-600 flex items-center justify-between">
-                          <span>{{ model.name }} ({{ model.code }})</span>
-                          <div class="flex items-center gap-3">
-                            <button @click="actions.editModel(model)" class="text-xs text-sky-600">编辑模型</button>
-                            <button @click="actions.deleteModel(model.id)" class="text-xs text-rose-600">删除</button>
+                  <div class="mt-4 grid gap-3">
+                    <article v-for="model in channel.models" :key="model.id" class="rounded-[1.2rem] border border-[rgba(185,150,117,0.16)] bg-white/70 p-4">
+                      <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                        <div class="min-w-0">
+                          <div class="flex flex-wrap items-center gap-2">
+                            <p class="truncate text-base font-semibold text-[var(--text)]">{{ model.name }}</p>
+                            <span class="pill text-xs text-[var(--text-soft)]">{{ model.code }}</span>
+                            <span class="pill text-xs" :class="model.status === 'active' ? 'text-[var(--success)]' : 'text-[var(--danger)]'">{{ model.status || 'unknown' }}</span>
+                          </div>
+                          <p class="mt-2 text-sm text-[var(--text-soft)]">{{ model.desc || '无描述' }}</p>
+                          <div class="mt-3 chip-group">
+                            <span v-for="alias in actions.parseStoredJsonArray(model.aliases).slice(0, 3)" :key="alias" class="chip">{{ alias }}</span>
+                            <span v-for="capability in actions.parseStoredJsonArray(model.capabilities).slice(0, 2)" :key="capability" class="chip">{{ capability }}</span>
                           </div>
                         </div>
+                        <div class="toolbar">
+                          <button @click="actions.editModel(model)" class="btn btn-primary text-sm">编辑模型</button>
+                          <button @click="actions.deleteModel(model.id)" class="btn btn-ghost text-sm text-[var(--danger)]">删除</button>
+                        </div>
                       </div>
-                    </div>
+                    </article>
                   </div>
-                </div>
+                </article>
               </div>
             </section>
 
-            <section v-if="state.view === constants.VIEWS.LOGS" class="card p-6 space-y-6">
-              <div class="flex items-center justify-between">
-                <h2 class="text-xl font-semibold">调用日志</h2>
-                <button @click="actions.loadLogs" class="text-sm text-sky-600">刷新</button>
+            <section v-if="state.view === constants.VIEWS.LOGS" class="panel px-5 py-5 sm:px-6 sm:py-6">
+              <div class="toolbar justify-between">
+                <h2 class="section-title font-semibold text-[var(--text)]">调用日志</h2>
+                <button @click="actions.loadLogs" class="btn btn-secondary">刷新日志</button>
               </div>
-              <div class="grid md:grid-cols-4 gap-3">
-                <input v-model="state.logFilters.channel_id" type="text" class="rounded-lg border border-slate-300 px-3 py-2" placeholder="渠道ID" />
-                <input v-model="state.logFilters.model_id" type="text" class="rounded-lg border border-slate-300 px-3 py-2" placeholder="模型ID" />
-                <select v-model="state.logFilters.status" class="rounded-lg border border-slate-300 px-3 py-2">
+              <div class="mt-5 grid gap-3 lg:grid-cols-4">
+                <input v-model="state.logFilters.channel_id" type="text" class="field" placeholder="渠道 ID" />
+                <input v-model="state.logFilters.model_id" type="text" class="field" placeholder="模型 ID" />
+                <select v-model="state.logFilters.status" class="field-select">
                   <option value="">全部状态</option>
                   <option v-for="s in constants.LOG_STATUS_LIST" :key="s" :value="s">{{ s }}</option>
                 </select>
-                <button @click="actions.loadLogs" class="bg-sky-500 text-white rounded-lg">查询</button>
+                <button @click="actions.loadLogs" class="btn btn-primary">查询</button>
               </div>
-              <div class="space-y-3">
-                <div v-for="log in state.logs" :key="log.id" class="border border-slate-200 rounded-xl p-3 text-sm">
-                  <div class="flex items-center justify-between">
-                    <p class="font-medium">{{ log.model_code }} · {{ log.status }}</p>
-                    <span class="text-xs text-slate-400">{{ log.created_at }}</span>
+              <div class="mt-5 space-y-3">
+                <article v-for="log in state.logs" :key="log.id" class="panel-quiet p-4 sm:p-5">
+                  <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <p class="text-base font-semibold text-[var(--text)]">{{ log.model_code }} · {{ log.status }}</p>
+                      <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">{{ log.error_message || '无错误' }}</p>
+                    </div>
+                    <span class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">{{ log.created_at }}</span>
                   </div>
-                  <p class="text-slate-500">{{ log.error_message || '无错误' }}</p>
-                </div>
+                </article>
               </div>
             </section>
           </main>
         </div>
       </div>
+
+      <div v-if="state.channelDrawerOpen" class="drawer-backdrop" @click="actions.closeChannelDrawer"></div>
+      <aside v-if="state.channelDrawerOpen" class="drawer">
+        <div class="px-5 py-5 sm:px-6">
+          <div class="toolbar justify-between">
+            <div>
+              <h3 class="section-title font-semibold text-[var(--text)]">{{ state.channelForm.id ? '编辑渠道' : '新建渠道' }}</h3>
+              <p class="mt-2 text-sm text-[var(--text-soft)]">{{ state.channelForm.id ? state.channelForm.name || state.channelForm.key : '先填基础信息，再补模型' }}</p>
+            </div>
+            <button @click="actions.closeChannelDrawer" class="icon-btn" aria-label="关闭">×</button>
+          </div>
+
+          <div class="mt-6 grid gap-3 sm:grid-cols-2">
+            <input v-model="state.channelForm.id" type="text" class="field sm:col-span-2" placeholder="渠道 ID（更新时填写）" />
+            <input v-model="state.channelForm.name" type="text" class="field" placeholder="渠道名称" />
+            <input v-model="state.channelForm.key" type="text" class="field" placeholder="渠道 key" />
+            <select v-model="state.channelForm.provider" class="field-select">
+              <option v-for="p in constants.PROVIDERS" :key="p" :value="p">{{ p }}</option>
+            </select>
+            <input v-model="state.channelForm.apiKey" type="text" class="field" placeholder="API Key" />
+            <input v-model="state.channelForm.baseURL" type="text" class="field sm:col-span-2" placeholder="Base URL" />
+          </div>
+
+          <div class="mt-6 panel-quiet p-4 sm:p-5">
+            <div class="toolbar justify-between">
+              <h4 class="text-lg font-semibold text-[var(--text)]">模型配置</h4>
+              <button @click="actions.addChannelModel" class="btn btn-secondary">新增模型</button>
+            </div>
+
+            <div class="mt-4 space-y-4">
+              <article v-for="(model, index) in state.channelForm.models" :key="model.localId" class="rounded-[1.3rem] border border-[rgba(185,150,117,0.18)] bg-white/82 p-4">
+                <div class="toolbar justify-between">
+                  <div>
+                    <p class="text-sm font-semibold text-[var(--text)]">{{ model.name || `模型 ${index + 1}` }}</p>
+                    <p class="mt-1 text-xs text-[var(--text-soft)]">{{ model.code || '未设置 code' }}</p>
+                  </div>
+                  <button @click="actions.removeChannelModel(index)" class="btn btn-ghost text-sm text-[var(--danger)]">移除</button>
+                </div>
+
+                <div class="mt-4 grid gap-3 sm:grid-cols-2">
+                  <input v-model="model.code" type="text" class="field" placeholder="模型 code" />
+                  <input v-model="model.name" type="text" class="field" placeholder="模型名称" />
+                  <input v-model="model.desc" type="text" class="field sm:col-span-2" placeholder="模型描述" />
+                  <input v-model="model.cost" type="text" class="field" placeholder="成本，例如 2.5/M" />
+                  <select v-model="model.callType" class="field-select">
+                    <option v-for="callType in constants.CALL_TYPES" :key="callType" :value="callType">{{ callType }}</option>
+                  </select>
+                  <input v-model.number="model.weight" type="number" step="0.1" min="0" max="100" class="field sm:col-span-2" placeholder="权重" />
+                </div>
+
+                <div class="mt-4 space-y-4">
+                  <div>
+                    <p class="mb-2 text-sm font-medium text-[var(--text)]">别名</p>
+                    <div class="chip-group">
+                      <span v-for="(alias, aliasIndex) in model.aliases" :key="`${model.localId}-alias-${alias}-${aliasIndex}`" class="chip">
+                        {{ alias }}
+                        <button @click="actions.removeChannelModelAlias(index, aliasIndex)" type="button">×</button>
+                      </span>
+                    </div>
+                    <div class="mt-3 flex gap-2">
+                      <input v-model="model.aliasInput" @keydown.enter.prevent="actions.addChannelModelAlias(index)" class="field field-mini" placeholder="输入别名后回车" />
+                      <button @click="actions.addChannelModelAlias(index)" class="btn btn-secondary">添加</button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <p class="mb-2 text-sm font-medium text-[var(--text)]">能力</p>
+                    <div class="chip-group">
+                      <span v-for="(capability, capabilityIndex) in model.capabilities" :key="`${model.localId}-capability-${capability}-${capabilityIndex}`" class="chip">
+                        {{ capability }}
+                        <button @click="actions.removeChannelModelCapability(index, capabilityIndex)" type="button">×</button>
+                      </span>
+                    </div>
+                    <div class="mt-3 flex gap-2">
+                      <input v-model="model.capabilityInput" @keydown.enter.prevent="actions.addChannelModelCapability(index)" class="field field-mini" placeholder="输入能力后回车" />
+                      <button @click="actions.addChannelModelCapability(index)" class="btn btn-secondary">添加</button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <p class="mb-2 text-sm font-medium text-[var(--text)]">请求头 JSON</p>
+                    <textarea v-model="model.headersRaw" class="field-area" placeholder='{"x-custom":"value"}'></textarea>
+                  </div>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <div class="mt-6 grid gap-3 sm:grid-cols-3">
+            <button @click="state.channelForm.id ? actions.updateChannel() : actions.createChannel()" class="btn btn-primary sm:col-span-2">{{ state.channelForm.id ? '保存更新' : '创建渠道' }}</button>
+            <button @click="actions.resetChannelForm" class="btn btn-secondary">重置</button>
+          </div>
+        </div>
+      </aside>
+
+      <div v-if="state.modelDrawerOpen" class="drawer-backdrop" @click="actions.closeModelDrawer"></div>
+      <aside v-if="state.modelDrawerOpen" class="drawer">
+        <div class="px-5 py-5 sm:px-6">
+          <div class="toolbar justify-between">
+            <div>
+              <h3 class="section-title font-semibold text-[var(--text)]">编辑模型</h3>
+              <p class="mt-2 text-sm text-[var(--text-soft)]">{{ state.modelForm.name || state.modelForm.code || '模型配置' }}</p>
+            </div>
+            <button @click="actions.closeModelDrawer" class="icon-btn" aria-label="关闭">×</button>
+          </div>
+
+          <div class="mt-6 grid gap-3 sm:grid-cols-2">
+            <input v-model="state.modelForm.id" type="text" class="field sm:col-span-2" placeholder="模型 ID" />
+            <input v-model="state.modelForm.name" type="text" class="field" placeholder="模型名称" />
+            <input v-model="state.modelForm.code" type="text" class="field" placeholder="模型 code" />
+            <input v-model="state.modelForm.desc" type="text" class="field sm:col-span-2" placeholder="模型描述" />
+            <input v-model.number="state.modelForm.weight" type="number" step="0.1" min="0" max="100" class="field" placeholder="权重" />
+            <select v-model="state.modelForm.status" class="field-select">
+              <option v-for="s in constants.MODEL_STATUS" :key="s" :value="s">{{ s }}</option>
+            </select>
+            <select v-model="state.modelForm.callType" class="field-select">
+              <option v-for="callType in constants.CALL_TYPES" :key="callType" :value="callType">{{ callType }}</option>
+            </select>
+            <input v-model="state.modelForm.cost" type="text" class="field" placeholder="成本，例如 0.02/img" />
+          </div>
+
+          <div class="mt-6 space-y-4">
+            <div class="panel-quiet p-4">
+              <p class="mb-2 text-sm font-medium text-[var(--text)]">别名</p>
+              <div class="chip-group">
+                <span v-for="(alias, index) in state.modelForm.aliases" :key="`model-form-alias-${alias}-${index}`" class="chip">
+                  {{ alias }}
+                  <button @click="actions.removeModelAlias(index)" type="button">×</button>
+                </span>
+              </div>
+              <div class="mt-3 flex gap-2">
+                <input v-model="state.modelForm.aliasInput" @keydown.enter.prevent="actions.addModelAlias" class="field field-mini" placeholder="输入别名后回车" />
+                <button @click="actions.addModelAlias" class="btn btn-secondary">添加</button>
+              </div>
+            </div>
+
+            <div class="panel-quiet p-4">
+              <p class="mb-2 text-sm font-medium text-[var(--text)]">能力</p>
+              <div class="chip-group">
+                <span v-for="(capability, index) in state.modelForm.capabilities" :key="`model-form-capability-${capability}-${index}`" class="chip">
+                  {{ capability }}
+                  <button @click="actions.removeModelCapability(index)" type="button">×</button>
+                </span>
+              </div>
+              <div class="mt-3 flex gap-2">
+                <input v-model="state.modelForm.capabilityInput" @keydown.enter.prevent="actions.addModelCapability" class="field field-mini" placeholder="输入能力后回车" />
+                <button @click="actions.addModelCapability" class="btn btn-secondary">添加</button>
+              </div>
+            </div>
+
+            <div class="panel-quiet p-4">
+              <p class="mb-2 text-sm font-medium text-[var(--text)]">请求头 JSON</p>
+              <textarea v-model="state.modelForm.headersRaw" class="field-area" placeholder='{"x-api-version":"2024-01"}'></textarea>
+            </div>
+          </div>
+
+          <div class="mt-6 grid gap-3 sm:grid-cols-2">
+            <button @click="actions.updateModel" class="btn btn-primary">保存模型</button>
+            <button @click="actions.resetModelForm" class="btn btn-secondary">重置</button>
+          </div>
+        </div>
+      </aside>
     </div>
 
     <script>
@@ -328,14 +827,27 @@
 
       createApp({
         setup() {
+          const createUniqueList = (values) => [...new Set((values || []).map((item) => String(item || '').trim()).filter(Boolean))];
+
+          const parseStoredJsonArray = (rawValue) => {
+            try {
+              if (Array.isArray(rawValue)) return createUniqueList(rawValue);
+              return createUniqueList(JSON.parse(rawValue || constants.EMPTY_ARRAY_JSON));
+            } catch (error) {
+              return [];
+            }
+          };
+
           const createEmptyChannelModel = () => ({
             localId: crypto.randomUUID(),
             code: '',
             name: '',
             desc: '',
-            aliasesRaw: constants.EMPTY_ARRAY_JSON,
+            aliases: [],
+            aliasInput: '',
             callType: constants.CALL_TYPES[0],
-            capabilitiesRaw: constants.EMPTY_ARRAY_JSON,
+            capabilities: [],
+            capabilityInput: '',
             cost: '',
             weight: 1,
             headersRaw: constants.EMPTY_OBJECT_JSON,
@@ -361,8 +873,10 @@
             status: constants.MODEL_STATUS[0],
             callType: constants.CALL_TYPES[0],
             cost: '',
-            aliasesRaw: constants.EMPTY_ARRAY_JSON,
-            capabilitiesRaw: constants.EMPTY_ARRAY_JSON,
+            aliases: [],
+            aliasInput: '',
+            capabilities: [],
+            capabilityInput: '',
             headersRaw: constants.EMPTY_OBJECT_JSON,
           });
 
@@ -376,6 +890,8 @@
             statusModels: [],
             logs: [],
             notice: '',
+            channelDrawerOpen: false,
+            modelDrawerOpen: false,
             channelForm: createEmptyChannelForm(),
             modelForm: createEmptyModelForm(),
             logFilters: {
@@ -391,9 +907,9 @@
                 code: model.code,
                 name: model.name,
                 desc: model.desc,
-                aliases: JSON.parse(model.aliasesRaw || constants.EMPTY_ARRAY_JSON),
+                aliases: createUniqueList(model.aliases),
                 callType: model.callType,
-                capabilities: JSON.parse(model.capabilitiesRaw || constants.EMPTY_ARRAY_JSON),
+                capabilities: createUniqueList(model.capabilities),
                 cost: model.cost,
                 weight: Number(model.weight || 0),
                 headers: JSON.parse(model.headersRaw || constants.EMPTY_OBJECT_JSON),
@@ -410,9 +926,11 @@
               code: model.code || '',
               name: model.name || '',
               desc: model.desc || '',
-              aliasesRaw: JSON.stringify(model.aliases || [], null, 2),
+              aliases: createUniqueList(model.aliases || []),
+              aliasInput: '',
               callType: model.callType || constants.CALL_TYPES[0],
-              capabilitiesRaw: JSON.stringify(model.capabilities || [], null, 2),
+              capabilities: createUniqueList(model.capabilities || []),
+              capabilityInput: '',
               cost: model.cost || '',
               weight: model.weight ?? 1,
               headersRaw: JSON.stringify(model.headers || {}, null, 2),
@@ -443,6 +961,7 @@
           };
 
           const actions = {
+            parseStoredJsonArray,
             setNotice: (message) => {
               state.notice = message;
               window.setTimeout(() => {
@@ -450,6 +969,16 @@
                   state.notice = '';
                 }
               }, 3000);
+            },
+            getChannelActiveCount: (channel) => (channel.models || []).filter((model) => model.status === 'active').length,
+            addTokenToList: (target, fieldName, inputName) => {
+              const value = String(target[inputName] || '').trim();
+              if (!value) return;
+              target[fieldName] = createUniqueList([...(target[fieldName] || []), value]);
+              target[inputName] = '';
+            },
+            removeTokenFromList: (target, fieldName, index) => {
+              target[fieldName].splice(index, 1);
             },
             login: async () => {
               state.error = '';
@@ -471,6 +1000,16 @@
               state.token = '';
               state.tokenInput = '';
             },
+            openCreateChannel: () => {
+              actions.resetChannelForm();
+              state.channelDrawerOpen = true;
+            },
+            closeChannelDrawer: () => {
+              state.channelDrawerOpen = false;
+            },
+            closeModelDrawer: () => {
+              state.modelDrawerOpen = false;
+            },
             resetChannelForm: () => {
               state.channelForm = createEmptyChannelForm();
               syncChannelModelsRaw();
@@ -488,6 +1027,36 @@
                 state.channelForm.models.push(createEmptyChannelModel());
               }
               syncChannelModelsRaw();
+            },
+            addChannelModelAlias: (index) => {
+              const model = state.channelForm.models[index];
+              actions.addTokenToList(model, 'aliases', 'aliasInput');
+              syncChannelModelsRaw();
+            },
+            removeChannelModelAlias: (modelIndex, aliasIndex) => {
+              actions.removeTokenFromList(state.channelForm.models[modelIndex], 'aliases', aliasIndex);
+              syncChannelModelsRaw();
+            },
+            addChannelModelCapability: (index) => {
+              const model = state.channelForm.models[index];
+              actions.addTokenToList(model, 'capabilities', 'capabilityInput');
+              syncChannelModelsRaw();
+            },
+            removeChannelModelCapability: (modelIndex, capabilityIndex) => {
+              actions.removeTokenFromList(state.channelForm.models[modelIndex], 'capabilities', capabilityIndex);
+              syncChannelModelsRaw();
+            },
+            addModelAlias: () => {
+              actions.addTokenToList(state.modelForm, 'aliases', 'aliasInput');
+            },
+            removeModelAlias: (index) => {
+              actions.removeTokenFromList(state.modelForm, 'aliases', index);
+            },
+            addModelCapability: () => {
+              actions.addTokenToList(state.modelForm, 'capabilities', 'capabilityInput');
+            },
+            removeModelCapability: (index) => {
+              actions.removeTokenFromList(state.modelForm, 'capabilities', index);
             },
             loadStatus: async () => {
               const res = await apiRequest(constants.API.STATUS, { auth: false });
@@ -516,6 +1085,7 @@
                   await actions.loadChannels();
                   actions.setNotice('渠道已创建。');
                   actions.resetChannelForm();
+                  state.channelDrawerOpen = false;
                 } else {
                   actions.setNotice(res.data?.error || '渠道创建失败。');
                 }
@@ -542,6 +1112,7 @@
                 if (res.status === 200) {
                   await actions.loadChannels();
                   actions.setNotice('渠道已更新。');
+                  state.channelDrawerOpen = false;
                 } else {
                   actions.setNotice(res.data?.error || '渠道更新失败。');
                 }
@@ -555,9 +1126,9 @@
                   code: model.code,
                   name: model.name,
                   desc: model.desc,
-                  aliases: JSON.parse(model.aliases || constants.EMPTY_ARRAY_JSON),
+                  aliases: parseStoredJsonArray(model.aliases),
                   callType: model.call_type,
-                  capabilities: JSON.parse(model.capabilities || constants.EMPTY_ARRAY_JSON),
+                  capabilities: parseStoredJsonArray(model.capabilities),
                   cost: model.cost,
                   weight: model.weight,
                   headers: JSON.parse(model.headers || constants.EMPTY_OBJECT_JSON),
@@ -575,8 +1146,8 @@
                 models: parseRawModelsToEditor(modelsRaw),
                 modelsRaw,
               };
-              state.view = constants.VIEWS.CHANNELS;
-              actions.setNotice('渠道已载入表单，可直接更新。');
+              state.channelDrawerOpen = true;
+              actions.setNotice('渠道已载入。');
             },
             deleteChannel: async (id) => {
               await apiRequest(`${constants.API.CHANNEL}/${id}`, { method: constants.METHODS.DELETE });
@@ -593,18 +1164,20 @@
                 status: model.status || constants.MODEL_STATUS[0],
                 callType: model.call_type || constants.CALL_TYPES[0],
                 cost: model.cost || '',
-                aliasesRaw: JSON.stringify(JSON.parse(model.aliases || constants.EMPTY_ARRAY_JSON), null, 2),
-                capabilitiesRaw: JSON.stringify(JSON.parse(model.capabilities || constants.EMPTY_ARRAY_JSON), null, 2),
+                aliases: parseStoredJsonArray(model.aliases),
+                aliasInput: '',
+                capabilities: parseStoredJsonArray(model.capabilities),
+                capabilityInput: '',
                 headersRaw: JSON.stringify(JSON.parse(model.headers || constants.EMPTY_OBJECT_JSON), null, 2),
               };
-              state.view = constants.VIEWS.MODELS;
-              actions.setNotice('模型已载入表单，可单独修改。');
+              state.modelDrawerOpen = true;
+              actions.setNotice('模型已载入。');
             },
             updateModel: async () => {
               if (!state.modelForm.id) return;
               try {
-                const aliases = parseJsonInput(state.modelForm.aliasesRaw, constants.EMPTY_ARRAY_JSON, '模型别名');
-                const capabilities = parseJsonInput(state.modelForm.capabilitiesRaw, constants.EMPTY_ARRAY_JSON, '模型能力');
+                const aliases = createUniqueList(state.modelForm.aliases);
+                const capabilities = createUniqueList(state.modelForm.capabilities);
                 const headers = parseJsonInput(state.modelForm.headersRaw, constants.EMPTY_OBJECT_JSON, '模型请求头');
                 const res = await apiRequest(`${constants.API.MODEL}/${state.modelForm.id}`, {
                   method: constants.METHODS.PUT,
@@ -624,6 +1197,7 @@
                 if (res.status === 200) {
                   await actions.loadChannels();
                   actions.setNotice('模型已更新。');
+                  state.modelDrawerOpen = false;
                 } else {
                   actions.setNotice(res.data?.error || '模型更新失败。');
                 }
