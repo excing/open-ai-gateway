@@ -492,7 +492,7 @@ describe('API: GET /api/channel/:id/models - 获取指定渠道上游的模型�
   });
 });
 
-describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用性', () => {
+describe('API: POST /api/model/check - 检测模型可用性', () => {
   let app;
   let mockEnv;
   
@@ -506,7 +506,6 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
   
   it('chat模型应检测API可访问且有非空文本响应', async () => {
     const channelId = 'ch-001';
-    const modelId = 'model-001';
     
     mockEnv._addChannel({
       id: channelId,
@@ -517,27 +516,6 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
       base_url: '',
       created_at: '2026-04-12T00:00:00Z',
       updated_at: '2026-04-12T00:00:00Z',
-    });
-    
-    mockEnv._addModel({
-      id: modelId,
-      channel_id: channelId,
-      code: 'gpt-4o',
-      name: 'GPT-4o',
-      desc: '',
-      aliases: '[]',
-      call_type: CALL_TYPES.CHAT,
-      capabilities: '["chat"]',
-      cost: '',
-      status: MODEL_STATUS.ACTIVE,
-      weight: 1.0,
-      avg_latency_ms: 0,
-      success_rate: 1.0,
-      error_rate: 0,
-      consecutive_failures: 0,
-      cooldown_until: null,
-      last_updated: '2026-04-12T00:00:00Z',
-      headers: '{}',
     });
     
     // Mock AI response
@@ -557,9 +535,9 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
     
     const request = createMockRequest({
       method: 'POST',
-      pathname: `/api/channel/${channelId}/model/${modelId}/check`,
+      pathname: `/api/model/check`,
       headers: { 'authorization': 'Bearer test-admin-key' },
-      body: {},
+      body: { channelId, model: 'gpt-4o', callType: CALL_TYPES.CHAT, headers: {} },
     });
     
     const response = await app.handleRequest(request, mockEnv);
@@ -568,7 +546,6 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
     assert.strictEqual(response.status, HTTP_STATUS.OK);
     assert.strictEqual(data.success, true);
     assert.ok(data.data);
-    assert.strictEqual(data.data.model_id, modelId);
     assert.strictEqual(data.data.model_code, 'gpt-4o');
     assert.strictEqual(data.data.call_type, CALL_TYPES.CHAT);
     assert.ok(data.data.api_accessible);
@@ -578,7 +555,6 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
   
   it('image_gen模型应检测API可访问且有图片响应', async () => {
     const channelId = 'ch-001';
-    const modelId = 'model-002';
     
     mockEnv._addChannel({
       id: channelId,
@@ -589,27 +565,6 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
       base_url: '',
       created_at: '2026-04-12T00:00:00Z',
       updated_at: '2026-04-12T00:00:00Z',
-    });
-    
-    mockEnv._addModel({
-      id: modelId,
-      channel_id: channelId,
-      code: 'dall-e-3',
-      name: 'DALL-E 3',
-      desc: '',
-      aliases: '[]',
-      call_type: CALL_TYPES.IMAGE_GEN,
-      capabilities: '["image_out"]',
-      cost: '',
-      status: MODEL_STATUS.ACTIVE,
-      weight: 1.0,
-      avg_latency_ms: 0,
-      success_rate: 1.0,
-      error_rate: 0,
-      consecutive_failures: 0,
-      cooldown_until: null,
-      last_updated: '2026-04-12T00:00:00Z',
-      headers: '{}',
     });
     
     app = createApp({
@@ -628,9 +583,9 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
     
     const request = createMockRequest({
       method: 'POST',
-      pathname: `/api/channel/${channelId}/model/${modelId}/check`,
+      pathname: `/api/model/check`,
       headers: { 'authorization': 'Bearer test-admin-key' },
-      body: {},
+      body: { channelId, model: 'dall-e-3', callType: CALL_TYPES.IMAGE_GEN, headers: {} },
     });
     
     const response = await app.handleRequest(request, mockEnv);
@@ -645,7 +600,6 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
   
   it('API不可访问时应返回api_accessible=false', async () => {
     const channelId = 'ch-001';
-    const modelId = 'model-001';
     
     mockEnv._addChannel({
       id: channelId,
@@ -656,27 +610,6 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
       base_url: '',
       created_at: '2026-04-12T00:00:00Z',
       updated_at: '2026-04-12T00:00:00Z',
-    });
-    
-    mockEnv._addModel({
-      id: modelId,
-      channel_id: channelId,
-      code: 'gpt-4o',
-      name: 'GPT-4o',
-      desc: '',
-      aliases: '[]',
-      call_type: CALL_TYPES.CHAT,
-      capabilities: '["chat"]',
-      cost: '',
-      status: MODEL_STATUS.ACTIVE,
-      weight: 1.0,
-      avg_latency_ms: 0,
-      success_rate: 1.0,
-      error_rate: 0,
-      consecutive_failures: 0,
-      cooldown_until: null,
-      last_updated: '2026-04-12T00:00:00Z',
-      headers: '{}',
     });
     
     app = createApp({
@@ -695,9 +628,9 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
     
     const request = createMockRequest({
       method: 'POST',
-      pathname: `/api/channel/${channelId}/model/${modelId}/check`,
+      pathname: `/api/model/check`,
       headers: { 'authorization': 'Bearer test-admin-key' },
-      body: {},
+      body: { channelId, model: 'gpt-4o', callType: CALL_TYPES.CHAT, headers: {} },
     });
     
     const response = await app.handleRequest(request, mockEnv);
@@ -712,7 +645,6 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
   
   it('响应数据为空时应返回data_available=false', async () => {
     const channelId = 'ch-001';
-    const modelId = 'model-001';
     
     mockEnv._addChannel({
       id: channelId,
@@ -723,27 +655,6 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
       base_url: '',
       created_at: '2026-04-12T00:00:00Z',
       updated_at: '2026-04-12T00:00:00Z',
-    });
-    
-    mockEnv._addModel({
-      id: modelId,
-      channel_id: channelId,
-      code: 'gpt-4o',
-      name: 'GPT-4o',
-      desc: '',
-      aliases: '[]',
-      call_type: CALL_TYPES.CHAT,
-      capabilities: '["chat"]',
-      cost: '',
-      status: MODEL_STATUS.ACTIVE,
-      weight: 1.0,
-      avg_latency_ms: 0,
-      success_rate: 1.0,
-      error_rate: 0,
-      consecutive_failures: 0,
-      cooldown_until: null,
-      last_updated: '2026-04-12T00:00:00Z',
-      headers: '{}',
     });
     
     app = createApp({
@@ -762,9 +673,9 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
     
     const request = createMockRequest({
       method: 'POST',
-      pathname: `/api/channel/${channelId}/model/${modelId}/check`,
+      pathname: `/api/model/check`,
       headers: { 'authorization': 'Bearer test-admin-key' },
-      body: {},
+      body: { channelId, model: 'gpt-4o', callType: CALL_TYPES.CHAT, headers: {} },
     });
     
     const response = await app.handleRequest(request, mockEnv);
@@ -781,9 +692,9 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
     
     const request = createMockRequest({
       method: 'POST',
-      pathname: '/api/channel/non-existent/model/model-001/check',
+      pathname: '/api/model/check',
       headers: { 'authorization': 'Bearer test-admin-key' },
-      body: {},
+      body: { channelId: 'non-existent', model: 'gpt-4o', callType: CALL_TYPES.CHAT, headers: {} },
     });
     
     const response = await app.handleRequest(request, mockEnv);
@@ -793,7 +704,7 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
     assert.strictEqual(data.success, false);
   });
   
-  it('模型不存在时应返回404', async () => {
+  it('模型未入库时仍应执行上游检测', async () => {
     const channelId = 'ch-001';
     mockEnv._addChannel({
       id: channelId,
@@ -806,20 +717,32 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
       updated_at: '2026-04-12T00:00:00Z',
     });
     
-    app = createApp();
+    app = createApp({
+      ai: {
+        generateText: async () => ({ text: 'ok', usage: {} }),
+        streamText: async () => ({ textStream: ['ok'], usage: {} }),
+        generateImage: async () => ({ images: [{ base64: 'test' }] }),
+        embed: async () => ({ embedding: [0.1], usage: {} }),
+        experimental_generateSpeech: async () => ({ audio: { data: new Uint8Array([1]), mediaType: 'audio/mpeg' } }),
+        experimental_transcribe: async () => ({ text: 'ok' }),
+        experimental_generateVideo: async () => ({ videos: [{ url: 'https://test.example/video.mp4' }] }),
+      },
+    });
     
     const request = createMockRequest({
       method: 'POST',
-      pathname: `/api/channel/${channelId}/model/non-existent/check`,
+      pathname: `/api/model/check`,
       headers: { 'authorization': 'Bearer test-admin-key' },
-      body: {},
+      body: { channelId, model: 'not-in-db-model', callType: CALL_TYPES.CHAT, headers: {} },
     });
     
     const response = await app.handleRequest(request, mockEnv);
     const data = await response.json();
     
-    assert.strictEqual(response.status, HTTP_STATUS.NOT_FOUND);
-    assert.strictEqual(data.success, false);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.model_code, 'not-in-db-model');
+    assert.strictEqual(data.data.call_type, CALL_TYPES.CHAT);
   });
   
   it('未鉴权时应返回401', async () => {
@@ -827,7 +750,7 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
     
     const request = createMockRequest({
       method: 'POST',
-      pathname: '/api/channel/ch-001/model/model-001/check',
+      pathname: '/api/model/check',
     });
     
     const response = await app.handleRequest(request, mockEnv);
@@ -838,7 +761,6 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
   
   it('embedding模型应检测API可访问且有向量响应', async () => {
     const channelId = 'ch-001';
-    const modelId = 'model-003';
     
     mockEnv._addChannel({
       id: channelId,
@@ -849,27 +771,6 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
       base_url: '',
       created_at: '2026-04-12T00:00:00Z',
       updated_at: '2026-04-12T00:00:00Z',
-    });
-    
-    mockEnv._addModel({
-      id: modelId,
-      channel_id: channelId,
-      code: 'text-embedding-3-small',
-      name: 'Embedding Small',
-      desc: '',
-      aliases: '[]',
-      call_type: CALL_TYPES.EMBEDDING,
-      capabilities: '["embedding"]',
-      cost: '',
-      status: MODEL_STATUS.ACTIVE,
-      weight: 1.0,
-      avg_latency_ms: 0,
-      success_rate: 1.0,
-      error_rate: 0,
-      consecutive_failures: 0,
-      cooldown_until: null,
-      last_updated: '2026-04-12T00:00:00Z',
-      headers: '{}',
     });
     
     app = createApp({
@@ -888,9 +789,9 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
     
     const request = createMockRequest({
       method: 'POST',
-      pathname: `/api/channel/${channelId}/model/${modelId}/check`,
+      pathname: `/api/model/check`,
       headers: { 'authorization': 'Bearer test-admin-key' },
-      body: {},
+      body: { channelId, model: 'text-embedding-3-small', callType: CALL_TYPES.EMBEDDING, headers: {} },
     });
     
     const response = await app.handleRequest(request, mockEnv);
@@ -904,7 +805,6 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
   
   it('audio_gen模型应检测API可访问且有音频响应', async () => {
     const channelId = 'ch-001';
-    const modelId = 'model-004';
     
     mockEnv._addChannel({
       id: channelId,
@@ -915,27 +815,6 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
       base_url: '',
       created_at: '2026-04-12T00:00:00Z',
       updated_at: '2026-04-12T00:00:00Z',
-    });
-    
-    mockEnv._addModel({
-      id: modelId,
-      channel_id: channelId,
-      code: 'tts-1',
-      name: 'TTS 1',
-      desc: '',
-      aliases: '[]',
-      call_type: CALL_TYPES.AUDIO_GEN,
-      capabilities: '["audio_out"]',
-      cost: '',
-      status: MODEL_STATUS.ACTIVE,
-      weight: 1.0,
-      avg_latency_ms: 0,
-      success_rate: 1.0,
-      error_rate: 0,
-      consecutive_failures: 0,
-      cooldown_until: null,
-      last_updated: '2026-04-12T00:00:00Z',
-      headers: '{}',
     });
     
     app = createApp({
@@ -956,9 +835,9 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
     
     const request = createMockRequest({
       method: 'POST',
-      pathname: `/api/channel/${channelId}/model/${modelId}/check`,
+      pathname: `/api/model/check`,
       headers: { 'authorization': 'Bearer test-admin-key' },
-      body: {},
+      body: { channelId, model: 'tts-1', callType: CALL_TYPES.AUDIO_GEN, headers: {} },
     });
     
     const response = await app.handleRequest(request, mockEnv);
@@ -968,5 +847,34 @@ describe('API: POST /api/channel/:id/model/:modelId/check - 检测模型可用�
     assert.strictEqual(data.success, true);
     assert.ok(data.data.api_accessible);
     assert.ok(data.data.data_available);
+  });
+
+  it('请求缺少model时应返回400', async () => {
+    const channelId = 'ch-001';
+    mockEnv._addChannel({
+      id: channelId,
+      name: 'Test Channel',
+      key: 'test-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-test',
+      base_url: '',
+      created_at: '2026-04-12T00:00:00Z',
+      updated_at: '2026-04-12T00:00:00Z',
+    });
+
+    app = createApp();
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: `/api/model/check`,
+      headers: { 'authorization': 'Bearer test-admin-key' },
+      body: { channelId, callType: CALL_TYPES.CHAT, headers: {} },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.BAD_REQUEST);
+    assert.strictEqual(data.success, false);
   });
 });

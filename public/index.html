@@ -844,6 +844,8 @@
           CHANNELS: '/api/channels',
           MODEL: '/api/model',
           LOG: '/api/log',
+          CHANNEL_MODELS: '/api/channel/models',
+          MODEL_CHECK: '/api/model/check',
         },
         PROVIDERS: ['openai', 'openai-compatible', 'google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations'],
         MODEL_STATUS: ['active', 'open', 'disable'],
@@ -854,7 +856,6 @@
           SUCCESS: 'success',
           ERROR: 'error',
         },
-        MODEL_DISCOVERY_PATHS: ['/v1/models', '/models'],
       };
 
       createApp({
@@ -986,81 +987,6 @@
             'Content-Type': 'application/json',
           });
 
-          const buildUpstreamUrl = (baseURL, path) => {
-            const normalizedBaseUrl = String(baseURL || '').trim();
-            if (!normalizedBaseUrl) {
-              throw new Error('请先填写 Base URL');
-            }
-            const sanitizedBase = normalizedBaseUrl.endsWith('/') ? normalizedBaseUrl.slice(0, -1) : normalizedBaseUrl;
-            const sanitizedPath = path.startsWith('/') ? path : `/${path}`;
-            if (sanitizedBase.endsWith('/v1') && sanitizedPath.startsWith('/v1/')) {
-              return `${sanitizedBase}${sanitizedPath.slice(3)}`;
-            }
-            return `${sanitizedBase}${sanitizedPath}`;
-          };
-
-          const buildChannelRequestHeaders = () => {
-            const apiKey = String(state.channelForm.apiKey || '').trim();
-            if (!apiKey) {
-              throw new Error('请先填写 API Key');
-            }
-            return {
-              Authorization: `Bearer ${apiKey}`,
-              'Content-Type': 'application/json',
-            };
-          };
-
-          const normalizeDiscoveredModels = (responseData) => {
-            const modelList = Array.isArray(responseData?.data)
-              ? responseData.data
-              : Array.isArray(responseData?.models)
-                ? responseData.models
-                : [];
-            return modelList
-              .map((item) => {
-                const code = String(item?.id || item?.name || item?.model || '').trim();
-                if (!code) return null;
-                return {
-                  ...createEmptyChannelModel(),
-                  code,
-                  name: String(item?.name || code).trim().split('-').map((v) => v ? v.charAt(0).toUpperCase() + v.slice(1) : '').join(' '),
-                  desc: String(item?.description || item?.desc || '').trim(),
-                };
-              })
-              .filter(Boolean);
-          };
-
-          const buildModelDetectRequest = (model) => {
-            const detectByCallType = {
-              [constants.CALL_TYPES[0]]: {
-                path: '/v1/chat/completions',
-                body: {
-                  model: model.code,
-                  messages: [{ role: 'user', content: 'test' }],
-                  max_tokens: 64,
-                  stream: false,
-                },
-              },
-              [constants.CALL_TYPES[1]]: {
-                path: '/v1/images/generations',
-                body: {
-                  model: model.code,
-                  prompt: '一只小花猫',
-                  n: 1,
-                  size: '1024x1024',
-                },
-              },
-              [constants.CALL_TYPES[5]]: {
-                path: '/v1/embeddings',
-                body: {
-                  model: model.code,
-                  input: 'ping',
-                },
-              },
-            };
-            return detectByCallType[model.callType] || detectByCallType[constants.CALL_TYPES[0]];
-          };
-
           const apiRequest = async (path, options = {}) => {
             const res = await fetch(path, {
               method: options.method || constants.METHODS.GET,
@@ -1165,32 +1091,23 @@
             },
             fetchChannelModels: async () => {
               try {
-                const headers = buildChannelRequestHeaders();
-                let discoveredModels = [];
-                let lastError = null;
-                for (const path of constants.MODEL_DISCOVERY_PATHS) {
-                  try {
-                    const response = await fetch(buildUpstreamUrl(state.channelForm.baseURL, path), {
-                      method: constants.METHODS.GET,
-                      headers,
-                    });
-                    const responseText = await response.text();
-                    const responseData = responseText ? JSON.parse(responseText) : null;
-                    if (!response.ok) {
-                      throw new Error(responseData?.error?.message || responseData?.error || `请求失败(${response.status})`);
-                    }
-                    discoveredModels = normalizeDiscoveredModels(responseData);
-                    if (discoveredModels.length > 0) {
-                      state.channelForm.models = discoveredModels;
-                      syncChannelModelsRaw();
-                      actions.setNotice(`已获取 ${discoveredModels.length} 个模型。`);
-                      return;
-                    }
-                  } catch (error) {
-                    lastError = error;
-                  }
+                if (!state.channelForm.id) {
+                  throw new Error('请先保存渠道后再获取模型');
                 }
-                throw lastError || new Error('未获取到任何模型');
+                const res = await apiRequest(`${constants.API.CHANNEL}/${state.channelForm.id}/models`);
+                if (res.status === 200 && res.data?.success) {
+                  const discoveredModels = (res.data.data || []).map((item) => ({
+                    ...createEmptyChannelModel(),
+                    code: item.id || '',
+                    name: String(item.id || '').trim().split('-').map((v) => v ? v.charAt(0).toUpperCase() + v.slice(1) : '').join(' '),
+                    desc: '',
+                  }));
+                  state.channelForm.models = discoveredModels;
+                  syncChannelModelsRaw();
+                  actions.setNotice(`已获取 ${discoveredModels.length} 个模型。`);
+                } else {
+                  throw new Error(res.data?.error || '获取模型失败');
+                }
               } catch (error) {
                 actions.setNotice(`获取模型失败: ${error.message}`);
               }
@@ -1201,20 +1118,31 @@
                 if (!currentModel?.code) {
                   throw new Error('请先填写模型 code');
                 }
-                const headers = buildChannelRequestHeaders();
-                const detectRequest = buildModelDetectRequest(currentModel);
-                actions.setChannelModelDetectState(index, constants.DETECT_STATUS.LOADING, '检测中...');
-                const response = await fetch(buildUpstreamUrl(state.channelForm.baseURL, detectRequest.path), {
-                  method: constants.METHODS.POST,
-                  headers,
-                  body: JSON.stringify(detectRequest.body),
-                });
-                const responseText = await response.text();
-                const responseData = responseText ? JSON.parse(responseText) : null;
-                if (!response.ok) {
-                  throw new Error(responseData?.error?.message || responseData?.error || `请求失败(${response.status})`);
+                if (!state.channelForm.id) {
+                  throw new Error('请先保存渠道后再检测模型');
                 }
-                actions.setChannelModelDetectState(index, constants.DETECT_STATUS.SUCCESS, '可用');
+                actions.setChannelModelDetectState(index, constants.DETECT_STATUS.LOADING, '检测中...');
+                const res = await apiRequest(constants.API.MODEL_CHECK, {
+                  method: constants.METHODS.POST,
+                  body: {
+                    channelId: state.channelForm.id,
+                    model: currentModel.code,
+                    callType: currentModel.callType,
+                    headers: parseJsonInput(currentModel.headersRaw, constants.EMPTY_OBJECT_JSON, '模型请求头'),
+                  },
+                });
+                if (res.status === 200 && res.data?.success) {
+                  const result = res.data.data;
+                  if (result.api_accessible && result.data_available) {
+                    actions.setChannelModelDetectState(index, constants.DETECT_STATUS.SUCCESS, `可用 (${result.latency_ms}ms)`);
+                  } else if (result.api_accessible) {
+                    actions.setChannelModelDetectState(index, constants.DETECT_STATUS.ERROR, result.error_message || '无有效数据');
+                  } else {
+                    actions.setChannelModelDetectState(index, constants.DETECT_STATUS.ERROR, result.error_message || 'API 不可访问');
+                  }
+                } else {
+                  throw new Error(res.data?.error || '检测失败');
+                }
               } catch (error) {
                 actions.setChannelModelDetectState(index, constants.DETECT_STATUS.ERROR, error.message);
               }

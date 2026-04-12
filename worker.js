@@ -347,6 +347,13 @@ const SCHEMAS = (() => {
     end_date: z.string().optional(),
   });
 
+  const ModelCheckSchema = z.object({
+    channelId: z.string().min(1),
+    model: z.string().min(1),
+    callType: CallTypeEnum,
+    headers: z.record(z.string()).default({}),
+  });
+
   return {
     ProviderEnum,
     CallTypeEnum,
@@ -355,10 +362,11 @@ const SCHEMAS = (() => {
     UpdateModelSchema,
     PaginationSchema,
     LogQuerySchema,
+    ModelCheckSchema,
   };
 })();
 
-const { CreateChannelSchema, UpdateChannelSchema, UpdateModelSchema, PaginationSchema, LogQuerySchema } = SCHEMAS;
+const { CreateChannelSchema, UpdateChannelSchema, UpdateModelSchema, PaginationSchema, LogQuerySchema, ModelCheckSchema } = SCHEMAS;
 
 /** 模型可用性检测的测试 prompt */
 const CHECK_TEST_PROMPT = 'Say "OK" if you can read this message.';
@@ -1408,7 +1416,7 @@ function createApp(deps = {}) {
   }
 
   /**
-   * 检测指定渠道下的指定模型的可用性
+   * 检测指定渠道下的指定上游模型可用性（无需模型已入库）
    * 
    * 检测两个维度：
    * 1. API 是否可访问（api_accessible）
@@ -1420,22 +1428,25 @@ function createApp(deps = {}) {
    *    - transcribe: 非空文本
    *    - video_gen: 非空视频数组
    * 
-   * @param channelId - 渠道 ID
-   * @param modelId - 模型 ID
    * @param env - 环境变量
    * @returns { success: true, data: ModelCheckResult } 或错误响应
    */
-  async function handleModelCheck(channelId, modelId, env) {
-    // 1. 验证渠道存在
-    const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(channelId).first();
-    if (!channel) {
-      return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+  async function handleModelCheck(request, env) {
+    // 1. 解析检测输入参数（直接使用前端传入的模型配置）
+    const body = await parseRequestBody(request);
+    if (!body) return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+
+    let parsed;
+    try {
+      parsed = ModelCheckSchema.parse(body);
+    } catch (error) {
+      return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
     }
 
-    // 2. 验证模型存在且属于该渠道
-    const model = await env.DB.prepare(SQL.SELECT_MODEL_BY_ID).bind(modelId).first();
-    if (!model || model.channel_id !== channelId) {
-      return errorResponse(ERROR_MESSAGES.MODEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    // 2. 验证渠道存在
+    const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(parsed.channelId).first();
+    if (!channel) {
+      return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
     }
 
     // 3. 实例化模型
@@ -1445,18 +1456,17 @@ function createApp(deps = {}) {
         channel.name,
         channel.base_url,
         channel.api_key,
-        safeJsonParse(model.headers, {}),
+        parsed.headers,
         channel.provider,
-        model.call_type,
-        model.code,
+        parsed.callType,
+        parsed.model,
       );
     } catch (error) {
       return jsonResponse({
         success: true,
         data: {
-          model_id: modelId,
-          model_code: model.code,
-          call_type: model.call_type,
+          model_code: parsed.model,
+          call_type: parsed.callType,
           api_accessible: false,
           data_available: false,
           latency_ms: 0,
@@ -1472,7 +1482,7 @@ function createApp(deps = {}) {
     let errorMessage = '';
 
     try {
-      const result = await executeModelCheck(aiModel, model.call_type);
+      const result = await executeModelCheck(aiModel, parsed.callType);
       apiAccessible = true;
       dataAvailable = result.dataAvailable;
     } catch (error) {
@@ -1485,9 +1495,8 @@ function createApp(deps = {}) {
     return jsonResponse({
       success: true,
       data: {
-        model_id: modelId,
-        model_code: model.code,
-        call_type: model.call_type,
+        model_code: parsed.model,
+        call_type: parsed.callType,
         api_accessible: apiAccessible,
         data_available: dataAvailable,
         latency_ms: latencyMs,
@@ -1508,7 +1517,7 @@ function createApp(deps = {}) {
       const result = await ai.generateText({
         model: aiModel,
         prompt: CHECK_TEST_PROMPT,
-        maxTokens: 10,
+        maxTokens: 64,
       });
       return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
     }
@@ -1581,12 +1590,9 @@ function createApp(deps = {}) {
       return handleGetChannelModels(channelModelsMatch[1], env);
     }
 
-    // 新路由: POST /api/channel/:id/model/:modelId/check - 检测模型可用性
-    const modelCheckMatch = pathname.match(
-      new RegExp(`^${ROUTES.API_CHANNEL_PREFIX}([^/]+)/model/([^/]+)${ROUTES.API_MODEL_CHECK_SUFFIX}$`)
-    );
-    if (modelCheckMatch && request.method === METHODS.POST) {
-      return handleModelCheck(modelCheckMatch[1], modelCheckMatch[2], env);
+    // 新路由: POST /api/model/check - 检测模型可用性（无需模型入库）
+    if (pathname === `${ROUTES.API_MODEL}${ROUTES.API_MODEL_CHECK_SUFFIX}` && request.method === METHODS.POST) {
+      return handleModelCheck(request, env);
     }
 
     const channelId = extractPathParam(pathname, ROUTES.API_CHANNEL_PREFIX);

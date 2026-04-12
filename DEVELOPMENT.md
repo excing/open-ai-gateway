@@ -51,7 +51,7 @@ graph TB
         AC8[删除模型 DELETE /api/model/:id]
         AC9[查看日志 GET /api/log]
         AC10[获取渠道模型列表 GET /api/channel/:id/models]
-        AC11[检测模型可用性 POST /api/channel/:id/model/:modelId/check]
+        AC11[检测模型可用性 POST /api/model/check]
     end
 
     subgraph 访客用例
@@ -848,19 +848,18 @@ function getDefaultBaseURL(provider: Provider): string;
  *    - video_gen: 非空视频数组（videos.length > 0）
  *
  * 处理流程：
- * 1. 验证渠道存在
- * 2. 验证模型存在且属于该渠道
+ * 1. 校验请求体（channelId/model/callType/headers）
+ * 2. 验证渠道存在
  * 3. 实例化 AI 模型（instantiateLanguageModel）
  * 4. 执行检测请求（executeModelCheck）
  * 5. 返回检测结果
  *
- * @param channelId - URL 路径中的渠道 ID
- * @param modelId - URL 路径中的模型 ID
+ * @param request - 包含 channelId/model/callType/headers 的请求
  * @param env - 环境变量
  * @returns { success: true, data: ModelCheckResult }
- * @throws 渠道不存在返回 404，模型不存在或不属于该渠道返回 404
+ * @throws 请求体不合法返回 400，渠道不存在返回 404
  */
-async function handleModelCheck(channelId: string, modelId: string, env: Env): Promise<Response>;
+async function handleModelCheck(request: Request, env: Env): Promise<Response>;
 
 /**
  * 执行模型可用性检测
@@ -1471,9 +1470,9 @@ data: [DONE]
 - 404: 渠道不存在
 - 401: 未鉴权
 
-#### POST /api/channel/{id}/model/{modelId}/check
+#### POST /api/model/check
 
-检测指定渠道下的指定模型的可用性。检测两个维度：
+检测指定渠道下的指定上游模型的可用性（无需先入库模型表）。检测两个维度：
 1. **API 可访问性** (`api_accessible`)：API 是否能正常响应
 2. **数据可用性** (`data_available`)：响应是否包含有效数据
    - `chat`: 非空文本
@@ -1483,12 +1482,21 @@ data: [DONE]
    - `transcribe`: 非空文本
    - `video_gen`: 非空视频数组
 
+**请求体**：
+```json
+{
+    "channelId": "ch-001",
+    "model": "gpt-4o",
+    "callType": "chat",
+    "headers": {}
+}
+```
+
 **响应** (200)：
 ```json
 {
     "success": true,
     "data": {
-        "model_id": "uuid-model",
         "model_code": "gpt-4o",
         "call_type": "chat",
         "api_accessible": true,
@@ -1504,7 +1512,6 @@ data: [DONE]
 {
     "success": true,
     "data": {
-        "model_id": "uuid-model",
         "model_code": "gpt-4o",
         "call_type": "chat",
         "api_accessible": false,
@@ -1516,7 +1523,8 @@ data: [DONE]
 ```
 
 **错误响应**：
-- 404: 渠道或模型不存在
+- 400: 请求体缺失或字段不合法
+- 404: 渠道不存在
 - 401: 未鉴权
 
 ### 8.3 公开 API
@@ -1649,22 +1657,20 @@ sequenceDiagram
     participant DB as D1 数据库
     participant AI as AI Provider
 
-    A->>GW: POST /api/channel/:id/model/:modelId/check (Authorization)
+    A->>GW: POST /api/model/check (Authorization + body)
     GW->>Auth: isAdmin(request, env)
     Auth-->>GW: true
-    GW->>DB: SELECT * FROM channels WHERE id = :channelId
+    GW->>GW: 校验 body(channelId/model/callType/headers)
+    alt body 不合法
+        GW-->>A: 400 Invalid request body
+    end
+    GW->>DB: SELECT * FROM channels WHERE id = :channelId(body)
     alt 渠道不存在
         DB-->>GW: null
         GW-->>A: 404 Channel not found
     end
     DB-->>GW: channel
-    GW->>DB: SELECT * FROM channel_models WHERE id = :modelId
-    alt 模型不存在或不属于该渠道
-        DB-->>GW: null 或 channel_id 不匹配
-        GW-->>A: 404 Model not found
-    end
-    DB-->>GW: model
-    GW->>GW: instantiateLanguageModel(channel, model)
+    GW->>GW: instantiateLanguageModel(channel, body.model/body.callType/body.headers)
     alt 实例化失败
         GW-->>A: 200 { api_accessible: false, data_available: false, error_message: ... }
     end
@@ -1786,12 +1792,12 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[POST /api/channel/:id/model/:modelId/check] --> B{鉴权通过?}
+    A[POST /api/model/check] --> B{鉴权通过?}
     B -->|否| C[401 Unauthorized]
-    B -->|是| D{渠道存在?}
-    D -->|否| E[404 Channel not found]
-    D -->|是| F{模型存在且属于该渠道?}
-    F -->|否| G[404 Model not found]
+    B -->|是| D{body合法?}
+    D -->|否| E[400 Invalid request body]
+    D -->|是| F{渠道存在?}
+    F -->|否| G[404 Channel not found]
     F -->|是| H[instantiateLanguageModel]
     H --> I{实例化成功?}
     I -->|否| J[返回 api_accessible=false]
@@ -2073,17 +2079,23 @@ async function fetchModelsFromUpstream(url, headers) {
 ### 11.8 handleModelCheck 模型可用性检测
 
 ```ts
-async function handleModelCheck(channelId, modelId, env) {
-    // 1. 验证渠道存在
-    const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(channelId).first();
-    if (!channel) {
-        return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+async function handleModelCheck(request, env) {
+    // 1. 解析并校验请求体
+    const body = await parseRequestBody(request);
+    if (!body) {
+        return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+    }
+    let parsed;
+    try {
+        parsed = ModelCheckSchema.parse(body);
+    } catch {
+        return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
     }
 
-    // 2. 验证模型存在且属于该渠道
-    const model = await env.DB.prepare(SQL.SELECT_MODEL_BY_ID).bind(modelId).first();
-    if (!model || model.channel_id !== channelId) {
-        return errorResponse(ERROR_MESSAGES.MODEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    // 2. 验证渠道存在
+    const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(parsed.channelId).first();
+    if (!channel) {
+        return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
     }
 
     // 3. 实例化模型
@@ -2091,14 +2103,14 @@ async function handleModelCheck(channelId, modelId, env) {
     try {
         aiModel = instantiateLanguageModel(
             channel.name, channel.base_url, channel.api_key,
-            JSON.parse(model.headers || '{}'), channel.provider,
-            model.call_type, model.code
+            parsed.headers, channel.provider,
+            parsed.callType, parsed.model
         );
     } catch (error) {
         return jsonResponse({
             success: true,
             data: {
-                model_id: modelId, model_code: model.code, call_type: model.call_type,
+                model_code: parsed.model, call_type: parsed.callType,
                 api_accessible: false, data_available: false, latency_ms: 0,
                 error_message: error.message || 'Failed to instantiate model',
             }
@@ -2112,7 +2124,7 @@ async function handleModelCheck(channelId, modelId, env) {
     let errorMessage = '';
 
     try {
-        const result = await executeModelCheck(aiModel, model.call_type);
+        const result = await executeModelCheck(aiModel, parsed.callType);
         apiAccessible = true;
         dataAvailable = result.dataAvailable;
     } catch (error) {
@@ -2125,7 +2137,7 @@ async function handleModelCheck(channelId, modelId, env) {
     return jsonResponse({
         success: true,
         data: {
-            model_id: modelId, model_code: model.code, call_type: model.call_type,
+            model_code: parsed.model, call_type: parsed.callType,
             api_accessible: apiAccessible, data_available: dataAvailable,
             latency_ms: latencyMs, error_message: errorMessage,
         }
