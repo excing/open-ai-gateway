@@ -73,7 +73,7 @@
       }
 
       .panel-soft {
-        background: rgba(255, 252, 248, 0.6);
+        background: rgba(255, 252, 248);
         border: 1px solid rgba(185, 150, 117, 0.14);
         border-radius: 24px;
       }
@@ -647,7 +647,10 @@
           <div class="mt-6 panel-quiet p-4 sm:p-5">
             <div class="toolbar justify-between">
               <h4 class="text-lg font-semibold text-[var(--text)]">模型配置</h4>
-              <button @click="actions.addChannelModel" class="btn btn-secondary">新增模型</button>
+              <div class="toolbar">
+                <button @click="actions.fetchChannelModels" class="btn btn-secondary">获取模型</button>
+                <button @click="actions.addChannelModel" class="btn btn-secondary">新增模型</button>
+              </div>
             </div>
 
             <div class="mt-4 space-y-4">
@@ -657,8 +660,30 @@
                     <p class="text-sm font-semibold text-[var(--text)]">{{ model.name || `模型 ${index + 1}` }}</p>
                     <p class="mt-1 text-xs text-[var(--text-soft)]">{{ model.code || '未设置 code' }}</p>
                   </div>
-                  <button @click="actions.removeChannelModel(index)" class="btn btn-ghost text-sm text-[var(--danger)]">移除</button>
+                  <div class="toolbar">
+                    <span
+                      class="pill text-xs"
+                      :class="model.detectStatus === constants.DETECT_STATUS.SUCCESS ? 'text-[var(--success)]' : model.detectStatus === constants.DETECT_STATUS.ERROR ? 'text-[var(--danger)]' : 'text-[var(--text-soft)]'"
+                    >
+                      {{
+                        model.detectStatus === constants.DETECT_STATUS.LOADING
+                          ? '检测中'
+                          : model.detectStatus === constants.DETECT_STATUS.SUCCESS
+                            ? '可用'
+                            : model.detectStatus === constants.DETECT_STATUS.ERROR
+                              ? '不可用'
+                              : '未检测'
+                      }}
+                    </span>
+                    <button @click="actions.detectChannelModel(index)" class="btn btn-secondary text-sm" :disabled="model.detectStatus === constants.DETECT_STATUS.LOADING">
+                      {{ model.detectStatus === constants.DETECT_STATUS.LOADING ? '检测中...' : '检测' }}
+                    </button>
+                    <button @click="actions.removeChannelModel(index)" class="btn btn-ghost text-sm text-[var(--danger)]">移除</button>
+                  </div>
                 </div>
+                <p v-if="model.detectMessage" class="mt-3 text-xs" :class="model.detectStatus === constants.DETECT_STATUS.ERROR ? 'text-[var(--danger)]' : 'text-[var(--text-soft)]'">
+                  {{ model.detectMessage }}
+                </p>
 
                 <div class="mt-4 grid gap-3 sm:grid-cols-2">
                   <input v-model="model.code" type="text" class="field" placeholder="模型 code" />
@@ -682,7 +707,7 @@
                     </div>
                     <div class="mt-3 flex gap-2">
                       <input v-model="model.aliasInput" @keydown.enter.prevent="actions.addChannelModelAlias(index)" class="field field-mini" placeholder="输入别名后回车" />
-                      <button @click="actions.addChannelModelAlias(index)" class="btn btn-secondary">添加</button>
+                      <button @click="actions.addChannelModelAlias(index)" class="btn btn-secondary">➕</button>
                     </div>
                   </div>
 
@@ -696,7 +721,7 @@
                     </div>
                     <div class="mt-3 flex gap-2">
                       <input v-model="model.capabilityInput" @keydown.enter.prevent="actions.addChannelModelCapability(index)" class="field field-mini" placeholder="输入能力后回车" />
-                      <button @click="actions.addChannelModelCapability(index)" class="btn btn-secondary">添加</button>
+                      <button @click="actions.addChannelModelCapability(index)" class="btn btn-secondary">➕</button>
                     </div>
                   </div>
 
@@ -753,7 +778,7 @@
               </div>
               <div class="mt-3 flex gap-2">
                 <input v-model="state.modelForm.aliasInput" @keydown.enter.prevent="actions.addModelAlias" class="field field-mini" placeholder="输入别名后回车" />
-                <button @click="actions.addModelAlias" class="btn btn-secondary">添加</button>
+                <button @click="actions.addModelAlias" class="btn btn-secondary">➕</button>
               </div>
             </div>
 
@@ -767,7 +792,7 @@
               </div>
               <div class="mt-3 flex gap-2">
                 <input v-model="state.modelForm.capabilityInput" @keydown.enter.prevent="actions.addModelCapability" class="field field-mini" placeholder="输入能力后回车" />
-                <button @click="actions.addModelCapability" class="btn btn-secondary">添加</button>
+                <button @click="actions.addModelCapability" class="btn btn-secondary">➕</button>
               </div>
             </div>
 
@@ -823,6 +848,13 @@
         PROVIDERS: ['openai', 'openai-compatible', 'google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations'],
         MODEL_STATUS: ['active', 'open', 'disable'],
         LOG_STATUS_LIST: ['success', 'error'],
+        DETECT_STATUS: {
+          IDLE: 'idle',
+          LOADING: 'loading',
+          SUCCESS: 'success',
+          ERROR: 'error',
+        },
+        MODEL_DISCOVERY_PATHS: ['/v1/models', '/models'],
       };
 
       createApp({
@@ -851,6 +883,8 @@
             cost: '',
             weight: 1,
             headersRaw: constants.EMPTY_OBJECT_JSON,
+            detectStatus: constants.DETECT_STATUS.IDLE,
+            detectMessage: '',
           });
 
           const createEmptyChannelForm = () => ({
@@ -934,6 +968,8 @@
               cost: model.cost || '',
               weight: model.weight ?? 1,
               headersRaw: JSON.stringify(model.headers || {}, null, 2),
+              detectStatus: constants.DETECT_STATUS.IDLE,
+              detectMessage: '',
             }));
           };
 
@@ -949,6 +985,81 @@
             Authorization: `Bearer ${state.token}`,
             'Content-Type': 'application/json',
           });
+
+          const buildUpstreamUrl = (baseURL, path) => {
+            const normalizedBaseUrl = String(baseURL || '').trim();
+            if (!normalizedBaseUrl) {
+              throw new Error('请先填写 Base URL');
+            }
+            const sanitizedBase = normalizedBaseUrl.endsWith('/') ? normalizedBaseUrl.slice(0, -1) : normalizedBaseUrl;
+            const sanitizedPath = path.startsWith('/') ? path : `/${path}`;
+            if (sanitizedBase.endsWith('/v1') && sanitizedPath.startsWith('/v1/')) {
+              return `${sanitizedBase}${sanitizedPath.slice(3)}`;
+            }
+            return `${sanitizedBase}${sanitizedPath}`;
+          };
+
+          const buildChannelRequestHeaders = () => {
+            const apiKey = String(state.channelForm.apiKey || '').trim();
+            if (!apiKey) {
+              throw new Error('请先填写 API Key');
+            }
+            return {
+              Authorization: `Bearer ${apiKey}`,
+              'Content-Type': 'application/json',
+            };
+          };
+
+          const normalizeDiscoveredModels = (responseData) => {
+            const modelList = Array.isArray(responseData?.data)
+              ? responseData.data
+              : Array.isArray(responseData?.models)
+                ? responseData.models
+                : [];
+            return modelList
+              .map((item) => {
+                const code = String(item?.id || item?.name || item?.model || '').trim();
+                if (!code) return null;
+                return {
+                  ...createEmptyChannelModel(),
+                  code,
+                  name: String(item?.name || code).trim().split('-').map((v) => v ? v.charAt(0).toUpperCase() + v.slice(1) : '').join(' '),
+                  desc: String(item?.description || item?.desc || '').trim(),
+                };
+              })
+              .filter(Boolean);
+          };
+
+          const buildModelDetectRequest = (model) => {
+            const detectByCallType = {
+              [constants.CALL_TYPES[0]]: {
+                path: '/v1/chat/completions',
+                body: {
+                  model: model.code,
+                  messages: [{ role: 'user', content: 'test' }],
+                  max_tokens: 64,
+                  stream: false,
+                },
+              },
+              [constants.CALL_TYPES[1]]: {
+                path: '/v1/images/generations',
+                body: {
+                  model: model.code,
+                  prompt: '一只小花猫',
+                  n: 1,
+                  size: '1024x1024',
+                },
+              },
+              [constants.CALL_TYPES[5]]: {
+                path: '/v1/embeddings',
+                body: {
+                  model: model.code,
+                  input: 'ping',
+                },
+              },
+            };
+            return detectByCallType[model.callType] || detectByCallType[constants.CALL_TYPES[0]];
+          };
 
           const apiRequest = async (path, options = {}) => {
             const res = await fetch(path, {
@@ -1021,6 +1132,12 @@
               state.channelForm.models.push(createEmptyChannelModel());
               syncChannelModelsRaw();
             },
+            setChannelModelDetectState: (index, status, message = '') => {
+              const targetModel = state.channelForm.models[index];
+              if (!targetModel) return;
+              targetModel.detectStatus = status;
+              targetModel.detectMessage = message;
+            },
             removeChannelModel: (index) => {
               state.channelForm.models.splice(index, 1);
               if (state.channelForm.models.length === 0) {
@@ -1045,6 +1162,62 @@
             removeChannelModelCapability: (modelIndex, capabilityIndex) => {
               actions.removeTokenFromList(state.channelForm.models[modelIndex], 'capabilities', capabilityIndex);
               syncChannelModelsRaw();
+            },
+            fetchChannelModels: async () => {
+              try {
+                const headers = buildChannelRequestHeaders();
+                let discoveredModels = [];
+                let lastError = null;
+                for (const path of constants.MODEL_DISCOVERY_PATHS) {
+                  try {
+                    const response = await fetch(buildUpstreamUrl(state.channelForm.baseURL, path), {
+                      method: constants.METHODS.GET,
+                      headers,
+                    });
+                    const responseText = await response.text();
+                    const responseData = responseText ? JSON.parse(responseText) : null;
+                    if (!response.ok) {
+                      throw new Error(responseData?.error?.message || responseData?.error || `请求失败(${response.status})`);
+                    }
+                    discoveredModels = normalizeDiscoveredModels(responseData);
+                    if (discoveredModels.length > 0) {
+                      state.channelForm.models = discoveredModels;
+                      syncChannelModelsRaw();
+                      actions.setNotice(`已获取 ${discoveredModels.length} 个模型。`);
+                      return;
+                    }
+                  } catch (error) {
+                    lastError = error;
+                  }
+                }
+                throw lastError || new Error('未获取到任何模型');
+              } catch (error) {
+                actions.setNotice(`获取模型失败: ${error.message}`);
+              }
+            },
+            detectChannelModel: async (index) => {
+              try {
+                const currentModel = state.channelForm.models[index];
+                if (!currentModel?.code) {
+                  throw new Error('请先填写模型 code');
+                }
+                const headers = buildChannelRequestHeaders();
+                const detectRequest = buildModelDetectRequest(currentModel);
+                actions.setChannelModelDetectState(index, constants.DETECT_STATUS.LOADING, '检测中...');
+                const response = await fetch(buildUpstreamUrl(state.channelForm.baseURL, detectRequest.path), {
+                  method: constants.METHODS.POST,
+                  headers,
+                  body: JSON.stringify(detectRequest.body),
+                });
+                const responseText = await response.text();
+                const responseData = responseText ? JSON.parse(responseText) : null;
+                if (!response.ok) {
+                  throw new Error(responseData?.error?.message || responseData?.error || `请求失败(${response.status})`);
+                }
+                actions.setChannelModelDetectState(index, constants.DETECT_STATUS.SUCCESS, '可用');
+              } catch (error) {
+                actions.setChannelModelDetectState(index, constants.DETECT_STATUS.ERROR, error.message);
+              }
             },
             addModelAlias: () => {
               actions.addTokenToList(state.modelForm, 'aliases', 'aliasInput');
