@@ -389,7 +389,7 @@ const PATH_TO_CALL_TYPE = Object.fromEntries(
  * | google/gemini      | ✅   | ✅ image  | ✅ chat   | ✅ video  | ✅        | ❌         |
  * | anthropic/claude   | ✅   | ❌        | ❌        | ❌        | ✅ embeddingModel | ❌  |
  * | openrouter         | ✅   | ✅ imageModel | ❌   | ❌        | ✅ textEmbeddingModel | ❌ |
- * | pollinations       | ✅   | ✅ image  | ✅ speechModel | ❌   | ❌        | ❌         |
+ * | pollinations       | ❌   | ✅ image  | ❌            | ✅ video | ❌        | ❌         |
  */
 
 /** 模型能力标识 */
@@ -990,7 +990,7 @@ async function recordFailure(modelId: string, env: Env): Promise<void>;
  * - google / gemini → createGoogleGenerativeAI
  * - anthropic / claude → createAnthropic
  * - openrouter → createOpenRouter
- * - pollinations → createPollinations
+ * - pollinations → `./pollinations.js` 的 `createPollinations`
  *
  * @param channelName - 渠道名称，传入 SDK 的 name 参数
  * @param baseURL - 自定义 API 基础地址，空字符串使用 SDK 默认值
@@ -1020,7 +1020,7 @@ function instantiateLanguageModel(
  * - chat       → stream=true 时 streamText(), 否则 generateText()
  * - image_gen  → experimental_generateImage()
  * - audio_gen  → generateSpeech()
- * - video_gen  → 使用 provider 的 video API（provider 特定实现）
+ * - video_gen  → 对 pollinations 通过 `./pollinations.js` 调用 GET `/video/{prompt}`
  * - transcribe → transcribe()
  * - embedding  → embed() 或 embedMany()
  *

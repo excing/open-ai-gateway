@@ -13,7 +13,7 @@ import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
-import { createPollinations } from 'ai-sdk-pollinations';
+import { createPollinations } from './pollinations.js';
 
 const CONSTANTS = {
   PROVIDERS: {
@@ -708,14 +708,12 @@ function createApp(deps = {}) {
         }
       }
       case PROVIDERS.POLLINATIONS: {
-        const providerInstance = providers.createPollinations({ apiKey, baseURL, headers, name: channelName });
+        const providerInstance = providers.createPollinations({ apiKey, baseURL, headers, name: channelName, fetch: fetchFn });
         switch (callType) {
           case CALL_TYPES.IMAGE_GEN:
             return providerInstance.image(modelCode);
-          case CALL_TYPES.AUDIO_GEN:
-            return providerInstance.speechModel(modelCode);
-          case CALL_TYPES.CHAT:
-            return providerInstance.chat(modelCode);
+          case CALL_TYPES.VIDEO_GEN:
+            return providerInstance.video(modelCode);
           default:
             return unsupportedCallType();
         }
@@ -792,7 +790,18 @@ function createApp(deps = {}) {
     }
 
     if (callType === CALL_TYPES.VIDEO_GEN) {
-      const data = (result.videos || []).map((video) => ({ url: `data:${video.mediaType};base64,${video.base64}` }));
+      const data = (result.videos || []).map((video) => {
+        if (video?.url) {
+          return { url: video.url };
+        }
+        if (video?.base64) {
+          return { url: `data:${video.mediaType};base64,${video.base64}` };
+        }
+        if (video?.type === 'base64' && video?.data) {
+          return { url: `data:${video.mediaType};base64,${video.data}` };
+        }
+        return { url: '' };
+      }).filter((item) => item.url);
       return jsonResponse({ created, data });
     }
 
@@ -800,7 +809,7 @@ function createApp(deps = {}) {
       const mediaType = result.audio?.mediaType || 'audio/mpeg';
       const headers = new Headers({ [HEADERS.CONTENT_TYPE]: mediaType });
       Object.entries(CORS_HEADERS).forEach(([key, value]) => headers.set(key, value));
-      return new Response(result.audio?.data || new Uint8Array(), { status: HTTP_STATUS.OK, headers });
+      return new Response(result.audio?.uint8ArrayData || new Uint8Array(), { status: HTTP_STATUS.OK, headers });
     }
 
     if (callType === CALL_TYPES.TRANSCRIBE) {

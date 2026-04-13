@@ -938,3 +938,113 @@ describe('API: 参数校验错误应返回具体原因', () => {
     assert.ok(data.error.includes('limit'));
   });
 });
+
+describe('Pollinations: 仅图片与视频生成', () => {
+  let app;
+  let mockEnv;
+
+  beforeEach(() => {
+    mockEnv = createMockEnv();
+  });
+
+  afterEach(() => {
+    mockEnv._clear();
+  });
+
+  it('pollinations 的 image_gen 模型检测应成功', async () => {
+    app = createApp({
+      fetch: async (url) => {
+        const target = url.toString();
+        if (target.includes('/image/')) {
+          return new Response(new Uint8Array([1, 2, 3]), {
+            status: 200,
+            headers: { 'content-type': 'image/png' },
+          });
+        }
+        return new Response('not found', { status: 404 });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: PROVIDERS.POLLINATIONS,
+        apiKey: 'not-required',
+        baseURL: '',
+        model: 'flux',
+        callType: CALL_TYPES.IMAGE_GEN,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+  });
+
+  it('pollinations 的 video_gen 模型检测应成功', async () => {
+    app = createApp({
+      fetch: async (url) => {
+        const target = url.toString();
+        if (target.includes('/video/')) {
+          return new Response(new Uint8Array([4, 5, 6]), {
+            status: 200,
+            headers: { 'content-type': 'video/mp4' },
+          });
+        }
+        return new Response('not found', { status: 404 });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: PROVIDERS.POLLINATIONS,
+        apiKey: 'not-required',
+        baseURL: '',
+        model: 'veo',
+        callType: CALL_TYPES.VIDEO_GEN,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+  });
+
+  it('pollinations 的 chat 模型检测应返回不可用', async () => {
+    app = createApp();
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: PROVIDERS.POLLINATIONS,
+        apiKey: 'not-required',
+        baseURL: '',
+        model: 'openai',
+        callType: CALL_TYPES.CHAT,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.SERVICE_UNAVAILABLE);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, false);
+    assert.strictEqual(data.data.data_available, false);
+  });
+});
