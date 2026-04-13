@@ -2,7 +2,16 @@ import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { createApp, CONSTANTS, SCHEMAS } from './worker.js';
 
-const { CALL_TYPES, MODEL_STATUS, HTTP_STATUS, ERROR_MESSAGES, PROVIDERS, ROUTES } = CONSTANTS;
+const {
+  CALL_TYPES,
+  MODEL_STATUS,
+  HTTP_STATUS,
+  ERROR_MESSAGES,
+  PROVIDERS,
+  ROUTES,
+  HEADERS,
+  MULTIPART_CONTENT_TYPE,
+} = CONSTANTS;
 
 // Mock dependencies
 function createMockEnv() {
@@ -856,6 +865,98 @@ describe('API: POST /api/model/check - 检测模型可用性', () => {
 
     assert.strictEqual(response.status, HTTP_STATUS.BAD_REQUEST);
     assert.strictEqual(data.success, false);
+  });
+});
+
+describe('API: POST /v1/audio/transcriptions - multipart file', () => {
+  let app;
+  let mockEnv;
+
+  beforeEach(() => {
+    mockEnv = createMockEnv();
+    mockEnv._addChannel({
+      id: 'ch-transcribe',
+      name: 'Transcribe Channel',
+      key: 'transcribe-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-test',
+      base_url: '',
+      created_at: '2026-04-12T00:00:00Z',
+      updated_at: '2026-04-12T00:00:00Z',
+    });
+    mockEnv._addModel({
+      id: 'model-transcribe',
+      channel_id: 'ch-transcribe',
+      code: 'whisper-1',
+      name: 'whisper-1',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.TRANSCRIBE,
+      capabilities: JSON.stringify([CALL_TYPES.TRANSCRIBE]),
+      cost: '',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-12T00:00:00Z',
+      headers: '{}',
+    });
+  });
+
+  afterEach(() => {
+    mockEnv._clear();
+  });
+
+  it('应将multipart file对象转换为Uint8Array后再调用SDK', async () => {
+    let receivedAudio;
+    const expectedAudio = new Uint8Array([1, 2, 3, 4]);
+    const mockFile = {
+      arrayBuffer: async () => expectedAudio.buffer,
+    };
+
+    app = createApp({
+      providers: {
+        createOpenAI: () => ({
+          transcription: (modelCode) => ({ modelCode }),
+        }),
+      },
+      ai: {
+        experimental_transcribe: async ({ audio }) => {
+          receivedAudio = audio;
+          return { text: 'ok' };
+        },
+        generateText: async () => ({ text: 'test', usage: {} }),
+        streamText: async () => ({ textStream: ['test'], usage: {} }),
+        generateImage: async () => ({ images: [{ base64: 'test' }] }),
+        embed: async () => ({ embedding: [0.1], usage: {} }),
+        experimental_generateSpeech: async () => ({ audio: { data: new Uint8Array([1]), mediaType: 'audio/mpeg' } }),
+        experimental_generateVideo: async () => ({ videos: [] }),
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_TRANSCRIBE,
+      headers: {
+        authorization: 'Bearer test-admin-key',
+        [HEADERS.CONTENT_TYPE.toLowerCase()]: `${MULTIPART_CONTENT_TYPE}; boundary=----test-boundary`,
+      },
+      body: {
+        model: 'whisper-1',
+        file: mockFile,
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.text, 'ok');
+    assert.ok(receivedAudio instanceof Uint8Array);
+    assert.deepStrictEqual(Array.from(receivedAudio), Array.from(expectedAudio));
   });
 });
 

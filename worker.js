@@ -623,6 +623,29 @@ async function getRequestBody(body) {
   return '';
 }
 
+async function normalizeTranscriptionAudioInput(input) {
+  if (typeof input === 'string' || input instanceof Uint8Array || input instanceof ArrayBuffer) {
+    return input;
+  }
+
+  if (input instanceof Blob) {
+    const arrayBuffer = await input.arrayBuffer();
+    return new Uint8Array(arrayBuffer);
+  }
+
+  if (input && typeof input === 'object') {
+    if (input.data) return normalizeTranscriptionAudioInput(input.data);
+    if (input.uint8ArrayData) return normalizeTranscriptionAudioInput(input.uint8ArrayData);
+    if (input.base64) return normalizeTranscriptionAudioInput(input.base64);
+    if (typeof input.arrayBuffer === 'function') {
+      const arrayBuffer = await input.arrayBuffer();
+      return new Uint8Array(arrayBuffer);
+    }
+  }
+
+  throw new Error('Invalid transcription file');
+}
+
 function createApp(deps = {}) {
   const providers = {
     createOpenAI: deps.providers?.createOpenAI || createOpenAI,
@@ -753,7 +776,8 @@ function createApp(deps = {}) {
       return ai.experimental_generateSpeech({ model: aiModel, text: body.input, voice: body.voice, outputFormat: body.format, speed: body.speed });
     }
     if (callType === CALL_TYPES.TRANSCRIBE) {
-      return ai.experimental_transcribe({ model: aiModel, audio: body.file });
+      const audio = await normalizeTranscriptionAudioInput(body.file);
+      return ai.experimental_transcribe({ model: aiModel, audio });
     }
     if (callType === CALL_TYPES.EMBEDDING) {
       return ai.embed({ model: aiModel, value: body.input });
