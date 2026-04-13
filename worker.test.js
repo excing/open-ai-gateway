@@ -1469,3 +1469,128 @@ describe('Exacg: 仅图片生成', () => {
     assert.strictEqual(data.data.data_available, false);
   });
 });
+
+describe('extra_body 透传', () => {
+  it('executeAIRequest(chat) 应透传 extra_body 到 generateText.providerOptions', async () => {
+    let receivedOptions;
+    const app = createApp({
+      ai: {
+        generateText: async (options) => {
+          receivedOptions = options;
+          return { text: 'ok', usage: {} };
+        },
+      },
+    });
+
+    const extraBody = { openai: { reasoningEffort: 'high' } };
+    const result = await app.executeAIRequest(
+      { modelId: 'mock-model' },
+      CALL_TYPES.CHAT,
+      { prompt: 'hello', extra_body: extraBody },
+    );
+
+    assert.strictEqual(result.text, 'ok');
+    assert.deepStrictEqual(receivedOptions.providerOptions, extraBody);
+  });
+
+  it('POST /v1/chat/completions stream=true 应透传 extra_body 到 streamText.providerOptions', async () => {
+    let receivedOptions;
+    const app = createApp({
+      providers: {
+        createOpenAI: () => ({
+          chat: (modelCode) => ({ modelCode }),
+        }),
+      },
+      ai: {
+        streamText: async (options) => {
+          receivedOptions = options;
+          return { textStream: ['ok'] };
+        },
+      },
+    });
+    const mockEnv = createMockEnv();
+    mockEnv._addChannel({
+      id: 'ch-stream-provider-options',
+      name: 'OpenAI',
+      key: 'openai-stream-provider-options',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-test',
+      base_url: '',
+      created_at: '2026-04-12T00:00:00Z',
+      updated_at: '2026-04-12T00:00:00Z',
+    });
+    mockEnv._addModel({
+      id: 'model-stream-provider-options',
+      channel_id: 'ch-stream-provider-options',
+      code: 'gpt-4o',
+      name: 'gpt-4o',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT]),
+      cost: '',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-12T00:00:00Z',
+      headers: '{}',
+    });
+
+    const extraBody = { openrouter: { transforms: ['middle-out'] } };
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_CHAT,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'hello' }],
+        stream: true,
+        extra_body: extraBody,
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.deepStrictEqual(receivedOptions.providerOptions, extraBody);
+    mockEnv._clear();
+  });
+
+  it('POST /api/model/check 应透传 extra_body 到检测请求的 providerOptions', async () => {
+    let receivedOptions;
+    const app = createApp({
+      ai: {
+        generateText: async (options) => {
+          receivedOptions = options;
+          return { text: 'ok', usage: {} };
+        },
+      },
+    });
+    const mockEnv = createMockEnv();
+    const extraBody = { anthropic: { thinking: { type: 'enabled', budgetTokens: 128 } } };
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: PROVIDERS.OPENAI,
+        apiKey: 'sk-test',
+        baseURL: '',
+        model: 'gpt-4o',
+        callType: CALL_TYPES.CHAT,
+        headers: {},
+        extra_body: extraBody,
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.deepStrictEqual(receivedOptions.providerOptions, extraBody);
+    mockEnv._clear();
+  });
+});

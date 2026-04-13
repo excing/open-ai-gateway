@@ -541,6 +541,14 @@ function safeJsonParse(value, fallback) {
   }
 }
 
+function getProviderOptions(payload) {
+  const value = payload?.extra_body;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return undefined;
+  }
+  return value;
+}
+
 function calculateModelScore(modelRow) {
   return (
     modelRow.weight * SCORE_WEIGHTS.WEIGHT_FACTOR +
@@ -782,24 +790,25 @@ function createApp(deps = {}) {
   }
 
   async function executeAIRequest(aiModel, callType, body) {
+    const providerOptions = getProviderOptions(body);
     if (callType === CALL_TYPES.CHAT) {
-      return ai.generateText({ model: aiModel, messages: body.messages, prompt: body.prompt, maxTokens: body.max_tokens, temperature: body.temperature });
+      return ai.generateText({ model: aiModel, messages: body.messages, prompt: body.prompt, maxTokens: body.max_tokens, temperature: body.temperature, providerOptions });
     }
     if (callType === CALL_TYPES.IMAGE_GEN) {
-      return ai.generateImage({ model: aiModel, prompt: body.prompt, n: body.n, size: body.size, aspectRatio: body.aspect_ratio, seed: body.seed });
+      return ai.generateImage({ model: aiModel, prompt: body.prompt, n: body.n, size: body.size, aspectRatio: body.aspect_ratio, seed: body.seed, providerOptions });
     }
     if (callType === CALL_TYPES.VIDEO_GEN) {
-      return ai.experimental_generateVideo({ model: aiModel, prompt: body.prompt });
+      return ai.experimental_generateVideo({ model: aiModel, prompt: body.prompt, providerOptions });
     }
     if (callType === CALL_TYPES.AUDIO_GEN) {
-      return ai.experimental_generateSpeech({ model: aiModel, text: body.input, voice: body.voice, outputFormat: body.format, speed: body.speed });
+      return ai.experimental_generateSpeech({ model: aiModel, text: body.input, voice: body.voice, outputFormat: body.format, speed: body.speed, providerOptions });
     }
     if (callType === CALL_TYPES.TRANSCRIBE) {
       const audio = await normalizeTranscriptionAudioInput(body.file);
-      return ai.experimental_transcribe({ model: aiModel, audio });
+      return ai.experimental_transcribe({ model: aiModel, audio, providerOptions });
     }
     if (callType === CALL_TYPES.EMBEDDING) {
-      return ai.embed({ model: aiModel, value: body.input });
+      return ai.embed({ model: aiModel, value: body.input, providerOptions });
     }
     throw new Error(`Unsupported call type ${callType}`);
   }
@@ -1058,12 +1067,14 @@ function createApp(deps = {}) {
       });
 
       const startTime = nowFn().getTime();
+      const providerOptions = getProviderOptions(body);
       const result = await ai.streamText({
         model: fallbackModel,
         messages: body.messages,
         prompt: body.prompt,
         maxTokens: body.max_tokens,
         temperature: body.temperature,
+        providerOptions,
         onFinish: async (event) => {
           const latencyMs = nowFn().getTime() - startTime;
           const selection = modelMap.get(fallbackModel.modelId) || candidates[0];
@@ -1694,7 +1705,7 @@ function createApp(deps = {}) {
     let errorMessage = '';
 
     try {
-      const result = await executeModelCheck(aiModel, parsed.callType, parsed.timeoutMs, request, env);
+      const result = await executeModelCheck(aiModel, parsed.callType, parsed.timeoutMs, request, env, getProviderOptions(body));
       apiAccessible = true;
       dataAvailable = result.dataAvailable;
     } catch (error) {
@@ -1735,13 +1746,14 @@ function createApp(deps = {}) {
    * @param callType - 调用类型
    * @returns { dataAvailable: boolean }
    */
-  async function executeModelCheck(aiModel, callType, timeoutMs = CONSTANTS.MODEL_CHECK.DEFAULT_TIMEOUT_MS, request, env) {
+  async function executeModelCheck(aiModel, callType, timeoutMs = CONSTANTS.MODEL_CHECK.DEFAULT_TIMEOUT_MS, request, env, providerOptions) {
     const checkPromise = (async () => {
       if (callType === CALL_TYPES.CHAT) {
         const result = await ai.generateText({
           model: aiModel,
           prompt: CONSTANTS.MODEL_CHECK.TEST_PROMPT,
           maxTokens: 64,
+          providerOptions,
         });
         return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
       }
@@ -1751,6 +1763,7 @@ function createApp(deps = {}) {
           model: aiModel,
           prompt: CONSTANTS.MODEL_CHECK.TEST_IMAGE_PROMPT,
           n: 1,
+          providerOptions,
         });
         return { dataAvailable: Boolean(result.images && result.images.length > 0) };
       }
@@ -1759,6 +1772,7 @@ function createApp(deps = {}) {
         const result = await ai.experimental_generateSpeech({
           model: aiModel,
           text: CONSTANTS.MODEL_CHECK.TEST_SPEECH_TEXT,
+          providerOptions,
         });
         return { dataAvailable: Boolean(result.audio && result.audio.data && result.audio.data.length > 0) };
       }
@@ -1767,13 +1781,14 @@ function createApp(deps = {}) {
         const result = await ai.embed({
           model: aiModel,
           value: CONSTANTS.MODEL_CHECK.TEST_EMBEDDING_INPUT,
+          providerOptions,
         });
         return { dataAvailable: Boolean(result.embedding && result.embedding.length > 0) };
       }
 
       if (callType === CALL_TYPES.TRANSCRIBE) {
         const audio = await loadModelCheckTranscribeAudio(request, env);
-        const result = await ai.experimental_transcribe({ model: aiModel, audio });
+        const result = await ai.experimental_transcribe({ model: aiModel, audio, providerOptions });
         return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
       }
 
@@ -1781,6 +1796,7 @@ function createApp(deps = {}) {
         const result = await ai.experimental_generateVideo({
           model: aiModel,
           prompt: CONSTANTS.MODEL_CHECK.TEST_IMAGE_PROMPT,
+          providerOptions,
         });
         return { dataAvailable: Boolean(result.videos && result.videos.length > 0) };
       }

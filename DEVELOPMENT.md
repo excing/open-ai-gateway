@@ -883,7 +883,14 @@ async function handleModelCheck(request: Request, env: Env): Promise<Response>;
  * @returns { dataAvailable: boolean } 数据是否可用
  * @throws AI SDK 调用失败或超时时抛出异常（超时时错误信息为 `Model check timed out after ${timeoutMs}ms`）
  */
-async function executeModelCheck(aiModel: AIModel, callType: CallType, timeoutMs: number, request: Request, env: Env): Promise<{ dataAvailable: boolean }>;
+async function executeModelCheck(
+    aiModel: AIModel,
+    callType: CallType,
+    timeoutMs: number,
+    request: Request,
+    env: Env,
+    providerOptions?: Record<string, any>
+): Promise<{ dataAvailable: boolean }>;
 ```
 
 ### 7.7 模型选择与调度
@@ -1041,7 +1048,7 @@ function instantiateLanguageModel(
 async function executeAIRequest(
     aiModel: AIModel,
     callType: CallType,
-    body: Record<string, any>
+    body: Record<string, any> // 支持可选 body.extra_body: Record<string, any>
 ): Promise<AIRequestResult>;
 
 /**
@@ -1189,9 +1196,13 @@ function buildPaginatedResponse<T>(data: T[], total: number, pagination: Paginat
     ],
     "stream": false,
     "temperature": 0.7,
-    "max_tokens": 1024
+    "max_tokens": 1024,
+    "extra_body": {
+        "openai": { "reasoningEffort": "medium" }
+    }
 }
 ```
+`extra_body` 为可选对象；网关会将其映射为 Vercel AI SDK 调用参数 `providerOptions`（`generateText`/`streamText`/`generateImage`/`embed`/`experimental_generateSpeech`/`experimental_generateVideo`/`experimental_transcribe`），用于携带 provider 专属参数。
 
 **非流式响应** (stream=false)：
 ```json
@@ -1551,7 +1562,10 @@ data: [DONE]
     "baseURL": "",
     "model": "gpt-4o",
     "callType": "chat",
-    "headers": {}
+    "headers": {},
+    "extra_body": {
+        "openai": { "reasoningEffort": "medium" }
+    }
 }
 ```
 
@@ -2194,7 +2208,7 @@ async function handleModelCheck(request, env) {
     let errorMessage = '';
 
     try {
-        const result = await executeModelCheck(aiModel, parsed.callType, parsed.timeoutMs);
+        const result = await executeModelCheck(aiModel, parsed.callType, parsed.timeoutMs, request, env, body.extra_body);
         apiAccessible = true;
         dataAvailable = result.dataAvailable;
     } catch (error) {
@@ -2218,13 +2232,14 @@ async function handleModelCheck(request, env) {
 ### 11.9 executeModelCheck 执行模型检测
 
 ```ts
-async function executeModelCheck(aiModel, callType, timeoutMs = MODEL_CHECK.DEFAULT_TIMEOUT_MS, request, env) {
+async function executeModelCheck(aiModel, callType, timeoutMs = MODEL_CHECK.DEFAULT_TIMEOUT_MS, request, env, providerOptions) {
     const checkPromise = (async () => {
         if (callType === CALL_TYPES.CHAT) {
             const result = await generateText({
                 model: aiModel,
                 prompt: MODEL_CHECK.TEST_PROMPT,
                 maxTokens: 10,
+                providerOptions,
             });
             return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
         }
