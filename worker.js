@@ -76,6 +76,9 @@ const CONSTANTS = {
     FAILURE_PENALTY: 20,
   },
   EMA_ALPHA: 0.3,
+  MODEL_CHECK_DEFAULT_TIMEOUT_MS: 30_000,
+  MODEL_CHECK_MIN_TIMEOUT_MS: 1,
+  MODEL_CHECK_MAX_TIMEOUT_MS: 120_000,
   HTTP_STATUS: {
     OK: 200,
     CREATED: 201,
@@ -360,6 +363,13 @@ const SCHEMAS = (() => {
     model: z.string().min(1),
     callType: CallTypeEnum,
     headers: z.record(z.string()).default({}),
+    timeoutMs: z
+      .coerce
+      .number()
+      .int()
+      .min(CONSTANTS.MODEL_CHECK_MIN_TIMEOUT_MS)
+      .max(CONSTANTS.MODEL_CHECK_MAX_TIMEOUT_MS)
+      .default(CONSTANTS.MODEL_CHECK_DEFAULT_TIMEOUT_MS),
   });
 
   const ModelCheckSchema = UpstreamModelCheckSchema;
@@ -400,6 +410,7 @@ const CHECK_TEST_SPEECH_TEXT = 'test';
 
 /** 模型可用性检测的测试图片生成 prompt */
 const CHECK_TEST_IMAGE_PROMPT = 'a white circle on black background';
+const MODEL_CHECK_TIMEOUT_ERROR_PREFIX = 'Model check timed out after ';
 
 function generateUUID() {
   return crypto.randomUUID();
@@ -1668,7 +1679,7 @@ function createApp(deps = {}) {
     let errorMessage = '';
 
     try {
-      const result = await executeModelCheck(aiModel, parsed.callType);
+      const result = await executeModelCheck(aiModel, parsed.callType, parsed.timeoutMs);
       apiAccessible = true;
       dataAvailable = result.dataAvailable;
     } catch (error) {
@@ -1698,55 +1709,71 @@ function createApp(deps = {}) {
    * @param callType - 调用类型
    * @returns { dataAvailable: boolean }
    */
-  async function executeModelCheck(aiModel, callType) {
-    if (callType === CALL_TYPES.CHAT) {
-      const result = await ai.generateText({
-        model: aiModel,
-        prompt: CHECK_TEST_PROMPT,
-        maxTokens: 64,
-      });
-      return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
-    }
+  async function executeModelCheck(aiModel, callType, timeoutMs = CONSTANTS.MODEL_CHECK_DEFAULT_TIMEOUT_MS) {
+    const checkPromise = (async () => {
+      if (callType === CALL_TYPES.CHAT) {
+        const result = await ai.generateText({
+          model: aiModel,
+          prompt: CHECK_TEST_PROMPT,
+          maxTokens: 64,
+        });
+        return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
+      }
 
-    if (callType === CALL_TYPES.IMAGE_GEN) {
-      const result = await ai.generateImage({
-        model: aiModel,
-        prompt: CHECK_TEST_IMAGE_PROMPT,
-        n: 1,
-      });
-      return { dataAvailable: Boolean(result.images && result.images.length > 0) };
-    }
+      if (callType === CALL_TYPES.IMAGE_GEN) {
+        const result = await ai.generateImage({
+          model: aiModel,
+          prompt: CHECK_TEST_IMAGE_PROMPT,
+          n: 1,
+        });
+        return { dataAvailable: Boolean(result.images && result.images.length > 0) };
+      }
 
-    if (callType === CALL_TYPES.AUDIO_GEN) {
-      const result = await ai.experimental_generateSpeech({
-        model: aiModel,
-        text: CHECK_TEST_SPEECH_TEXT,
-      });
-      return { dataAvailable: Boolean(result.audio && result.audio.data && result.audio.data.length > 0) };
-    }
+      if (callType === CALL_TYPES.AUDIO_GEN) {
+        const result = await ai.experimental_generateSpeech({
+          model: aiModel,
+          text: CHECK_TEST_SPEECH_TEXT,
+        });
+        return { dataAvailable: Boolean(result.audio && result.audio.data && result.audio.data.length > 0) };
+      }
 
-    if (callType === CALL_TYPES.EMBEDDING) {
-      const result = await ai.embed({
-        model: aiModel,
-        value: CHECK_TEST_EMBEDDING_INPUT,
-      });
-      return { dataAvailable: Boolean(result.embedding && result.embedding.length > 0) };
-    }
+      if (callType === CALL_TYPES.EMBEDDING) {
+        const result = await ai.embed({
+          model: aiModel,
+          value: CHECK_TEST_EMBEDDING_INPUT,
+        });
+        return { dataAvailable: Boolean(result.embedding && result.embedding.length > 0) };
+      }
 
-    if (callType === CALL_TYPES.TRANSCRIBE) {
-      // transcribe 需要音频文件，跳过实际检测
-      return { dataAvailable: true };
-    }
+      if (callType === CALL_TYPES.TRANSCRIBE) {
+        // transcribe 需要音频文件，跳过实际检测
+        return { dataAvailable: true };
+      }
 
-    if (callType === CALL_TYPES.VIDEO_GEN) {
-      const result = await ai.experimental_generateVideo({
-        model: aiModel,
-        prompt: CHECK_TEST_IMAGE_PROMPT,
-      });
-      return { dataAvailable: Boolean(result.videos && result.videos.length > 0) };
-    }
+      if (callType === CALL_TYPES.VIDEO_GEN) {
+        const result = await ai.experimental_generateVideo({
+          model: aiModel,
+          prompt: CHECK_TEST_IMAGE_PROMPT,
+        });
+        return { dataAvailable: Boolean(result.videos && result.videos.length > 0) };
+      }
 
-    throw new Error(`Unsupported call type: ${callType}`);
+      throw new Error(`Unsupported call type: ${callType}`);
+    })();
+
+    let timeoutHandle;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutHandle = setTimeout(
+        () => reject(new Error(`${MODEL_CHECK_TIMEOUT_ERROR_PREFIX}${timeoutMs}ms`)),
+        timeoutMs,
+      );
+    });
+
+    try {
+      return await Promise.race([checkPromise, timeoutPromise]);
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
   }
 
   async function routeAdminApi(request, env) {

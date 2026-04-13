@@ -695,6 +695,47 @@ describe('API: POST /api/model/check - 检测模型可用性', () => {
     assert.ok(data.data.error_message);
   });
 
+  it('检测超时时应返回api_accessible=false和超时错误信息', async () => {
+    app = createApp({
+      ai: {
+        generateText: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          return { text: 'late response', usage: {} };
+        },
+        streamText: async () => ({ textStream: ['test'], usage: {} }),
+        generateImage: async () => ({ images: [{ base64: 'test' }] }),
+        embed: async () => ({ embedding: [0.1], usage: {} }),
+        experimental_generateSpeech: async () => ({ audio: { data: new Uint8Array([1]), mediaType: 'audio/mpeg' } }),
+        experimental_transcribe: async () => ({ text: 'test' }),
+        experimental_generateVideo: async () => ({ videos: [] }),
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: `/api/model/check`,
+      headers: { 'authorization': 'Bearer test-admin-key' },
+      body: {
+        provider: PROVIDERS.OPENAI,
+        apiKey: 'sk-test',
+        baseURL: '',
+        model: 'gpt-4o',
+        callType: CALL_TYPES.CHAT,
+        headers: {},
+        timeoutMs: 10,
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, false);
+    assert.strictEqual(data.data.data_available, false);
+    assert.ok(data.data.error_message.includes('Model check timed out after 10ms'));
+  });
+
   it('响应数据为空时应返回data_available=false', async () => {
     app = createApp({
       now: () => new Date('2026-04-12T00:00:00Z'),

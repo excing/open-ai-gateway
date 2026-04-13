@@ -482,6 +482,15 @@ const CHECK_TEST_SPEECH_TEXT = 'test';
 
 /** 模型可用性检测的测试图片生成 prompt */
 const CHECK_TEST_IMAGE_PROMPT = 'a white circle on black background';
+
+/** 模型可用性检测默认超时（毫秒） */
+const MODEL_CHECK_DEFAULT_TIMEOUT_MS = 30000;
+
+/** 模型可用性检测超时最小值（毫秒） */
+const MODEL_CHECK_MIN_TIMEOUT_MS = 1;
+
+/** 模型可用性检测超时最大值（毫秒） */
+const MODEL_CHECK_MAX_TIMEOUT_MS = 120000;
 ```
 
 
@@ -848,13 +857,13 @@ function getDefaultBaseURL(provider: Provider): string;
  *    - video_gen: 非空视频数组（videos.length > 0）
  *
  * 处理流程：
- * 1. 校验请求体（provider/apiKey/baseURL/model/callType/headers）
+ * 1. 校验请求体（provider/apiKey/baseURL/model/callType/headers/timeoutMs）
  * 2. 组装 transient channel 对象
  * 3. 实例化 AI 模型（instantiateLanguageModel）
  * 4. 执行检测请求（executeModelCheck）
  * 5. 返回检测结果
  *
- * @param request - 包含 provider/apiKey/baseURL/model/callType/headers 的请求
+ * @param request - 包含 provider/apiKey/baseURL/model/callType/headers/timeoutMs 的请求
  * @param env - 环境变量
  * @returns { success: true, data: ModelCheckResult }
  * @throws 请求体不合法返回 400
@@ -873,10 +882,11 @@ async function handleModelCheck(request: Request, env: Env): Promise<Response>;
  *
  * @param aiModel - AI SDK 模型实例
  * @param callType - 调用类型
+ * @param timeoutMs - 本次检测超时阈值（毫秒）
  * @returns { dataAvailable: boolean } 数据是否可用
- * @throws AI SDK 调用失败时抛出异常
+ * @throws AI SDK 调用失败或超时时抛出异常（超时时错误信息为 `Model check timed out after ${timeoutMs}ms`）
  */
-async function executeModelCheck(aiModel: AIModel, callType: CallType): Promise<{ dataAvailable: boolean }>;
+async function executeModelCheck(aiModel: AIModel, callType: CallType, timeoutMs: number): Promise<{ dataAvailable: boolean }>;
 ```
 
 ### 7.7 模型选择与调度
@@ -2185,7 +2195,7 @@ async function handleModelCheck(request, env) {
     let errorMessage = '';
 
     try {
-        const result = await executeModelCheck(aiModel, parsed.callType);
+        const result = await executeModelCheck(aiModel, parsed.callType, parsed.timeoutMs);
         apiAccessible = true;
         dataAvailable = result.dataAvailable;
     } catch (error) {
@@ -2209,55 +2219,70 @@ async function handleModelCheck(request, env) {
 ### 11.9 executeModelCheck 执行模型检测
 
 ```ts
-async function executeModelCheck(aiModel, callType) {
-    if (callType === CALL_TYPES.CHAT) {
-        const result = await generateText({
-            model: aiModel,
-            prompt: CHECK_TEST_PROMPT,
-            maxTokens: 10,
-        });
-        return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
-    }
+async function executeModelCheck(aiModel, callType, timeoutMs = MODEL_CHECK_DEFAULT_TIMEOUT_MS) {
+    const checkPromise = (async () => {
+        if (callType === CALL_TYPES.CHAT) {
+            const result = await generateText({
+                model: aiModel,
+                prompt: CHECK_TEST_PROMPT,
+                maxTokens: 10,
+            });
+            return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
+        }
 
-    if (callType === CALL_TYPES.IMAGE_GEN) {
-        const result = await generateImage({
-            model: aiModel,
-            prompt: CHECK_TEST_IMAGE_PROMPT,
-            n: 1,
-        });
-        return { dataAvailable: Boolean(result.images && result.images.length > 0) };
-    }
+        if (callType === CALL_TYPES.IMAGE_GEN) {
+            const result = await generateImage({
+                model: aiModel,
+                prompt: CHECK_TEST_IMAGE_PROMPT,
+                n: 1,
+            });
+            return { dataAvailable: Boolean(result.images && result.images.length > 0) };
+        }
 
-    if (callType === CALL_TYPES.AUDIO_GEN) {
-        const result = await experimental_generateSpeech({
-            model: aiModel,
-            text: CHECK_TEST_SPEECH_TEXT,
-        });
-        return { dataAvailable: Boolean(result.audio?.data?.length > 0) };
-    }
+        if (callType === CALL_TYPES.AUDIO_GEN) {
+            const result = await experimental_generateSpeech({
+                model: aiModel,
+                text: CHECK_TEST_SPEECH_TEXT,
+            });
+            return { dataAvailable: Boolean(result.audio?.data?.length > 0) };
+        }
 
-    if (callType === CALL_TYPES.EMBEDDING) {
-        const result = await embed({
-            model: aiModel,
-            value: CHECK_TEST_EMBEDDING_INPUT,
-        });
-        return { dataAvailable: Boolean(result.embedding && result.embedding.length > 0) };
-    }
+        if (callType === CALL_TYPES.EMBEDDING) {
+            const result = await embed({
+                model: aiModel,
+                value: CHECK_TEST_EMBEDDING_INPUT,
+            });
+            return { dataAvailable: Boolean(result.embedding && result.embedding.length > 0) };
+        }
 
-    if (callType === CALL_TYPES.TRANSCRIBE) {
-        // transcribe 需要音频文件，跳过实际检测
-        return { dataAvailable: true };
-    }
+        if (callType === CALL_TYPES.TRANSCRIBE) {
+            // transcribe 需要音频文件，跳过实际检测
+            return { dataAvailable: true };
+        }
 
-    if (callType === CALL_TYPES.VIDEO_GEN) {
-        const result = await experimental_generateVideo({
-            model: aiModel,
-            prompt: CHECK_TEST_IMAGE_PROMPT,
-        });
-        return { dataAvailable: Boolean(result.videos && result.videos.length > 0) };
-    }
+        if (callType === CALL_TYPES.VIDEO_GEN) {
+            const result = await experimental_generateVideo({
+                model: aiModel,
+                prompt: CHECK_TEST_IMAGE_PROMPT,
+            });
+            return { dataAvailable: Boolean(result.videos && result.videos.length > 0) };
+        }
 
-    throw new Error(`Unsupported call type: ${callType}`);
+        throw new Error(`Unsupported call type: ${callType}`);
+    })();
+
+    let timeoutHandle;
+    const timeoutPromise = new Promise((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+            reject(new Error(`Model check timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+    });
+
+    try {
+        return await Promise.race([checkPromise, timeoutPromise]);
+    } finally {
+        clearTimeout(timeoutHandle);
+    }
 }
 ```
 
