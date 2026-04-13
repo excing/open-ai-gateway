@@ -50,7 +50,7 @@ graph TB
         AC7[更新模型 PUT /api/model/:id]
         AC8[删除模型 DELETE /api/model/:id]
         AC9[查看日志 GET /api/log]
-        AC10[获取渠道模型列表 GET /api/channel/:id/models]
+        AC10[获取渠道模型列表 POST /api/channel/models]
         AC11[检测模型可用性 POST /api/model/check]
     end
 
@@ -786,19 +786,19 @@ async function handleStatus(env: Env): Promise<Response>;
 
 ```ts
 /**
- * 获取指定渠道上游的模型列表
+ * 获取上游模型列表（连接参数驱动，不依赖 DB）
  * 
  * 处理流程：
- * 1. 验证渠道存在（SELECT_CHANNEL_BY_ID）
- * 2. 调用 fetchUpstreamModels 获取上游模型列表
- * 3. 返回模型列表
+ * 1. 校验请求体（provider/apiKey/baseURL）
+ * 2. 组装 transient channel 对象
+ * 3. 调用 fetchUpstreamModels 获取上游模型列表
+ * 4. 返回模型列表
  *
- * @param channelId - URL 路径中的渠道 ID
- * @param env - 环境变量
+ * @param request - 包含 provider/apiKey/baseURL 的请求
  * @returns { success: true, data: UpstreamModel[] } 或 { success: true, data: [], error: string }
- * @throws 渠道不存在返回 404
+ * @throws 请求体不合法返回 400
  */
-async function handleGetChannelModels(channelId: string, env: Env): Promise<Response>;
+async function handleGetChannelModelsByConnection(request: Request): Promise<Response>;
 
 /**
  * 从上游 provider 获取模型列表
@@ -810,7 +810,7 @@ async function handleGetChannelModels(channelId: string, env: Env): Promise<Resp
  * - openrouter: GET https://openrouter.ai/api/v1/models
  * - pollinations: GET https://gen.pollinations.ai/v1/models
  *
- * @param channel - 渠道数据库行
+ * @param channel - 渠道连接对象（可来自 DB 或请求体）
  * @returns UpstreamModel[] 上游模型列表
  * @throws 上游 API 调用失败时抛出异常
  */
@@ -835,7 +835,7 @@ async function fetchModelsFromUpstream(url: string, headers: Record<string, stri
 function getDefaultBaseURL(provider: Provider): string;
 
 /**
- * 检测指定渠道下的指定模型的可用性
+ * 检测指定上游模型的可用性（连接参数驱动，不依赖 DB）
  * 
  * 检测两个维度：
  * 1. API 是否可访问（api_accessible）：能否成功调用 AI SDK
@@ -848,16 +848,16 @@ function getDefaultBaseURL(provider: Provider): string;
  *    - video_gen: 非空视频数组（videos.length > 0）
  *
  * 处理流程：
- * 1. 校验请求体（channelId/model/callType/headers）
- * 2. 验证渠道存在
+ * 1. 校验请求体（provider/apiKey/baseURL/model/callType/headers）
+ * 2. 组装 transient channel 对象
  * 3. 实例化 AI 模型（instantiateLanguageModel）
  * 4. 执行检测请求（executeModelCheck）
  * 5. 返回检测结果
  *
- * @param request - 包含 channelId/model/callType/headers 的请求
+ * @param request - 包含 provider/apiKey/baseURL/model/callType/headers 的请求
  * @param env - 环境变量
  * @returns { success: true, data: ModelCheckResult }
- * @throws 请求体不合法返回 400，渠道不存在返回 404
+ * @throws 请求体不合法返回 400
  */
 async function handleModelCheck(request: Request, env: Env): Promise<Response>;
 
@@ -1425,9 +1425,18 @@ data: [DONE]
 }
 ```
 
-#### GET /api/channel/{id}/models
+#### POST /api/channel/models
 
-获取指定渠道上游的模型列表。通过调用上游 provider 的 `/v1/models` API 获取可用模型列表。
+按连接参数获取上游模型列表，不依赖已保存渠道。通过调用上游 provider 的 `/v1/models` API 获取可用模型列表。
+
+**请求体**：
+```json
+{
+    "provider": "openai",
+    "apiKey": "sk-test",
+    "baseURL": ""
+}
+```
 
 **支持的 Provider**：
 - `openai` / `openai-compatible`: GET `{baseURL}/v1/models`
@@ -1467,6 +1476,49 @@ data: [DONE]
 ```
 
 **错误响应**：
+- 400: 请求体缺失或字段不合法
+- 401: 未鉴权
+
+#### GET /api/channel/{id}/models（兼容接口）
+
+通过已保存的渠道 ID 获取上游模型列表。服务端会先从数据库读取该渠道的 `provider/api_key/base_url`，再调用上游模型列表接口。
+
+用途：
+- 兼容旧前端与已保存渠道的快捷刷新场景
+- 新建渠道（尚未保存、无 channelId）不适用
+
+推荐级别：
+- 兼容保留，不作为新实现首选
+- 新实现优先使用 `POST /api/channel/models`
+
+**路径参数**：
+- `id`: 渠道 ID（数据库主键）
+
+**响应** (200)：
+```json
+{
+    "success": true,
+    "data": [
+        {
+            "id": "gpt-4o",
+            "object": "model",
+            "created": 1700000000,
+            "owned_by": "openai"
+        }
+    ]
+}
+```
+
+**上游 API 错误时的响应**：
+```json
+{
+    "success": true,
+    "data": [],
+    "error": "Upstream returned 401"
+}
+```
+
+**错误响应**：
 - 404: 渠道不存在
 - 401: 未鉴权
 
@@ -1485,7 +1537,9 @@ data: [DONE]
 **请求体**：
 ```json
 {
-    "channelId": "ch-001",
+    "provider": "openai",
+    "apiKey": "sk-test",
+    "baseURL": "",
     "model": "gpt-4o",
     "callType": "chat",
     "headers": {}
@@ -1524,7 +1578,6 @@ data: [DONE]
 
 **错误响应**：
 - 400: 请求体缺失或字段不合法
-- 404: 渠道不存在
 - 401: 未鉴权
 
 ### 8.3 公开 API
@@ -1654,22 +1707,16 @@ sequenceDiagram
     participant A as 管理员
     participant GW as AI Gateway
     participant Auth as 鉴权模块
-    participant DB as D1 数据库
     participant AI as AI Provider
 
     A->>GW: POST /api/model/check (Authorization + body)
     GW->>Auth: isAdmin(request, env)
     Auth-->>GW: true
-    GW->>GW: 校验 body(channelId/model/callType/headers)
+    GW->>GW: 校验 body(provider/apiKey/baseURL/model/callType/headers)
     alt body 不合法
         GW-->>A: 400 Invalid request body
     end
-    GW->>DB: SELECT * FROM channels WHERE id = :channelId(body)
-    alt 渠道不存在
-        DB-->>GW: null
-        GW-->>A: 404 Channel not found
-    end
-    DB-->>GW: channel
+    GW->>GW: 构建 transient channel(provider/apiKey/baseURL)
     GW->>GW: instantiateLanguageModel(channel, body.model/body.callType/body.headers)
     alt 实例化失败
         GW-->>A: 200 { api_accessible: false, data_available: false, error_message: ... }
@@ -1796,9 +1843,8 @@ flowchart TD
     B -->|否| C[401 Unauthorized]
     B -->|是| D{body合法?}
     D -->|否| E[400 Invalid request body]
-    D -->|是| F{渠道存在?}
-    F -->|否| G[404 Channel not found]
-    F -->|是| H[instantiateLanguageModel]
+    D -->|是| F[构建 transient channel]
+    F --> H[instantiateLanguageModel]
     H --> I{实例化成功?}
     I -->|否| J[返回 api_accessible=false]
     J --> K[error_message = 实例化错误]
@@ -1986,17 +2032,30 @@ async function recordFailure(modelId, env) {
 }
 ```
 
-### 11.5 handleGetChannelModels 获取渠道上游模型列表
+### 11.5 handleGetChannelModelsByConnection 获取渠道上游模型列表
 
 ```ts
-async function handleGetChannelModels(channelId, env) {
-    // 1. 验证渠道存在
-    const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(channelId).first();
-    if (!channel) {
-        return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+async function handleGetChannelModelsByConnection(request) {
+    // 1. 解析并校验请求体
+    const body = await parseRequestBody(request);
+    if (!body) {
+        return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+    }
+    let parsed;
+    try {
+        parsed = UpstreamModelListSchema.parse(body);
+    } catch {
+        return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
     }
 
-    // 2. 调用上游 API 获取模型列表
+    // 2. 构建临时连接对象
+    const channel = {
+        provider: parsed.provider,
+        api_key: parsed.apiKey,
+        base_url: parsed.baseURL,
+    };
+
+    // 3. 调用上游 API 获取模型列表
     try {
         const models = await fetchUpstreamModels(channel);
         return jsonResponse({ success: true, data: models }, HTTP_STATUS.OK);
@@ -2005,7 +2064,7 @@ async function handleGetChannelModels(channelId, env) {
             success: true,
             data: [],
             error: error.message || 'Failed to fetch upstream models',
-        }, HTTP_STATUS.OK);
+        }, HTTP_STATUS.SERVICE_UNAVAILABLE);
     }
 }
 ```
@@ -2092,11 +2151,13 @@ async function handleModelCheck(request, env) {
         return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
     }
 
-    // 2. 验证渠道存在
-    const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(parsed.channelId).first();
-    if (!channel) {
-        return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
-    }
+    // 2. 构建临时连接对象
+    const channel = {
+        name: 'transient-channel',
+        provider: parsed.provider,
+        api_key: parsed.apiKey,
+        base_url: parsed.baseURL,
+    };
 
     // 3. 实例化模型
     let aiModel;
@@ -2114,7 +2175,7 @@ async function handleModelCheck(request, env) {
                 api_accessible: false, data_available: false, latency_ms: 0,
                 error_message: error.message || 'Failed to instantiate model',
             }
-        }, HTTP_STATUS.OK);
+        }, HTTP_STATUS.SERVICE_UNAVAILABLE);
     }
 
     // 4. 执行检测请求

@@ -448,6 +448,7 @@ async function parseRequestBody(request) {
     }
     return await request.json();
   } catch (error) {
+    console.warn(error);
     return null;
   }
 }
@@ -544,6 +545,49 @@ async function initializeDatabase(env) {
   }
 
   env.__dbInitialized = true;
+}
+
+// 自定义封装 fetch, 支持请求日志打印
+const depsFetch = async function (input, init) {
+  const url = typeof input === 'string' ? input : input.url;
+  const method = init?.method || 'GET';
+
+  // 打印请求的基本信息
+  console.log(`Request: ${method} ${url}`);
+  if (init?.headers) {
+    console.log('Request Headers:', init.headers);
+  }
+  if (init?.body) {
+    console.log('Request Body:', await getRequestBody(init.body));
+  }
+
+  // 执行实际的 fetch 请求
+  const response = await fetch(input, init);
+
+  // 打印响应的基本信息
+  console.log(`Response: ${response.status} ${response.statusText}`);
+  const responseBody = await response.clone().text(); // 克隆响应体以便读取
+  console.log('Response Body:', responseBody);
+
+  // 直接返回响应
+  return response;
+};
+
+// 处理请求体为非字符串的情况
+async function getRequestBody(body) {
+  if (body instanceof FormData) {
+    return '[FormData]'; // 你可以根据需要进一步处理 FormData
+  }
+  if (body instanceof Blob) {
+    return '[Blob]'; // 处理 Blob
+  }
+  if (typeof body === 'string') {
+    return body;
+  }
+  if (body) {
+    return JSON.stringify(body);
+  }
+  return '';
 }
 
 function createApp(deps = {}) {
