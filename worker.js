@@ -674,7 +674,7 @@ function createApp(deps = {}) {
   const createFallbackModel = deps.createFallback || createFallback;
   const nowFn = deps.now || (() => new Date());
   const uuidFn = deps.uuid || generateUUID;
-  const fetchFn = deps.fetch || fetch;
+  const getFetchFn = (env) => (env?.ENV === 'dev' && deps.fetch ? deps.fetch : fetch);
 
   function authenticate(request, env) {
     const token = extractBearerToken(request);
@@ -689,7 +689,7 @@ function createApp(deps = {}) {
     return env?.ctx?.waitUntil ? env.ctx.waitUntil.bind(env.ctx) : (promise) => promise;
   }
 
-  function instantiateLanguageModel(channelName, baseURL, apiKey, headers, provider, callType, modelCode) {
+  function instantiateLanguageModel(channelName, baseURL, apiKey, headers, provider, callType, modelCode, env) {
     const normalizedProvider = normalizeProvider(provider);
     const unsupportedCallType = () => {
       throw new Error(`Provider ${normalizedProvider} does not support callType ${callType} for model ${modelCode}`);
@@ -697,7 +697,7 @@ function createApp(deps = {}) {
 
     switch (normalizedProvider) {
       case PROVIDERS.GOOGLE: {
-        const providerInstance = providers.createGoogleGenerativeAI({ apiKey, baseURL, headers, name: channelName });
+        const providerInstance = providers.createGoogleGenerativeAI({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
         switch (callType) {
           case CALL_TYPES.IMAGE_GEN:
             return providerInstance.image(modelCode);
@@ -713,7 +713,7 @@ function createApp(deps = {}) {
         }
       }
       case PROVIDERS.ANTHROPIC: {
-        const providerInstance = providers.createAnthropic({ apiKey, baseURL, headers, name: channelName });
+        const providerInstance = providers.createAnthropic({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
         switch (callType) {
           case CALL_TYPES.CHAT:
             return providerInstance.chat(modelCode);
@@ -724,7 +724,7 @@ function createApp(deps = {}) {
         }
       }
       case PROVIDERS.OPENROUTER: {
-        const providerInstance = providers.createOpenRouter({ apiKey, baseURL, headers, name: channelName });
+        const providerInstance = providers.createOpenRouter({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
         switch (callType) {
           case CALL_TYPES.IMAGE_GEN:
             return providerInstance.imageModel(modelCode);
@@ -737,7 +737,7 @@ function createApp(deps = {}) {
         }
       }
       case PROVIDERS.POLLINATIONS: {
-        const providerInstance = providers.createPollinations({ apiKey, baseURL, headers, name: channelName, fetch: fetchFn });
+        const providerInstance = providers.createPollinations({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
         switch (callType) {
           case CALL_TYPES.IMAGE_GEN:
             return providerInstance.image(modelCode);
@@ -749,7 +749,7 @@ function createApp(deps = {}) {
       }
       case PROVIDERS.OPENAI:
       default: {
-        const providerInstance = providers.createOpenAI({ apiKey, baseURL, headers, name: channelName });
+        const providerInstance = providers.createOpenAI({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
         switch (callType) {
           case CALL_TYPES.IMAGE_GEN:
             return providerInstance.image(modelCode);
@@ -1010,6 +1010,7 @@ function createApp(deps = {}) {
           candidate.channel.provider,
           candidate.model.call_type,
           candidate.model.code,
+          env,
         ),
       );
 
@@ -1090,6 +1091,7 @@ function createApp(deps = {}) {
           selection.channel.provider,
           selection.model.call_type,
           selection.model.code,
+          env,
         );
 
         const result = await executeAIRequest(aiModel, selection.model.call_type, body);
@@ -1458,10 +1460,10 @@ function createApp(deps = {}) {
       return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
     }
 
-    return getChannelModels(channel);
+    return getChannelModels(channel, env);
   }
 
-  async function handleGetChannelModelsByConnection(request) {
+  async function handleGetChannelModelsByConnection(request, env) {
     const parsedRequestBody = await parseRequestBody(request);
     if (!parsedRequestBody.success) {
       return invalidRequestBodyResponse(parsedRequestBody.error);
@@ -1482,12 +1484,12 @@ function createApp(deps = {}) {
       base_url: parsed.baseURL,
     };
 
-    return getChannelModels(channel);
+    return getChannelModels(channel, env);
   }
 
-  async function getChannelModels(channel) {
+  async function getChannelModels(channel, env) {
     try {
-      const models = await fetchUpstreamModels(channel);
+      const models = await fetchUpstreamModels(channel, env);
       return jsonResponse({ success: true, data: models }, HTTP_STATUS.OK);
     } catch (error) {
       return jsonResponse({
@@ -1511,7 +1513,7 @@ function createApp(deps = {}) {
    * @param channel - 渠道数据库行
    * @returns UpstreamModel[] 上游模型列表
    */
-  async function fetchUpstreamModels(channel) {
+  async function fetchUpstreamModels(channel, env) {
     const normalizedProvider = normalizeProvider(channel.provider);
 
     // Anthropic 和 Pollinations 没有公开的模型列表 API
@@ -1531,12 +1533,12 @@ function createApp(deps = {}) {
       // Google 使用 query parameter 认证
       const url = new URL(modelsURL);
       url.searchParams.set('key', channel.api_key);
-      return fetchModelsFromUpstream(url.toString(), headers);
+      return fetchModelsFromUpstream(url.toString(), headers, env);
     } else {
       headers[HEADERS.AUTHORIZATION] = BEARER_PREFIX + channel.api_key;
     }
 
-    return fetchModelsFromUpstream(modelsURL, headers);
+    return fetchModelsFromUpstream(modelsURL, headers, env);
   }
 
   /**
@@ -1546,8 +1548,8 @@ function createApp(deps = {}) {
    * @param headers - 请求头
    * @returns UpstreamModel[] 模型列表
    */
-  async function fetchModelsFromUpstream(url, headers) {
-    const response = await fetchFn(url, {
+  async function fetchModelsFromUpstream(url, headers, env) {
+    const response = await getFetchFn(env)(url, {
       method: METHODS.GET,
       headers,
     });
@@ -1652,6 +1654,7 @@ function createApp(deps = {}) {
         transientChannel.provider,
         parsed.callType,
         parsed.model,
+        env,
       );
     } catch (error) {
       return jsonResponse({
@@ -1701,7 +1704,7 @@ function createApp(deps = {}) {
     const audioUrl = new URL(CONSTANTS.MODEL_CHECK.TEST_TRANSCRIBE_AUDIO_PATH, request.url).toString();
     const response = env?.ASSETS?.fetch
       ? await env.ASSETS.fetch(audioUrl)
-      : await fetchFn(audioUrl);
+      : await getFetchFn(env)(audioUrl);
     if (!response.ok) {
       throw new Error(`Failed to load transcribe check audio: ${response.status}`);
     }
@@ -1803,7 +1806,7 @@ function createApp(deps = {}) {
     }
 
     if (pathname === ROUTES.API_CHANNEL_MODELS && request.method === METHODS.POST) {
-      return handleGetChannelModelsByConnection(request);
+      return handleGetChannelModelsByConnection(request, env);
     }
 
     // 兼容路由: GET /api/channel/:id/models - 获取已保存渠道的上游模型列表
@@ -1911,7 +1914,7 @@ function createApp(deps = {}) {
   };
 }
 
-const worker = createApp();
+const worker = createApp({fetch: depsFetch});
 
 export default worker;
 export { CONSTANTS, SCHEMAS, CALL_TYPE_TO_PATH, PATH_TO_CALL_TYPE, createApp, initializeDatabase };
