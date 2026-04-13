@@ -76,9 +76,16 @@ const CONSTANTS = {
     FAILURE_PENALTY: 20,
   },
   EMA_ALPHA: 0.3,
-  MODEL_CHECK_DEFAULT_TIMEOUT_MS: 30_000,
-  MODEL_CHECK_MIN_TIMEOUT_MS: 1,
-  MODEL_CHECK_MAX_TIMEOUT_MS: 120_000,
+  MODEL_CHECK: {
+    TEST_PROMPT: 'Say "OK" if you can read this message.',
+    TEST_EMBEDDING_INPUT: 'test',
+    TEST_SPEECH_TEXT: 'test',
+    TEST_IMAGE_PROMPT: 'a white circle on black background',
+    TIMEOUT_ERROR_PREFIX: 'Model check timed out after ',
+    DEFAULT_TIMEOUT_MS: 30_000,
+    MIN_TIMEOUT_MS: 1,
+    MAX_TIMEOUT_MS: 120_000,
+  },
   HTTP_STATUS: {
     OK: 200,
     CREATED: 201,
@@ -367,9 +374,9 @@ const SCHEMAS = (() => {
       .coerce
       .number()
       .int()
-      .min(CONSTANTS.MODEL_CHECK_MIN_TIMEOUT_MS)
-      .max(CONSTANTS.MODEL_CHECK_MAX_TIMEOUT_MS)
-      .default(CONSTANTS.MODEL_CHECK_DEFAULT_TIMEOUT_MS),
+      .min(CONSTANTS.MODEL_CHECK.MIN_TIMEOUT_MS)
+      .max(CONSTANTS.MODEL_CHECK.MAX_TIMEOUT_MS)
+      .default(CONSTANTS.MODEL_CHECK.DEFAULT_TIMEOUT_MS),
   });
 
   const ModelCheckSchema = UpstreamModelCheckSchema;
@@ -398,19 +405,6 @@ const {
   UpstreamModelCheckSchema,
   ModelCheckSchema,
 } = SCHEMAS;
-
-/** 模型可用性检测的测试 prompt */
-const CHECK_TEST_PROMPT = 'Say "OK" if you can read this message.';
-
-/** 模型可用性检测的测试 embedding 输入 */
-const CHECK_TEST_EMBEDDING_INPUT = 'test';
-
-/** 模型可用性检测的测试语音合成文本 */
-const CHECK_TEST_SPEECH_TEXT = 'test';
-
-/** 模型可用性检测的测试图片生成 prompt */
-const CHECK_TEST_IMAGE_PROMPT = 'a white circle on black background';
-const MODEL_CHECK_TIMEOUT_ERROR_PREFIX = 'Model check timed out after ';
 
 function generateUUID() {
   return crypto.randomUUID();
@@ -1709,12 +1703,12 @@ function createApp(deps = {}) {
    * @param callType - 调用类型
    * @returns { dataAvailable: boolean }
    */
-  async function executeModelCheck(aiModel, callType, timeoutMs = CONSTANTS.MODEL_CHECK_DEFAULT_TIMEOUT_MS) {
+  async function executeModelCheck(aiModel, callType, timeoutMs = CONSTANTS.MODEL_CHECK.DEFAULT_TIMEOUT_MS) {
     const checkPromise = (async () => {
       if (callType === CALL_TYPES.CHAT) {
         const result = await ai.generateText({
           model: aiModel,
-          prompt: CHECK_TEST_PROMPT,
+          prompt: CONSTANTS.MODEL_CHECK.TEST_PROMPT,
           maxTokens: 64,
         });
         return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
@@ -1723,7 +1717,7 @@ function createApp(deps = {}) {
       if (callType === CALL_TYPES.IMAGE_GEN) {
         const result = await ai.generateImage({
           model: aiModel,
-          prompt: CHECK_TEST_IMAGE_PROMPT,
+          prompt: CONSTANTS.MODEL_CHECK.TEST_IMAGE_PROMPT,
           n: 1,
         });
         return { dataAvailable: Boolean(result.images && result.images.length > 0) };
@@ -1732,7 +1726,7 @@ function createApp(deps = {}) {
       if (callType === CALL_TYPES.AUDIO_GEN) {
         const result = await ai.experimental_generateSpeech({
           model: aiModel,
-          text: CHECK_TEST_SPEECH_TEXT,
+          text: CONSTANTS.MODEL_CHECK.TEST_SPEECH_TEXT,
         });
         return { dataAvailable: Boolean(result.audio && result.audio.data && result.audio.data.length > 0) };
       }
@@ -1740,7 +1734,7 @@ function createApp(deps = {}) {
       if (callType === CALL_TYPES.EMBEDDING) {
         const result = await ai.embed({
           model: aiModel,
-          value: CHECK_TEST_EMBEDDING_INPUT,
+          value: CONSTANTS.MODEL_CHECK.TEST_EMBEDDING_INPUT,
         });
         return { dataAvailable: Boolean(result.embedding && result.embedding.length > 0) };
       }
@@ -1753,7 +1747,7 @@ function createApp(deps = {}) {
       if (callType === CALL_TYPES.VIDEO_GEN) {
         const result = await ai.experimental_generateVideo({
           model: aiModel,
-          prompt: CHECK_TEST_IMAGE_PROMPT,
+          prompt: CONSTANTS.MODEL_CHECK.TEST_IMAGE_PROMPT,
         });
         return { dataAvailable: Boolean(result.videos && result.videos.length > 0) };
       }
@@ -1764,7 +1758,7 @@ function createApp(deps = {}) {
     let timeoutHandle;
     const timeoutPromise = new Promise((_, reject) => {
       timeoutHandle = setTimeout(
-        () => reject(new Error(`${MODEL_CHECK_TIMEOUT_ERROR_PREFIX}${timeoutMs}ms`)),
+        () => reject(new Error(`${CONSTANTS.MODEL_CHECK.TIMEOUT_ERROR_PREFIX}${timeoutMs}ms`)),
         timeoutMs,
       );
     });

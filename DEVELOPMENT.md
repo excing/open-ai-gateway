@@ -471,26 +471,17 @@ const CORS_HEADERS = {
     'Access-Control-Max-Age': '86400',
 } as const;
 
-/** 模型可用性检测的测试 prompt */
-const CHECK_TEST_PROMPT = 'Say "OK" if you can read this message.';
-
-/** 模型可用性检测的测试 embedding 输入 */
-const CHECK_TEST_EMBEDDING_INPUT = 'test';
-
-/** 模型可用性检测的测试语音合成文本 */
-const CHECK_TEST_SPEECH_TEXT = 'test';
-
-/** 模型可用性检测的测试图片生成 prompt */
-const CHECK_TEST_IMAGE_PROMPT = 'a white circle on black background';
-
-/** 模型可用性检测默认超时（毫秒） */
-const MODEL_CHECK_DEFAULT_TIMEOUT_MS = 30000;
-
-/** 模型可用性检测超时最小值（毫秒） */
-const MODEL_CHECK_MIN_TIMEOUT_MS = 1;
-
-/** 模型可用性检测超时最大值（毫秒） */
-const MODEL_CHECK_MAX_TIMEOUT_MS = 120000;
+/** 模型可用性检测常量 */
+const MODEL_CHECK = {
+    TEST_PROMPT: 'Say "OK" if you can read this message.',
+    TEST_EMBEDDING_INPUT: 'test',
+    TEST_SPEECH_TEXT: 'test',
+    TEST_IMAGE_PROMPT: 'a white circle on black background',
+    TIMEOUT_ERROR_PREFIX: 'Model check timed out after ',
+    DEFAULT_TIMEOUT_MS: 30000,
+    MIN_TIMEOUT_MS: 1,
+    MAX_TIMEOUT_MS: 120000,
+} as const;
 ```
 
 
@@ -2219,12 +2210,12 @@ async function handleModelCheck(request, env) {
 ### 11.9 executeModelCheck 执行模型检测
 
 ```ts
-async function executeModelCheck(aiModel, callType, timeoutMs = MODEL_CHECK_DEFAULT_TIMEOUT_MS) {
+async function executeModelCheck(aiModel, callType, timeoutMs = MODEL_CHECK.DEFAULT_TIMEOUT_MS) {
     const checkPromise = (async () => {
         if (callType === CALL_TYPES.CHAT) {
             const result = await generateText({
                 model: aiModel,
-                prompt: CHECK_TEST_PROMPT,
+                prompt: MODEL_CHECK.TEST_PROMPT,
                 maxTokens: 10,
             });
             return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
@@ -2233,7 +2224,7 @@ async function executeModelCheck(aiModel, callType, timeoutMs = MODEL_CHECK_DEFA
         if (callType === CALL_TYPES.IMAGE_GEN) {
             const result = await generateImage({
                 model: aiModel,
-                prompt: CHECK_TEST_IMAGE_PROMPT,
+                prompt: MODEL_CHECK.TEST_IMAGE_PROMPT,
                 n: 1,
             });
             return { dataAvailable: Boolean(result.images && result.images.length > 0) };
@@ -2242,7 +2233,7 @@ async function executeModelCheck(aiModel, callType, timeoutMs = MODEL_CHECK_DEFA
         if (callType === CALL_TYPES.AUDIO_GEN) {
             const result = await experimental_generateSpeech({
                 model: aiModel,
-                text: CHECK_TEST_SPEECH_TEXT,
+                text: MODEL_CHECK.TEST_SPEECH_TEXT,
             });
             return { dataAvailable: Boolean(result.audio?.data?.length > 0) };
         }
@@ -2250,7 +2241,7 @@ async function executeModelCheck(aiModel, callType, timeoutMs = MODEL_CHECK_DEFA
         if (callType === CALL_TYPES.EMBEDDING) {
             const result = await embed({
                 model: aiModel,
-                value: CHECK_TEST_EMBEDDING_INPUT,
+                value: MODEL_CHECK.TEST_EMBEDDING_INPUT,
             });
             return { dataAvailable: Boolean(result.embedding && result.embedding.length > 0) };
         }
@@ -2263,7 +2254,7 @@ async function executeModelCheck(aiModel, callType, timeoutMs = MODEL_CHECK_DEFA
         if (callType === CALL_TYPES.VIDEO_GEN) {
             const result = await experimental_generateVideo({
                 model: aiModel,
-                prompt: CHECK_TEST_IMAGE_PROMPT,
+                prompt: MODEL_CHECK.TEST_IMAGE_PROMPT,
             });
             return { dataAvailable: Boolean(result.videos && result.videos.length > 0) };
         }
@@ -2274,7 +2265,7 @@ async function executeModelCheck(aiModel, callType, timeoutMs = MODEL_CHECK_DEFA
     let timeoutHandle;
     const timeoutPromise = new Promise((_, reject) => {
         timeoutHandle = setTimeout(() => {
-            reject(new Error(`Model check timed out after ${timeoutMs}ms`));
+            reject(new Error(`${MODEL_CHECK.TIMEOUT_ERROR_PREFIX}${timeoutMs}ms`));
         }, timeoutMs);
     });
 
