@@ -21,6 +21,7 @@ function createMockEnv() {
 
   return {
     ADMIN_KEY: 'test-admin-key',
+    ENV: 'dev',
     DB: {
       prepare: (sql) => {
         const normalizedSql = sql.trim().toLowerCase();
@@ -383,6 +384,52 @@ describe('API: GET /api/channel/:id/models - 获取指定渠道上游的模型�
     assert.strictEqual(data.success, true);
     assert.ok(Array.isArray(data.data));
     assert.strictEqual(data.data.length, 0);
+  });
+
+  it('Pollinations渠道应调用 /v1/models 获取模型列表', async () => {
+    const channelId = 'ch-004';
+    mockEnv._addChannel({
+      id: channelId,
+      name: 'Pollinations Channel',
+      key: 'pollinations-channel',
+      provider: PROVIDERS.POLLINATIONS,
+      api_key: 'pollinations-key',
+      base_url: '',
+      created_at: '2026-04-12T00:00:00Z',
+      updated_at: '2026-04-12T00:00:00Z',
+    });
+
+    const mockFetch = createMockFetch({
+      'gen.pollinations.ai/v1/models': {
+        object: 'list',
+        data: [
+          { id: 'flux', object: 'model', created: 1700000000, owned_by: 'pollinations' },
+          { id: 'veo', object: 'model', created: 1700000001, owned_by: 'pollinations' },
+        ],
+      },
+    });
+
+    app = createApp({
+      now: () => new Date('2026-04-12T00:00:00Z'),
+      uuid: () => 'test-uuid-' + Date.now(),
+      fetch: mockFetch,
+    });
+
+    const request = createMockRequest({
+      method: 'GET',
+      pathname: `/api/channel/${channelId}/models`,
+      headers: { authorization: 'Bearer test-admin-key' },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.ok(Array.isArray(data.data));
+    assert.strictEqual(data.data.length, 2);
+    assert.strictEqual(data.data[0].id, 'flux');
+    assert.strictEqual(data.data[1].id, 'veo');
   });
   
   it('渠道不存在时应返回404', async () => {

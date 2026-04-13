@@ -811,7 +811,7 @@ async function handleGetChannelModelsByConnection(request: Request): Promise<Res
  * - google/gemini: GET https://generativelanguage.googleapis.com/v1beta/v1/models?key={apiKey}
  * - anthropic/claude: 无公开的模型列表 API，返回空数组
  * - openrouter: GET https://openrouter.ai/api/v1/models
- * - pollinations: 无公开模型列表 API（本系统返回空数组）
+ * - pollinations: GET https://gen.pollinations.ai/v1/models
  * - exacg: 无公开模型列表 API（本系统返回空数组）
  *
  * @param channel - 渠道连接对象（可来自 DB 或请求体）
@@ -1451,7 +1451,7 @@ data: [DONE]
 - `google` / `gemini`: GET `https://generativelanguage.googleapis.com/v1beta/v1/models?key={apiKey}`
 - `anthropic` / `claude`: 无公开 API，返回空数组
 - `openrouter`: GET `https://openrouter.ai/api/v1/models`
-- `pollinations`: 无公开 API，返回空数组
+- `pollinations`: GET `https://gen.pollinations.ai/v1/models`
 - `exacg`: 无公开 API，返回空数组
 
 **响应** (200)：

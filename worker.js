@@ -678,7 +678,7 @@ function createApp(deps = {}) {
   const createFallbackModel = deps.createFallback || createFallback;
   const nowFn = deps.now || (() => new Date());
   const uuidFn = deps.uuid || generateUUID;
-  const getFetchFn = () => deps.fetch || fetch;
+  const getFetchFn = (env) => (env?.ENV === 'dev' && deps.fetch ? deps.fetch : fetch);
 
   function authenticate(request, env) {
     const token = extractBearerToken(request);
@@ -1521,7 +1521,7 @@ function createApp(deps = {}) {
    * - google/gemini: 需要通过 REST API 获取
    * - anthropic/claude: 无公开的模型列表 API，返回空数组
    * - openrouter: GET https://openrouter.ai/api/v1/models
-   * - pollinations: 无公开的模型列表 API，返回空数组
+   * - pollinations: GET https://gen.pollinations.ai/v1/models
    * - exacg: 无公开的模型列表 API，返回空数组
    *
    * @param channel - 渠道数据库行
@@ -1530,10 +1530,9 @@ function createApp(deps = {}) {
   async function fetchUpstreamModels(channel, env) {
     const normalizedProvider = normalizeProvider(channel.provider);
 
-    // Anthropic / Pollinations / Exacg 没有公开的模型列表 API
+    // Anthropic / Exacg 没有公开的模型列表 API
     if (
       normalizedProvider === PROVIDERS.ANTHROPIC ||
-      normalizedProvider === PROVIDERS.POLLINATIONS ||
       normalizedProvider === PROVIDERS.EXACG
     ) {
       return [];
@@ -1617,8 +1616,6 @@ function createApp(deps = {}) {
         return 'https://openrouter.ai/api/v1';
       case PROVIDERS.POLLINATIONS:
         return 'https://gen.pollinations.ai/v1';
-      case PROVIDERS.EXACG:
-        return 'https://sd.exacg.cc/api/v1';
       default:
         return '';
     }
