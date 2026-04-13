@@ -81,6 +81,7 @@ const CONSTANTS = {
     TEST_EMBEDDING_INPUT: 'test',
     TEST_SPEECH_TEXT: 'test',
     TEST_IMAGE_PROMPT: 'a white circle on black background',
+    TEST_TRANSCRIBE_AUDIO_PATH: '/hellowhatareyoudoing.mp3',
     TIMEOUT_ERROR_PREFIX: 'Model check timed out after ',
     DEFAULT_TIMEOUT_MS: 30_000,
     MIN_TIMEOUT_MS: 1,
@@ -1673,7 +1674,7 @@ function createApp(deps = {}) {
     let errorMessage = '';
 
     try {
-      const result = await executeModelCheck(aiModel, parsed.callType, parsed.timeoutMs);
+      const result = await executeModelCheck(aiModel, parsed.callType, parsed.timeoutMs, request, env);
       apiAccessible = true;
       dataAvailable = result.dataAvailable;
     } catch (error) {
@@ -1696,6 +1697,17 @@ function createApp(deps = {}) {
     }, HTTP_STATUS.OK);
   }
 
+  async function loadModelCheckTranscribeAudio(request, env) {
+    const audioUrl = new URL(CONSTANTS.MODEL_CHECK.TEST_TRANSCRIBE_AUDIO_PATH, request.url).toString();
+    const response = env?.ASSETS?.fetch
+      ? await env.ASSETS.fetch(audioUrl)
+      : await fetchFn(audioUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to load transcribe check audio: ${response.status}`);
+    }
+    return new Uint8Array(await response.arrayBuffer());
+  }
+
   /**
    * 执行模型可用性检测
    * 
@@ -1703,7 +1715,7 @@ function createApp(deps = {}) {
    * @param callType - 调用类型
    * @returns { dataAvailable: boolean }
    */
-  async function executeModelCheck(aiModel, callType, timeoutMs = CONSTANTS.MODEL_CHECK.DEFAULT_TIMEOUT_MS) {
+  async function executeModelCheck(aiModel, callType, timeoutMs = CONSTANTS.MODEL_CHECK.DEFAULT_TIMEOUT_MS, request, env) {
     const checkPromise = (async () => {
       if (callType === CALL_TYPES.CHAT) {
         const result = await ai.generateText({
@@ -1740,8 +1752,9 @@ function createApp(deps = {}) {
       }
 
       if (callType === CALL_TYPES.TRANSCRIBE) {
-        // transcribe 需要音频文件，跳过实际检测
-        return { dataAvailable: true };
+        const audio = await loadModelCheckTranscribeAudio(request, env);
+        const result = await ai.experimental_transcribe({ model: aiModel, audio });
+        return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
       }
 
       if (callType === CALL_TYPES.VIDEO_GEN) {

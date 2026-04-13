@@ -868,16 +868,18 @@ async function handleModelCheck(request: Request, env: Env): Promise<Response>;
  * - image_gen: prompt = "a white circle on black background", n = 1
  * - audio_gen: text = "test"
  * - embedding: value = "test"
- * - transcribe: 跳过实际检测（需要音频文件），直接返回 dataAvailable = true
+ * - transcribe: 读取 `public/hellowhatareyoudoing.mp3` 作为测试音频并调用 transcribe
  * - video_gen: prompt = "a white circle on black background"
  *
  * @param aiModel - AI SDK 模型实例
  * @param callType - 调用类型
  * @param timeoutMs - 本次检测超时阈值（毫秒）
+ * @param request - 原始请求（用于构造静态音频 URL）
+ * @param env - Worker 环境变量（优先通过 ASSETS 读取静态音频）
  * @returns { dataAvailable: boolean } 数据是否可用
  * @throws AI SDK 调用失败或超时时抛出异常（超时时错误信息为 `Model check timed out after ${timeoutMs}ms`）
  */
-async function executeModelCheck(aiModel: AIModel, callType: CallType, timeoutMs: number): Promise<{ dataAvailable: boolean }>;
+async function executeModelCheck(aiModel: AIModel, callType: CallType, timeoutMs: number, request: Request, env: Env): Promise<{ dataAvailable: boolean }>;
 ```
 
 ### 7.7 模型选择与调度
@@ -2210,7 +2212,7 @@ async function handleModelCheck(request, env) {
 ### 11.9 executeModelCheck 执行模型检测
 
 ```ts
-async function executeModelCheck(aiModel, callType, timeoutMs = MODEL_CHECK.DEFAULT_TIMEOUT_MS) {
+async function executeModelCheck(aiModel, callType, timeoutMs = MODEL_CHECK.DEFAULT_TIMEOUT_MS, request, env) {
     const checkPromise = (async () => {
         if (callType === CALL_TYPES.CHAT) {
             const result = await generateText({
@@ -2247,8 +2249,9 @@ async function executeModelCheck(aiModel, callType, timeoutMs = MODEL_CHECK.DEFA
         }
 
         if (callType === CALL_TYPES.TRANSCRIBE) {
-            // transcribe 需要音频文件，跳过实际检测
-            return { dataAvailable: true };
+            const audio = await loadModelCheckTranscribeAudio(request, env);
+            const result = await experimental_transcribe({ model: aiModel, audio });
+            return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
         }
 
         if (callType === CALL_TYPES.VIDEO_GEN) {

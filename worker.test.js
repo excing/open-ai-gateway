@@ -891,6 +891,57 @@ describe('API: POST /api/model/check - 检测模型可用性', () => {
     assert.ok(data.data.data_available);
   });
 
+  it('transcribe模型应读取public音频文件并执行真实检测', async () => {
+    let receivedAudio;
+    const expectedAudio = new Uint8Array([10, 20, 30, 40]);
+
+    app = createApp({
+      fetch: async (input) => {
+        const requestUrl = typeof input === 'string' ? input : input.url;
+        if (requestUrl.endsWith('/hellowhatareyoudoing.mp3')) {
+          return new Response(expectedAudio.buffer, { status: HTTP_STATUS.OK });
+        }
+        return new Response('Not Found', { status: HTTP_STATUS.NOT_FOUND });
+      },
+      ai: {
+        generateText: async () => ({ text: 'test', usage: {} }),
+        streamText: async () => ({ textStream: ['test'], usage: {} }),
+        generateImage: async () => ({ images: [{ base64: 'test' }] }),
+        embed: async () => ({ embedding: [0.1], usage: {} }),
+        experimental_generateSpeech: async () => ({ audio: { data: new Uint8Array([1]), mediaType: 'audio/mpeg' } }),
+        experimental_transcribe: async ({ audio }) => {
+          receivedAudio = audio;
+          return { text: 'transcribed from model check audio' };
+        },
+        experimental_generateVideo: async () => ({ videos: [] }),
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: `/api/model/check`,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: PROVIDERS.OPENAI,
+        apiKey: 'sk-test',
+        baseURL: '',
+        model: 'whisper-1',
+        callType: CALL_TYPES.TRANSCRIBE,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+    assert.ok(receivedAudio instanceof Uint8Array);
+    assert.deepStrictEqual(Array.from(receivedAudio), Array.from(expectedAudio));
+  });
+
   it('请求缺少model时应返回400', async () => {
     app = createApp();
 
