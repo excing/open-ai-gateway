@@ -1241,3 +1241,184 @@ describe('Pollinations: 仅图片与视频生成', () => {
     assert.strictEqual(data.data.data_available, false);
   });
 });
+
+describe('Exacg: 仅图片生成', () => {
+  let app;
+  let mockEnv;
+
+  beforeEach(() => {
+    mockEnv = createMockEnv();
+  });
+
+  afterEach(() => {
+    mockEnv._clear();
+  });
+
+  it('exacg 的 image_gen 模型检测应成功', async () => {
+    app = createApp({
+      fetch: async (url, options) => {
+        const target = url.toString();
+        if (target.includes('sd.exacg.cc/api/v1/generate_image')) {
+          assert.strictEqual(options.method, 'POST');
+          return new Response(JSON.stringify({
+            success: true,
+            message: '图像生成成功',
+            data: {
+              image_url: 'https://example.com/image.jpg',
+              image_id: 'abc-1',
+              model_name: 'model-0',
+              points_used: 1,
+              remaining_points: 99,
+            },
+          }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (target.includes('https://example.com/image.jpg')) {
+          return new Response(new Uint8Array([1, 2, 3]), {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg' },
+          });
+        }
+        return new Response('not found', { status: 404 });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'exacg',
+        apiKey: 'exacg-key',
+        baseURL: '',
+        model: '0',
+        callType: CALL_TYPES.IMAGE_GEN,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+  });
+
+  it('exacg 成功响应为 data.image_url 时应能下载并返回图片', async () => {
+    app = createApp({
+      fetch: async (url, options) => {
+        const target = url.toString();
+        if (target.includes('sd.exacg.cc/api/v1/generate_image')) {
+          assert.strictEqual(options.method, 'POST');
+          return new Response(JSON.stringify({
+            success: true,
+            message: '图像生成成功',
+            data: {
+              image_url: 'https://example.com/image.jpg',
+              image_id: '12345',
+              model_name: 'test-model',
+              points_used: 1,
+              remaining_points: 99,
+            },
+          }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (target.includes('https://example.com/image.jpg')) {
+          return new Response(new Uint8Array([1, 2, 3]), {
+            status: 200,
+            headers: { 'content-type': 'image/jpeg' },
+          });
+        }
+        return new Response('not found', { status: 404 });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'exacg',
+        apiKey: 'exacg-key',
+        baseURL: '',
+        model: '0',
+        callType: CALL_TYPES.IMAGE_GEN,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+  });
+
+  it('exacg 失败响应为 { error } 时应返回不可用并带错误信息', async () => {
+    app = createApp({
+      fetch: async (url) => {
+        const target = url.toString();
+        if (target.includes('sd.exacg.cc/api/v1/generate_image')) {
+          return new Response(JSON.stringify({ error: '错误描述信息' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        return new Response('not found', { status: 404 });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'exacg',
+        apiKey: 'exacg-key',
+        baseURL: '',
+        model: '0',
+        callType: CALL_TYPES.IMAGE_GEN,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, false);
+    assert.strictEqual(data.data.data_available, false);
+    assert.ok(data.data.error_message.includes('错误描述信息'));
+  });
+
+  it('exacg 的 chat 模型检测应返回不可用', async () => {
+    app = createApp();
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'exacg',
+        apiKey: 'exacg-key',
+        baseURL: '',
+        model: '0',
+        callType: CALL_TYPES.CHAT,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.SERVICE_UNAVAILABLE);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, false);
+    assert.strictEqual(data.data.data_available, false);
+  });
+});

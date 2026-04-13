@@ -2,7 +2,7 @@
 
 ## 1. 项目概述
 
-Open AI Gateway 是一个运行在 Cloudflare Workers 上的 AI 网关服务，提供统一的 OpenAI 兼容 API 接口，将请求智能路由到不同的 AI 平台（OpenAI、Google Gemini、Anthropic Claude、OpenRouter、Pollinations）。
+Open AI Gateway 是一个运行在 Cloudflare Workers 上的 AI 网关服务，提供统一的 OpenAI 兼容 API 接口，将请求智能路由到不同的 AI 平台（OpenAI、Google Gemini、Anthropic Claude、OpenRouter、Pollinations、Exacg）。
 
 **核心能力：**
 - 统一 API：所有 AI 平台通过 OpenAI `/v1/*` 格式统一调用
@@ -87,6 +87,7 @@ graph LR
     ILM -->|Vercel AI SDK| Anthropic_P[Anthropic / Claude]
     ILM -->|Vercel AI SDK| OpenRouter_P[OpenRouter]
     ILM -->|Vercel AI SDK| Pollinations_P[Pollinations]
+    ILM -->|Vercel AI SDK| Exacg_P[Exacg]
     V1 -->|记录日志| Logger[日志模块]
     Logger --> D1
     Admin -->|CRUD| D1
@@ -105,8 +106,8 @@ graph LR
 | `id` | TEXT | PRIMARY KEY | 渠道唯一标识，UUID v4 格式 |
 | `name` | TEXT | NOT NULL | 渠道显示名称，如 "OpenAI 官方"，用于管理界面展示 |
 | `key` | TEXT | NOT NULL, UNIQUE | 渠道唯一标识键，如 "openai-official"，用于程序内部引用，仅允许 `[a-z0-9-]` |
-| `provider` | TEXT | NOT NULL, DEFAULT 'openai' | AI 平台标识。取值：`openai`/`openai-compatible`、`google`/`gemini`、`anthropic`/`claude`、`openrouter`、`pollinations`。同一平台的别名等价（如 `google` 与 `gemini` 行为一致）。决定使用哪个 Vercel AI SDK provider 创建函数 |
-| `api_key` | TEXT | NOT NULL | 该渠道对应平台的 API 密钥，用于鉴权请求。部分 provider（如 pollinations）可为空字符串 |
+| `provider` | TEXT | NOT NULL, DEFAULT 'openai' | AI 平台标识。取值：`openai`/`openai-compatible`、`google`/`gemini`、`anthropic`/`claude`、`openrouter`、`pollinations`、`exacg`。同一平台的别名等价（如 `google` 与 `gemini` 行为一致）。决定使用哪个 Vercel AI SDK provider 创建函数 |
+| `api_key` | TEXT | NOT NULL | 该渠道对应平台的 API 密钥，用于鉴权请求。部分 provider（如 pollinations）可为空字符串；`exacg` 必须提供有效 API Key |
 | `base_url` | TEXT | DEFAULT '' | 自定义 API 基础地址，为空时使用 SDK 默认地址 |
 | `created_at` | TEXT | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 创建时间，ISO 8601 格式 |
 | `updated_at` | TEXT | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 最后更新时间，ISO 8601 格式 |
@@ -219,7 +220,7 @@ CREATE INDEX idx_request_logs_status ON request_logs(status);
 
 ```ts
 /** AI 平台 provider 标识（含别名，同一平台别名行为等价） */
-type Provider = 'openai' | 'openai-compatible' | 'google' | 'gemini' | 'anthropic' | 'claude' | 'openrouter' | 'pollinations';
+type Provider = 'openai' | 'openai-compatible' | 'google' | 'gemini' | 'anthropic' | 'claude' | 'openrouter' | 'pollinations' | 'exacg';
 
 /** 模型调用接口类型 */
 type CallType = 'chat' | 'image_gen' | 'audio_gen' | 'video_gen' | 'transcribe' | 'embedding';
@@ -352,6 +353,7 @@ const PROVIDERS = {
     CLAUDE: 'claude',                       // 等价于 anthropic
     OPENROUTER: 'openrouter',
     POLLINATIONS: 'pollinations',
+    EXACG: 'exacg',
 } as const;
 
 /** 模型调用接口类型 */
@@ -390,6 +392,7 @@ const PATH_TO_CALL_TYPE = Object.fromEntries(
  * | anthropic/claude   | ✅   | ❌        | ❌        | ❌        | ✅ embeddingModel | ❌  |
  * | openrouter         | ✅   | ✅ imageModel | ❌   | ❌        | ✅ textEmbeddingModel | ❌ |
  * | pollinations       | ❌   | ✅ image  | ❌            | ✅ video | ❌        | ❌         |
+ * | exacg              | ❌   | ✅ image  | ❌            | ❌       | ❌        | ❌         |
  */
 
 /** 模型能力标识 */
@@ -496,7 +499,7 @@ import { z } from 'zod';
 const CreateChannelSchema = z.object({
     name: z.string().min(1).max(100),                    // 渠道显示名称
     key: z.string().regex(/^[a-z0-9-]+$/).min(1).max(50), // 渠道唯一键
-    provider: z.enum(['openai', 'openai-compatible', 'google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations']).default('openai'),
+    provider: z.enum(['openai', 'openai-compatible', 'google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations', 'exacg']).default('openai'),
     apiKey: z.string(),                                   // API 密钥
     baseURL: z.string().url().or(z.literal('')).default(''), // 自定义基础地址
     models: z.array(z.object({
@@ -808,7 +811,8 @@ async function handleGetChannelModelsByConnection(request: Request): Promise<Res
  * - google/gemini: GET https://generativelanguage.googleapis.com/v1beta/v1/models?key={apiKey}
  * - anthropic/claude: 无公开的模型列表 API，返回空数组
  * - openrouter: GET https://openrouter.ai/api/v1/models
- * - pollinations: GET https://gen.pollinations.ai/v1/models
+ * - pollinations: 无公开模型列表 API（本系统返回空数组）
+ * - exacg: 无公开模型列表 API（本系统返回空数组）
  *
  * @param channel - 渠道连接对象（可来自 DB 或请求体）
  * @returns UpstreamModel[] 上游模型列表
@@ -994,6 +998,7 @@ async function recordFailure(modelId: string, env: Env): Promise<void>;
  * - anthropic / claude → createAnthropic
  * - openrouter → createOpenRouter
  * - pollinations → `./pollinations.js` 的 `createPollinations`
+ * - exacg → `./exacg.js` 的 `createExacg`
  *
  * @param channelName - 渠道名称，传入 SDK 的 name 参数
  * @param baseURL - 自定义 API 基础地址，空字符串使用 SDK 默认值
@@ -1023,7 +1028,7 @@ function instantiateLanguageModel(
  * - chat       → stream=true 时 streamText(), 否则 generateText()
  * - image_gen  → experimental_generateImage()
  * - audio_gen  → generateSpeech()
- * - video_gen  → 对 pollinations 通过 `./pollinations.js` 调用 GET `/video/{prompt}`
+ * - video_gen  → `experimental_generateVideo()`
  * - transcribe → transcribe()
  * - embedding  → embed() 或 embedMany()
  *
@@ -1446,7 +1451,8 @@ data: [DONE]
 - `google` / `gemini`: GET `https://generativelanguage.googleapis.com/v1beta/v1/models?key={apiKey}`
 - `anthropic` / `claude`: 无公开 API，返回空数组
 - `openrouter`: GET `https://openrouter.ai/api/v1/models`
-- `pollinations`: GET `https://gen.pollinations.ai/v1/models`
+- `pollinations`: 无公开 API，返回空数组
+- `exacg`: 无公开 API，返回空数组
 
 **响应** (200)：
 ```json
@@ -2078,7 +2084,7 @@ async function handleGetChannelModelsByConnection(request) {
 async function fetchUpstreamModels(channel) {
     const normalizedProvider = normalizeProvider(channel.provider);
     
-    // Anthropic 和 Pollinations 没有公开的模型列表 API
+    // Anthropic / Pollinations / Exacg 没有公开的模型列表 API
     if (normalizedProvider === PROVIDERS.ANTHROPIC) {
         return [];
     }

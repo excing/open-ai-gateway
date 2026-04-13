@@ -14,6 +14,7 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createPollinations } from './pollinations.js';
+import { createExacg } from './exacg.js';
 
 const CONSTANTS = {
   PROVIDERS: {
@@ -25,6 +26,7 @@ const CONSTANTS = {
     CLAUDE: 'claude',
     OPENROUTER: 'openrouter',
     POLLINATIONS: 'pollinations',
+    EXACG: 'exacg',
   },
   CALL_TYPES: {
     CHAT: 'chat',
@@ -289,6 +291,7 @@ const SCHEMAS = (() => {
     PROVIDERS.CLAUDE,
     PROVIDERS.OPENROUTER,
     PROVIDERS.POLLINATIONS,
+    PROVIDERS.EXACG,
   ]);
 
   const CallTypeEnum = z.enum([
@@ -659,6 +662,7 @@ function createApp(deps = {}) {
     createAnthropic: deps.providers?.createAnthropic || createAnthropic,
     createOpenRouter: deps.providers?.createOpenRouter || createOpenRouter,
     createPollinations: deps.providers?.createPollinations || createPollinations,
+    createExacg: deps.providers?.createExacg || createExacg,
   };
 
   const ai = {
@@ -674,7 +678,7 @@ function createApp(deps = {}) {
   const createFallbackModel = deps.createFallback || createFallback;
   const nowFn = deps.now || (() => new Date());
   const uuidFn = deps.uuid || generateUUID;
-  const getFetchFn = (env) => (env?.ENV === 'dev' && deps.fetch ? deps.fetch : fetch);
+  const getFetchFn = () => deps.fetch || fetch;
 
   function authenticate(request, env) {
     const token = extractBearerToken(request);
@@ -743,6 +747,15 @@ function createApp(deps = {}) {
             return providerInstance.image(modelCode);
           case CALL_TYPES.VIDEO_GEN:
             return providerInstance.video(modelCode);
+          default:
+            return unsupportedCallType();
+        }
+      }
+      case PROVIDERS.EXACG: {
+        const providerInstance = providers.createExacg({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
+        switch (callType) {
+          case CALL_TYPES.IMAGE_GEN:
+            return providerInstance.image(modelCode);
           default:
             return unsupportedCallType();
         }
@@ -1509,6 +1522,7 @@ function createApp(deps = {}) {
    * - anthropic/claude: 无公开的模型列表 API，返回空数组
    * - openrouter: GET https://openrouter.ai/api/v1/models
    * - pollinations: 无公开的模型列表 API，返回空数组
+   * - exacg: 无公开的模型列表 API，返回空数组
    *
    * @param channel - 渠道数据库行
    * @returns UpstreamModel[] 上游模型列表
@@ -1516,8 +1530,12 @@ function createApp(deps = {}) {
   async function fetchUpstreamModels(channel, env) {
     const normalizedProvider = normalizeProvider(channel.provider);
 
-    // Anthropic 和 Pollinations 没有公开的模型列表 API
-    if (normalizedProvider === PROVIDERS.ANTHROPIC) {
+    // Anthropic / Pollinations / Exacg 没有公开的模型列表 API
+    if (
+      normalizedProvider === PROVIDERS.ANTHROPIC ||
+      normalizedProvider === PROVIDERS.POLLINATIONS ||
+      normalizedProvider === PROVIDERS.EXACG
+    ) {
       return [];
     }
 
@@ -1599,6 +1617,8 @@ function createApp(deps = {}) {
         return 'https://openrouter.ai/api/v1';
       case PROVIDERS.POLLINATIONS:
         return 'https://gen.pollinations.ai/v1';
+      case PROVIDERS.EXACG:
+        return 'https://sd.exacg.cc/api/v1';
       default:
         return '';
     }
