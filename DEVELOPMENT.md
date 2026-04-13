@@ -2331,3 +2331,61 @@ async function executeModelCheck(aiModel, callType) {
 ```
 
 **总预计工期：6.5 天**
+
+---
+
+## 13. 请求校验错误透传规范（2026-04-13 更新）
+
+### 13.1 目标
+
+- 所有请求解析错误（JSON/FormData 解析失败）必须返回 `400`，并携带具体异常原因。
+- 所有 Zod 参数校验错误必须返回 `400`，并携带字段级错误详情。
+- 禁止将上述错误统一吞掉为无细节的固定文案。
+
+### 13.2 统一错误格式
+
+```json
+{
+  "success": false,
+  "error": "Invalid request body: <具体错误详情>"
+}
+```
+
+### 13.3 后端函数签名与职责
+
+```ts
+async function parseRequestBody(request: Request): Promise<
+  | { success: true; body: Record<string, unknown> | unknown }
+  | { success: false; error: string }
+>;
+```
+
+- 含义：解析 JSON 或 FormData 请求体。
+- 成功：返回 `success: true` 和 `body`。
+- 失败：返回 `success: false` 和具体 `error`。
+- 边界：`content-type` 非 JSON/FormData 时，按 JSON 解析。
+
+```ts
+function formatValidationError(error: unknown): string;
+```
+
+- 含义：将 ZodError 转成可读字符串，格式为 `path: message`，多条用 `; ` 拼接。
+- 边界：非 Zod 错误时回退为 `Error.message` 或 `String(error)`。
+
+```ts
+function invalidRequestBodyResponse(parseErrorMessage?: string): Response;
+```
+
+- 含义：统一生成 `400` 响应。
+- 规则：有详细错误时返回 `Invalid request body: <details>`，否则仅返回 `Invalid request body`。
+
+### 13.4 适用 API
+
+- `POST /api/channel`
+- `PUT /api/channel/:id`
+- `PUT /api/model/:id`
+- `GET /api/channels`（分页参数）
+- `GET /api/log`（查询参数）
+- `POST /api/channel/models`
+- `POST /api/model/check`
+- 所有 `/v1/*` 代理入口（请求体解析）

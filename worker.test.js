@@ -545,6 +545,34 @@ describe('API: POST /api/channel/models - 通过连接参数获取上游模型�
     assert.strictEqual(response.status, HTTP_STATUS.BAD_REQUEST);
     assert.strictEqual(data.success, false);
   });
+
+  it('请求体解析失败时应返回具体错误原因', async () => {
+    app = createApp();
+
+    const request = {
+      method: 'POST',
+      url: 'https://example.com/api/channel/models',
+      headers: {
+        get: (key) => {
+          const normalizedKey = key.toLowerCase();
+          if (normalizedKey === 'authorization') return 'Bearer test-admin-key';
+          if (normalizedKey === 'content-type') return 'application/json';
+          return undefined;
+        },
+      },
+      json: async () => {
+        throw new Error('Malformed JSON payload');
+      },
+      formData: async () => new Map(),
+    };
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.BAD_REQUEST);
+    assert.strictEqual(data.success, false);
+    assert.strictEqual(data.error, `${ERROR_MESSAGES.INVALID_REQUEST_BODY}: Malformed JSON payload`);
+  });
 });
 
 describe('API: POST /api/model/check - 检测模型可用性', () => {
@@ -828,5 +856,85 @@ describe('API: POST /api/model/check - 检测模型可用性', () => {
 
     assert.strictEqual(response.status, HTTP_STATUS.BAD_REQUEST);
     assert.strictEqual(data.success, false);
+  });
+});
+
+describe('API: 参数校验错误应返回具体原因', () => {
+  let app;
+  let mockEnv;
+
+  beforeEach(() => {
+    app = createApp();
+    mockEnv = createMockEnv();
+  });
+
+  afterEach(() => {
+    mockEnv._clear();
+  });
+
+  it('创建渠道缺少apiKey时应包含字段级错误', async () => {
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/channel',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: { name: 'OpenAI', key: 'openai', provider: PROVIDERS.OPENAI, baseURL: '' },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.BAD_REQUEST);
+    assert.strictEqual(data.success, false);
+    assert.ok(data.error.startsWith(`${ERROR_MESSAGES.INVALID_REQUEST_BODY}:`));
+    assert.ok(data.error.includes('apiKey'));
+  });
+
+  it('模型检测缺少model时应包含字段级错误', async () => {
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: { provider: PROVIDERS.OPENAI, apiKey: 'sk-test', baseURL: '', callType: CALL_TYPES.CHAT, headers: {} },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.BAD_REQUEST);
+    assert.strictEqual(data.success, false);
+    assert.ok(data.error.startsWith(`${ERROR_MESSAGES.INVALID_REQUEST_BODY}:`));
+    assert.ok(data.error.includes('model'));
+  });
+
+  it('渠道列表分页参数非法时应返回400并包含page错误', async () => {
+    const request = createMockRequest({
+      method: 'GET',
+      pathname: '/api/channels?page=0&limit=20',
+      headers: { authorization: 'Bearer test-admin-key' },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.BAD_REQUEST);
+    assert.strictEqual(data.success, false);
+    assert.ok(data.error.startsWith(`${ERROR_MESSAGES.INVALID_REQUEST_BODY}:`));
+    assert.ok(data.error.includes('page'));
+  });
+
+  it('日志查询分页参数非法时应返回400并包含limit错误', async () => {
+    const request = createMockRequest({
+      method: 'GET',
+      pathname: '/api/log?page=1&limit=1000',
+      headers: { authorization: 'Bearer test-admin-key' },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.BAD_REQUEST);
+    assert.strictEqual(data.success, false);
+    assert.ok(data.error.startsWith(`${ERROR_MESSAGES.INVALID_REQUEST_BODY}:`));
+    assert.ok(data.error.includes('limit'));
   });
 });

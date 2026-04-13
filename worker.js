@@ -435,22 +435,55 @@ function parsePagination(url) {
 async function parseRequestBody(request) {
   try {
     const contentType = request.headers.get(HEADERS.CONTENT_TYPE) || '';
+    let body;
     if (contentType.includes(JSON_CONTENT_TYPE)) {
-      return await request.json();
-    }
-    if (contentType.includes(MULTIPART_CONTENT_TYPE)) {
+      body = await request.json();
+    } else if (contentType.includes(MULTIPART_CONTENT_TYPE)) {
       const form = await request.formData();
-      const body = {};
+      body = {};
       for (const [key, value] of form.entries()) {
         body[key] = value;
       }
-      return body;
+    } else {
+      body = await request.json();
     }
-    return await request.json();
+    return { success: true, body };
   } catch (error) {
     console.warn(error);
-    return null;
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
+}
+
+function invalidRequestBodyResponse(parseErrorMessage) {
+  const message = parseErrorMessage
+    ? `${ERROR_MESSAGES.INVALID_REQUEST_BODY}: ${parseErrorMessage}`
+    : ERROR_MESSAGES.INVALID_REQUEST_BODY;
+  return errorResponse(message, HTTP_STATUS.BAD_REQUEST);
+}
+
+function formatValidationError(error) {
+  if (error instanceof z.ZodError) {
+    const details = error.issues
+      .map((issue) => {
+        const path = issue.path.length > 0 ? issue.path.join('.') : 'root';
+        return `${path}: ${issue.message}`;
+      })
+      .join('; ');
+    return details || 'Validation failed';
+  }
+  return error instanceof Error ? error.message : String(error);
+}
+
+function buildModelsUrl(baseURL) {
+  const normalizedBaseURL = (baseURL || '').replace(/\/+$/, '');
+  const versionSuffixPattern = /\/v\d+(?:[a-z]+\d*)?$/i;
+  if (versionSuffixPattern.test(normalizedBaseURL)) {
+    return `${normalizedBaseURL}${ROUTES.API_CHANNEL_MODELS_SUFFIX}`;
+  }
+  return `${normalizedBaseURL}${ROUTES.V1_MODELS}`;
 }
 
 function extractBearerToken(request) {
@@ -910,9 +943,13 @@ function createApp(deps = {}) {
   }
 
   async function handleV1Proxy(request, env, userCallType) {
-    const body = await parseRequestBody(request);
+    const parsedRequestBody = await parseRequestBody(request);
+    if (!parsedRequestBody.success) {
+      return invalidRequestBodyResponse(parsedRequestBody.error);
+    }
+    const { body } = parsedRequestBody;
     if (!body || !body.model) {
-      return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+      return invalidRequestBodyResponse();
     }
 
     const channelId = request.headers.get(HEADERS.CHANNEL_ID) || undefined;
@@ -1090,14 +1127,18 @@ function createApp(deps = {}) {
   }
 
   async function handleCreateChannel(request, env) {
-    const body = await parseRequestBody(request);
-    if (!body) return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+    const parsedRequestBody = await parseRequestBody(request);
+    if (!parsedRequestBody.success) {
+      return invalidRequestBodyResponse(parsedRequestBody.error);
+    }
+    const { body } = parsedRequestBody;
+    if (!body) return invalidRequestBodyResponse();
 
     let parsed;
     try {
       parsed = CreateChannelSchema.parse(body);
     } catch (error) {
-      return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+      return invalidRequestBodyResponse(formatValidationError(error));
     }
 
     const existing = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_KEY).bind(parsed.key).first();
@@ -1154,14 +1195,18 @@ function createApp(deps = {}) {
     const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(channelId).first();
     if (!channel) return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
 
-    const body = await parseRequestBody(request);
-    if (!body) return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+    const parsedRequestBody = await parseRequestBody(request);
+    if (!parsedRequestBody.success) {
+      return invalidRequestBodyResponse(parsedRequestBody.error);
+    }
+    const { body } = parsedRequestBody;
+    if (!body) return invalidRequestBodyResponse();
 
     let parsed;
     try {
       parsed = UpdateChannelSchema.parse(body);
     } catch (error) {
-      return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+      return invalidRequestBodyResponse(formatValidationError(error));
     }
 
     const updates = [];
@@ -1230,7 +1275,12 @@ function createApp(deps = {}) {
 
   async function handleListChannels(request, env) {
     const url = new URL(request.url);
-    const pagination = parsePagination(url);
+    let pagination;
+    try {
+      pagination = parsePagination(url);
+    } catch (error) {
+      return invalidRequestBodyResponse(formatValidationError(error));
+    }
     const { results } = await env.DB.prepare(SQL.COUNT_CHANNELS).all();
     const total = results?.[0]?.total || 0;
     const { results: channels } = await env.DB
@@ -1257,14 +1307,18 @@ function createApp(deps = {}) {
     const model = await env.DB.prepare(SQL.SELECT_MODEL_BY_ID).bind(modelId).first();
     if (!model) return errorResponse(ERROR_MESSAGES.MODEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
 
-    const body = await parseRequestBody(request);
-    if (!body) return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+    const parsedRequestBody = await parseRequestBody(request);
+    if (!parsedRequestBody.success) {
+      return invalidRequestBodyResponse(parsedRequestBody.error);
+    }
+    const { body } = parsedRequestBody;
+    if (!body) return invalidRequestBodyResponse();
 
     let parsed;
     try {
       parsed = UpdateModelSchema.parse(body);
     } catch (error) {
-      return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+      return invalidRequestBodyResponse(formatValidationError(error));
     }
 
     const updates = [];
@@ -1305,7 +1359,7 @@ function createApp(deps = {}) {
     try {
       parsed = LogQuerySchema.parse(Object.fromEntries(url.searchParams.entries()));
     } catch (error) {
-      return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+      return invalidRequestBodyResponse(formatValidationError(error));
     }
 
     const { page, limit, channel_id, model_id, status, start_date, end_date } = parsed;
@@ -1369,14 +1423,18 @@ function createApp(deps = {}) {
   }
 
   async function handleGetChannelModelsByConnection(request) {
-    const body = await parseRequestBody(request);
-    if (!body) return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+    const parsedRequestBody = await parseRequestBody(request);
+    if (!parsedRequestBody.success) {
+      return invalidRequestBodyResponse(parsedRequestBody.error);
+    }
+    const { body } = parsedRequestBody;
+    if (!body) return invalidRequestBodyResponse();
 
     let parsed;
     try {
       parsed = UpstreamModelListSchema.parse(body);
     } catch (error) {
-      return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+      return invalidRequestBodyResponse(formatValidationError(error));
     }
 
     const channel = {
@@ -1397,7 +1455,7 @@ function createApp(deps = {}) {
         success: true,
         data: [],
         error: error.message || 'Failed to fetch upstream models',
-      }, HTTP_STATUS.SERVICE_UNAVAILABLE);
+      }, HTTP_STATUS.OK);
     }
   }
 
@@ -1423,7 +1481,7 @@ function createApp(deps = {}) {
     }
 
     const baseURL = channel.base_url || getDefaultBaseURL(normalizedProvider);
-    const modelsURL = `${baseURL}${ROUTES.API_CHANNEL_MODELS_SUFFIX}`;
+    const modelsURL = buildModelsUrl(baseURL);
 
     const headers = {
       [HEADERS.CONTENT_TYPE]: JSON_CONTENT_TYPE,
@@ -1523,14 +1581,18 @@ function createApp(deps = {}) {
    */
   async function handleModelCheck(request, env) {
     // 1. 解析检测输入参数（直接使用前端传入的模型配置）
-    const body = await parseRequestBody(request);
-    if (!body) return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+    const parsedRequestBody = await parseRequestBody(request);
+    if (!parsedRequestBody.success) {
+      return invalidRequestBodyResponse(parsedRequestBody.error);
+    }
+    const { body } = parsedRequestBody;
+    if (!body) return invalidRequestBodyResponse();
 
     let parsed;
     try {
       parsed = ModelCheckSchema.parse(body);
     } catch (error) {
-      return errorResponse(ERROR_MESSAGES.INVALID_REQUEST_BODY, HTTP_STATUS.BAD_REQUEST);
+      return invalidRequestBodyResponse(formatValidationError(error));
     }
 
     const transientChannel = {
