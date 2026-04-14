@@ -818,7 +818,7 @@ function createApp(deps = {}) {
           tools: body.tools,
           toolChoice: firstValue(body.toolChoice, body.tool_choice),
           responseFormat: firstValue(body.responseFormat, body.response_format),
-          maxRetries: body.max_retries,
+          maxRetries: firstValue(body.max_retries, 0),
           headers: body.request_headers,
           providerOptions,
         }),
@@ -836,6 +836,7 @@ function createApp(deps = {}) {
           responseFormat: firstValue(body.responseFormat, body.response_format),
           providerMetadata: firstValue(body.providerMetadata, body.provider_metadata),
           providerOptions,
+          maxRetries: firstValue(body.max_retries, 0),
         }),
       );
     }
@@ -845,6 +846,7 @@ function createApp(deps = {}) {
           model: aiModel,
           prompt: body.prompt,
           providerOptions,
+          maxRetries: firstValue(body.max_retries, 0),
         }),
       );
     }
@@ -858,6 +860,7 @@ function createApp(deps = {}) {
           speed: body.speed,
           instructions: body.instructions,
           providerOptions,
+          maxRetries: firstValue(body.max_retries, 0),
         }),
       );
     }
@@ -873,6 +876,7 @@ function createApp(deps = {}) {
           responseFormat: firstValue(body.responseFormat, body.response_format),
           timestampGranularities: firstValue(body.timestampGranularities, body.timestamp_granularities),
           providerOptions,
+          maxRetries: firstValue(body.max_retries, 0),
         }),
       );
     }
@@ -885,6 +889,7 @@ function createApp(deps = {}) {
           encodingFormat: firstValue(body.encodingFormat, body.encoding_format),
           user: body.user,
           providerOptions,
+          maxRetries: firstValue(body.max_retries, 0),
         }),
       );
     }
@@ -1792,7 +1797,7 @@ function createApp(deps = {}) {
     let errorMessage = '';
 
     try {
-      const result = await executeModelCheck(aiModel, parsed.callType, parsed.timeoutMs, request, env, getProviderOptions(body));
+      const result = await executeModelCheck(aiModel, parsed.callType, parsed.timeoutMs, request, env, getProviderOptions(body), 2);
       apiAccessible = true;
       dataAvailable = result.dataAvailable;
     } catch (error) {
@@ -1833,7 +1838,7 @@ function createApp(deps = {}) {
    * @param callType - 调用类型
    * @returns { dataAvailable: boolean }
    */
-  async function executeModelCheck(aiModel, callType, timeoutMs = CONSTANTS.MODEL_CHECK.DEFAULT_TIMEOUT_MS, request, env, providerOptions) {
+  async function executeModelCheck(aiModel, callType, timeoutMs = CONSTANTS.MODEL_CHECK.DEFAULT_TIMEOUT_MS, request, env, providerOptions, maxRetries = 0,) {
     const checkPromise = (async () => {
       if (callType === CALL_TYPES.CHAT) {
         const result = await ai.generateText({
@@ -1841,6 +1846,7 @@ function createApp(deps = {}) {
           prompt: CONSTANTS.MODEL_CHECK.TEST_PROMPT,
           maxTokens: 64,
           providerOptions,
+          maxRetries,
         });
         return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
       }
@@ -1851,6 +1857,7 @@ function createApp(deps = {}) {
           prompt: CONSTANTS.MODEL_CHECK.TEST_IMAGE_PROMPT,
           n: 1,
           providerOptions,
+          maxRetries,
         });
         return { dataAvailable: Boolean(result.images && result.images.length > 0) };
       }
@@ -1860,6 +1867,7 @@ function createApp(deps = {}) {
           model: aiModel,
           text: CONSTANTS.MODEL_CHECK.TEST_SPEECH_TEXT,
           providerOptions,
+          maxRetries,
         });
         return { dataAvailable: Boolean(result.audio && result.audio.data && result.audio.data.length > 0) };
       }
@@ -1869,13 +1877,14 @@ function createApp(deps = {}) {
           model: aiModel,
           value: CONSTANTS.MODEL_CHECK.TEST_EMBEDDING_INPUT,
           providerOptions,
+          maxRetries,
         });
         return { dataAvailable: Boolean(result.embedding && result.embedding.length > 0) };
       }
 
       if (callType === CALL_TYPES.TRANSCRIBE) {
         const audio = await loadModelCheckTranscribeAudio(request, env);
-        const result = await ai.experimental_transcribe({ model: aiModel, audio, providerOptions });
+        const result = await ai.experimental_transcribe({ model: aiModel, audio, providerOptions, maxRetries });
         return { dataAvailable: Boolean(result.text && result.text.trim().length > 0) };
       }
 
@@ -1884,6 +1893,7 @@ function createApp(deps = {}) {
           model: aiModel,
           prompt: CONSTANTS.MODEL_CHECK.TEST_IMAGE_PROMPT,
           providerOptions,
+          maxRetries,
         });
         return { dataAvailable: Boolean(result.videos && result.videos.length > 0) };
       }
