@@ -2464,3 +2464,58 @@ function invalidRequestBodyResponse(parseErrorMessage?: string): Response;
 - `POST /api/channel/models`
 - `POST /api/model/check`
 - 所有 `/v1/*` 代理入口（请求体解析）
+
+---
+
+## 14. `mix` 调用类型兼容规范（2026-04-14 更新）
+
+### 14.1 背景
+
+- 部分上游会将图片/视频/音频结果封装在 chat 响应文本中返回。
+- 需要支持模型“调用走 chat，但输出可为多模态资源”的场景。
+
+### 14.2 定义
+
+- 新增 `call_type = "mix"`。
+- `mix` 含义：模型实例化和请求执行均按 chat 链路处理，但响应可根据用户调用的 V1 路由转换为对应媒体格式。
+
+### 14.3 路由与模型匹配规则
+
+- 用户请求类型 `userCallType` 由路由决定（`/v1/chat|images|video|audio|transcriptions|embeddings`）。
+- 模型筛选规则：
+  - 仍匹配 `row.call_type === userCallType`
+  - 额外允许 `row.call_type === "mix"`
+
+伪代码：
+
+```ts
+matched = rows.filter(
+  row => row.call_type === userCallType || row.call_type === CALL_TYPES.MIX
+)
+```
+
+### 14.4 响应格式规则
+
+- `formatAIResponse` 按 `userCallType` 产出响应格式，而非 `model.call_type`。
+- 当 `userCallType` 是 `image_gen|video_gen|audio_gen` 且模型为 `mix` 时：
+  - 优先使用 SDK 原生字段（`images/videos/audio`）
+  - 若原生字段为空，则通过 `extractMediaResources` 从 chat 文本中提取媒体资源并转换。
+
+### 14.5 关键函数签名
+
+```ts
+async function formatAIResponse(
+  result: Record<string, unknown>,
+  userCallType: string,
+  modelCode: string
+): Promise<Response>;
+```
+
+```ts
+async function selectModels(
+  modelIdentifier: string,
+  userCallType: string,
+  env: Env,
+  channelId?: string
+): Promise<ModelSelection[]>;
+```

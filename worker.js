@@ -16,6 +16,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createPollinations } from './pollinations.js';
 import { createExacg } from './exacg.js';
 import { createMicrosoftTTS } from './microsoft-tts.js';
+import { extractMediaResources } from './media-utils.js';
 
 const CONSTANTS = {
   PROVIDERS: {
@@ -32,6 +33,7 @@ const CONSTANTS = {
   },
   CALL_TYPES: {
     CHAT: 'chat',
+    MIX: 'mix',
     IMAGE_GEN: 'image_gen',
     AUDIO_GEN: 'audio_gen',
     VIDEO_GEN: 'video_gen',
@@ -299,6 +301,7 @@ const SCHEMAS = (() => {
 
   const CallTypeEnum = z.enum([
     CALL_TYPES.CHAT,
+    CALL_TYPES.MIX,
     CALL_TYPES.IMAGE_GEN,
     CALL_TYPES.AUDIO_GEN,
     CALL_TYPES.VIDEO_GEN,
@@ -731,6 +734,7 @@ function createApp(deps = {}) {
           case CALL_TYPES.VIDEO_GEN:
             return providerInstance.video(modelCode);
           case CALL_TYPES.AUDIO_GEN:
+          case CALL_TYPES.MIX:
           case CALL_TYPES.CHAT:
             return providerInstance.chat(modelCode);
           case CALL_TYPES.EMBEDDING:
@@ -742,6 +746,7 @@ function createApp(deps = {}) {
       case PROVIDERS.ANTHROPIC: {
         const providerInstance = providers.createAnthropic({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
         switch (callType) {
+          case CALL_TYPES.MIX:
           case CALL_TYPES.CHAT:
             return providerInstance.chat(modelCode);
           case CALL_TYPES.EMBEDDING:
@@ -755,6 +760,7 @@ function createApp(deps = {}) {
         switch (callType) {
           case CALL_TYPES.IMAGE_GEN:
             return providerInstance.imageModel(modelCode);
+          case CALL_TYPES.MIX:
           case CALL_TYPES.CHAT:
             return providerInstance.chat(modelCode);
           case CALL_TYPES.EMBEDDING:
@@ -800,6 +806,7 @@ function createApp(deps = {}) {
             return providerInstance.image(modelCode);
           case CALL_TYPES.AUDIO_GEN:
             return providerInstance.speech(modelCode);
+          case CALL_TYPES.MIX:
           case CALL_TYPES.CHAT:
             return providerInstance.chat(modelCode);
           case CALL_TYPES.EMBEDDING:
@@ -815,7 +822,7 @@ function createApp(deps = {}) {
 
   async function executeAIRequest(aiModel, callType, body) {
     const providerOptions = firstValue(body.extra_body, body.providerOptions);
-    if (callType === CALL_TYPES.CHAT) {
+    if (callType === CALL_TYPES.CHAT || callType === CALL_TYPES.MIX) {
       return ai.generateText(
         pruneUndefined({
           model: aiModel,
@@ -909,9 +916,9 @@ function createApp(deps = {}) {
     throw new Error(`Unsupported call type ${callType}`);
   }
 
-  function formatAIResponse(result, callType, modelCode) {
+  async function formatAIResponse(result, userCallType, modelCallType, modelCode) {
     const created = toEpochSeconds(nowFn());
-    if (callType === CALL_TYPES.CHAT) {
+    if (userCallType === CALL_TYPES.CHAT) {
       return jsonResponse({
         id: `${CONSTANTS.UUID_PREFIX}${uuidFn()}`,
         object: OPENAI_OBJECTS.CHAT_COMPLETION,
@@ -932,39 +939,46 @@ function createApp(deps = {}) {
       });
     }
 
-    if (callType === CALL_TYPES.IMAGE_GEN) {
+    if (userCallType === CALL_TYPES.IMAGE_GEN) {
+      if (modelCallType === CALL_TYPES.MIX) {
+        const media = await extractMediaResources({ text: result.text, files: result.files, });
+        const data = media.images.map((image) => ({ url: image.base64 }));
+        return jsonResponse({ created, data });
+      }
       const data = (result.images || []).map((image) => ({ b64_json: image.base64 }));
       return jsonResponse({ created, data });
     }
 
-    if (callType === CALL_TYPES.VIDEO_GEN) {
-      const data = (result.videos || []).map((video) => {
-        if (video?.url) {
-          return { url: video.url };
-        }
-        if (video?.base64) {
-          return { url: `data:${video.mediaType};base64,${video.base64}` };
-        }
-        if (video?.type === 'base64' && video?.data) {
-          return { url: `data:${video.mediaType};base64,${video.data}` };
-        }
-        return { url: '' };
-      }).filter((item) => item.url);
+    if (userCallType === CALL_TYPES.VIDEO_GEN) {
+      if (modelCallType === CALL_TYPES.MIX) {
+        const media = await extractMediaResources({ text: result.text, files: result.files, });
+        const data = media.videos.map((video) => ({ url: video.base64 }));
+        return jsonResponse({ created, data });
+      }
+      const data = (result.videos || []).map((video) => ({ b64_json: video.base64 }));
       return jsonResponse({ created, data });
     }
 
-    if (callType === CALL_TYPES.AUDIO_GEN) {
-      const mediaType = result.audio?.mediaType || 'audio/mpeg';
-      const headers = new Headers({ [HEADERS.CONTENT_TYPE]: mediaType });
-      Object.entries(CORS_HEADERS).forEach(([key, value]) => headers.set(key, value));
-      return new Response(result.audio?.uint8ArrayData || new Uint8Array(), { status: HTTP_STATUS.OK, headers });
+    if (userCallType === CALL_TYPES.AUDIO_GEN) {
+      if (modelCallType === CALL_TYPES.MIX) {
+        const media = await extractMediaResources({ text: result.text, files: result.files, });
+        const data = media.audios.map((audio) => ({ url: audio.uint8Array }));
+        return jsonResponse({ created, data });
+      }
+      if (result.audio) {
+        const headers = new Headers({ [HEADERS.CONTENT_TYPE]: result.audio.mediaType });
+        Object.entries(CORS_HEADERS).forEach(([key, value]) => headers.set(key, value));
+        return new Response(result.audio.uint8Array, { status: HTTP_STATUS.OK, headers });
+      }
+      // todo
+      return;
     }
 
-    if (callType === CALL_TYPES.TRANSCRIBE) {
+    if (userCallType === CALL_TYPES.TRANSCRIBE) {
       return jsonResponse({ text: result.text || '' });
     }
 
-    if (callType === CALL_TYPES.EMBEDDING) {
+    if (userCallType === CALL_TYPES.EMBEDDING) {
       return jsonResponse({
         object: OPENAI_OBJECTS.LIST,
         data: [{ object: OPENAI_OBJECTS.EMBEDDING, embedding: result.embedding || [], index: 0 }],
@@ -1080,7 +1094,7 @@ function createApp(deps = {}) {
     const { results } = await env.DB.prepare(query).bind(...params).all();
     if (!results || results.length === 0) return [];
 
-    const matched = results.filter((row) => row.call_type === userCallType);
+    const matched = results.filter((row) => row.call_type === userCallType || row.call_type === CALL_TYPES.MIX);
     if (matched.length === 0) return [];
 
     return matched
@@ -1246,7 +1260,7 @@ function createApp(deps = {}) {
           ),
         );
 
-        return formatAIResponse(result, selection.model.call_type, selection.model.code);
+        return formatAIResponse(result, userCallType, selection.model.call_type, selection.model.code);
       } catch (error) {
         console.error(error);
         const latencyMs = nowFn().getTime() - startTime;
@@ -1884,7 +1898,7 @@ function createApp(deps = {}) {
           providerOptions,
           maxRetries,
         });
-        return { dataAvailable: Boolean(result.audio && result.audio.uint8ArrayData && result.audio.uint8ArrayData.length > 0) };
+        return { dataAvailable: Boolean(result.audio && result.audio.uint8Array && result.audio.uint8Array.length > 0) };
       }
 
       if (callType === CALL_TYPES.EMBEDDING) {
@@ -2059,7 +2073,7 @@ function createApp(deps = {}) {
   };
 }
 
-const worker = createApp({fetch: depsFetch});
+const worker = createApp({ fetch: depsFetch });
 
 export default worker;
 export { CONSTANTS, SCHEMAS, CALL_TYPE_TO_PATH, PATH_TO_CALL_TYPE, createApp, initializeDatabase };

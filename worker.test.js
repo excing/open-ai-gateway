@@ -914,8 +914,8 @@ describe('API: POST /api/model/check - 检测模型可用性', () => {
         streamText: async () => ({ textStream: ['test'], usage: {} }),
         generateImage: async () => ({ images: [{ base64: 'test' }] }),
         embed: async () => ({ embedding: [0.1], usage: {} }),
-        experimental_generateSpeech: async () => ({ 
-          audio: { data: new Uint8Array([1, 2, 3, 4, 5]), mediaType: 'audio/mpeg' } 
+        experimental_generateSpeech: async () => ({
+          audio: { uint8Array: new Uint8Array([1, 2, 3, 4, 5]), mediaType: 'audio/mpeg' }
         }),
         experimental_transcribe: async () => ({ text: 'test' }),
         experimental_generateVideo: async () => ({ videos: [] }),
@@ -1530,7 +1530,7 @@ describe('Microsoft TTS: 仅语音生成且模型固定 default', () => {
         provider: 'microsoft-tts',
         apiKey: 'ms-key',
         baseURL: 'https://tts.example.com',
-        model: 'other',
+        model: 'microsoft-tts',
         callType: CALL_TYPES.AUDIO_GEN,
         headers: {},
       },
@@ -1538,7 +1538,7 @@ describe('Microsoft TTS: 仅语音生成且模型固定 default', () => {
 
     const response = await app.handleRequest(request, mockEnv);
     const data = await response.json();
-    assert.strictEqual(response.status, HTTP_STATUS.SERVICE_UNAVAILABLE);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
     assert.strictEqual(data.success, true);
     assert.strictEqual(data.data.api_accessible, false);
     assert.strictEqual(data.data.data_available, false);
@@ -1862,5 +1862,151 @@ describe('V1 参数完整透传', () => {
     assert.strictEqual(receivedOptions.dimensions, 1024);
     assert.strictEqual(receivedOptions.encodingFormat, 'float');
     assert.strictEqual(receivedOptions.user, 'user-1');
+  });
+});
+
+describe('mix call_type 兼容', () => {
+  function seedMixModelEnv() {
+    const mockEnv = createMockEnv();
+    mockEnv._addChannel({
+      id: 'ch-mix',
+      name: 'OpenAI Mix',
+      key: 'openai-mix',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-test',
+      base_url: '',
+      created_at: '2026-04-14T00:00:00Z',
+      updated_at: '2026-04-14T00:00:00Z',
+    });
+    mockEnv._addModel({
+      id: 'model-mix',
+      channel_id: 'ch-mix',
+      code: 'gpt-4o-mix',
+      name: 'gpt-4o-mix',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.MIX,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT, CALL_TYPES.IMAGE_GEN, CALL_TYPES.AUDIO_GEN, CALL_TYPES.VIDEO_GEN]),
+      cost: '',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-14T00:00:00Z',
+      headers: '{}',
+    });
+    return mockEnv;
+  }
+
+  it('POST /v1/chat/completions 使用 mix 模型时应返回 chat 格式', async () => {
+    const app = createApp({
+      providers: {
+        createOpenAI: () => ({
+          chat: () => ({ modelCode: 'gpt-4o-mix' }),
+        }),
+      },
+      ai: {
+        generateText: async () => ({ text: 'hello from mix', usage: {} }),
+      },
+    });
+    const mockEnv = seedMixModelEnv();
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_CHAT,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: { model: 'gpt-4o-mix', messages: [{ role: 'user', content: 'hello' }] },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.object, 'chat.completion');
+    assert.strictEqual(data.choices[0].message.content, 'hello from mix');
+  });
+
+  it('POST /v1/images/generations 使用 mix 模型时应从 chat 文本提取图片', async () => {
+    const app = createApp({
+      providers: {
+        createOpenAI: () => ({
+          chat: () => ({ modelCode: 'gpt-4o-mix' }),
+        }),
+      },
+      ai: {
+        generateText: async () => ({ text: 'image data:data:image/png;base64,aGVsbG8=', usage: {} }),
+      },
+    });
+    const mockEnv = seedMixModelEnv();
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_IMAGES,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: { model: 'gpt-4o-mix', prompt: 'draw' },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.deepStrictEqual(data.data, [{ url: 'aGVsbG8=' }]);
+  });
+
+  it('POST /v1/audio/speech 使用 mix 模型时应从 chat 文本提取音频', async () => {
+    const app = createApp({
+      providers: {
+        createOpenAI: () => ({
+          chat: () => ({ modelCode: 'gpt-4o-mix' }),
+        }),
+      },
+      ai: {
+        generateText: async () => ({ text: 'audio data:audio/mpeg;base64,aGVsbG8=', usage: {} }),
+      },
+    });
+    const mockEnv = seedMixModelEnv();
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_AUDIO,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: { model: 'gpt-4o-mix', input: 'say hi' },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(response.headers.get('content-type'), 'application/json');
+    assert.strictEqual(Array.isArray(data.data), true);
+    assert.strictEqual(data.data.length, 1);
+    assert.strictEqual(typeof data.data[0].url, 'object');
+    assert.strictEqual(data.data[0].url[0], 104);
+    assert.strictEqual(data.data[0].url[1], 101);
+    assert.strictEqual(data.data[0].url[2], 108);
+    assert.strictEqual(data.data[0].url[3], 108);
+    assert.strictEqual(data.data[0].url[4], 111);
+  });
+
+  it('POST /v1/video/generations 使用 mix 模型时应从 chat 文本提取视频', async () => {
+    const app = createApp({
+      providers: {
+        createOpenAI: () => ({
+          chat: () => ({ modelCode: 'gpt-4o-mix' }),
+        }),
+      },
+      ai: {
+        generateText: async () => ({ text: 'video data:video/mp4;base64,aGVsbG8=', usage: {} }),
+      },
+    });
+    const mockEnv = seedMixModelEnv();
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_VIDEO,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: { model: 'gpt-4o-mix', prompt: 'video' },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.deepStrictEqual(data.data, [{ url: 'aGVsbG8=' }]);
   });
 });
