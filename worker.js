@@ -15,6 +15,7 @@ import { createOpenAI } from '@ai-sdk/openai';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createPollinations } from './pollinations.js';
 import { createExacg } from './exacg.js';
+import { createMicrosoftTTS } from './microsoft-tts.js';
 
 const CONSTANTS = {
   PROVIDERS: {
@@ -27,6 +28,7 @@ const CONSTANTS = {
     OPENROUTER: 'openrouter',
     POLLINATIONS: 'pollinations',
     EXACG: 'exacg',
+    MICROSOFT_TTS: 'microsoft-tts',
   },
   CALL_TYPES: {
     CHAT: 'chat',
@@ -292,6 +294,7 @@ const SCHEMAS = (() => {
     PROVIDERS.OPENROUTER,
     PROVIDERS.POLLINATIONS,
     PROVIDERS.EXACG,
+    PROVIDERS.MICROSOFT_TTS,
   ]);
 
   const CallTypeEnum = z.enum([
@@ -628,7 +631,7 @@ const depsFetch = async function (input, init) {
   // 打印响应的基本信息
   console.log(`Response: ${response.status} ${response.statusText}`);
   const responseBody = await response.clone().text(); // 克隆响应体以便读取
-  console.log('Response Body:', responseBody);
+  console.log('Response Body:', responseBody.substring(0, 2000));
 
   // 直接返回响应
   return response;
@@ -682,6 +685,7 @@ function createApp(deps = {}) {
     createOpenRouter: deps.providers?.createOpenRouter || createOpenRouter,
     createPollinations: deps.providers?.createPollinations || createPollinations,
     createExacg: deps.providers?.createExacg || createExacg,
+    createMicrosoftTTS: deps.providers?.createMicrosoftTTS || createMicrosoftTTS,
   };
 
   const ai = {
@@ -775,6 +779,15 @@ function createApp(deps = {}) {
         switch (callType) {
           case CALL_TYPES.IMAGE_GEN:
             return providerInstance.image(modelCode);
+          default:
+            return unsupportedCallType();
+        }
+      }
+      case PROVIDERS.MICROSOFT_TTS: {
+        const providerInstance = providers.createMicrosoftTTS({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
+        switch (callType) {
+          case CALL_TYPES.AUDIO_GEN:
+            return providerInstance.speech(modelCode);
           default:
             return unsupportedCallType();
         }
@@ -1626,6 +1639,7 @@ function createApp(deps = {}) {
    * - openrouter: GET https://openrouter.ai/api/v1/models
    * - pollinations: GET https://gen.pollinations.ai/v1/models
    * - exacg: 无公开的模型列表 API，返回空数组
+   * - microsoft-tts: 无公开的模型列表 API，返回空数组
    *
    * @param channel - 渠道数据库行
    * @returns UpstreamModel[] 上游模型列表
@@ -1636,7 +1650,8 @@ function createApp(deps = {}) {
     // Anthropic / Exacg 没有公开的模型列表 API
     if (
       normalizedProvider === PROVIDERS.ANTHROPIC ||
-      normalizedProvider === PROVIDERS.EXACG
+      normalizedProvider === PROVIDERS.EXACG ||
+      normalizedProvider === PROVIDERS.MICROSOFT_TTS
     ) {
       return [];
     }
@@ -1869,7 +1884,7 @@ function createApp(deps = {}) {
           providerOptions,
           maxRetries,
         });
-        return { dataAvailable: Boolean(result.audio && result.audio.data && result.audio.data.length > 0) };
+        return { dataAvailable: Boolean(result.audio && result.audio.uint8ArrayData && result.audio.uint8ArrayData.length > 0) };
       }
 
       if (callType === CALL_TYPES.EMBEDDING) {

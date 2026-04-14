@@ -1470,6 +1470,106 @@ describe('Exacg: 仅图片生成', () => {
   });
 });
 
+describe('Microsoft TTS: 仅语音生成且模型固定 default', () => {
+  let app;
+  let mockEnv;
+
+  beforeEach(() => {
+    mockEnv = createMockEnv();
+  });
+
+  afterEach(() => {
+    mockEnv._clear();
+  });
+
+  it('microsoft-tts 的 audio_gen 模型检测应成功', async () => {
+    app = createApp({
+      fetch: async (url, options) => {
+        const target = url.toString();
+        assert.ok(target.includes('/tts'));
+        assert.ok(target.includes('api_key=ms-key'));
+        assert.ok(target.includes('t='));
+        assert.strictEqual(options.method, 'GET');
+        return new Response(new Uint8Array([1, 2, 3, 4]), {
+          status: 200,
+          headers: { 'content-type': 'audio/mpeg' },
+        });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'microsoft-tts',
+        apiKey: 'ms-key',
+        baseURL: 'https://tts.example.com',
+        model: 'microsoft-tts',
+        callType: CALL_TYPES.AUDIO_GEN,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+  });
+
+  it('microsoft-tts 非 default 模型应返回不可用', async () => {
+    app = createApp();
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'microsoft-tts',
+        apiKey: 'ms-key',
+        baseURL: 'https://tts.example.com',
+        model: 'other',
+        callType: CALL_TYPES.AUDIO_GEN,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.SERVICE_UNAVAILABLE);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, false);
+    assert.strictEqual(data.data.data_available, false);
+  });
+
+  it('microsoft-tts 的 chat 模型检测应返回不可用', async () => {
+    app = createApp();
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'microsoft-tts',
+        apiKey: 'ms-key',
+        baseURL: 'https://tts.example.com',
+        model: 'microsoft-tts',
+        callType: CALL_TYPES.CHAT,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.SERVICE_UNAVAILABLE);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, false);
+    assert.strictEqual(data.data.data_available, false);
+  });
+});
+
 describe('extra_body 透传', () => {
   it('executeAIRequest(chat) 应透传 extra_body 到 generateText.providerOptions', async () => {
     let receivedOptions;
