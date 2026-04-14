@@ -549,6 +549,17 @@ function getProviderOptions(payload) {
   return value;
 }
 
+function firstValue(...values) {
+  for (const value of values) {
+    if (value !== undefined) return value;
+  }
+  return undefined;
+}
+
+function pruneUndefined(input) {
+  return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+}
+
 function calculateModelScore(modelRow) {
   return (
     modelRow.weight * SCORE_WEIGHTS.WEIGHT_FACTOR +
@@ -790,25 +801,92 @@ function createApp(deps = {}) {
   }
 
   async function executeAIRequest(aiModel, callType, body) {
-    const providerOptions = getProviderOptions(body);
+    const providerOptions = firstValue(body.extra_body, body.providerOptions);
     if (callType === CALL_TYPES.CHAT) {
-      return ai.generateText({ model: aiModel, messages: body.messages, prompt: body.prompt, maxTokens: body.max_tokens, temperature: body.temperature, providerOptions });
+      return ai.generateText(
+        pruneUndefined({
+          model: aiModel,
+          messages: body.messages,
+          prompt: body.prompt,
+          maxTokens: firstValue(body.maxTokens, body.max_tokens),
+          temperature: body.temperature,
+          topP: firstValue(body.topP, body.top_p),
+          frequencyPenalty: firstValue(body.frequencyPenalty, body.frequency_penalty),
+          presencePenalty: firstValue(body.presencePenalty, body.presence_penalty),
+          stopSequences: firstValue(body.stopSequences, body.stop),
+          seed: body.seed,
+          tools: body.tools,
+          toolChoice: firstValue(body.toolChoice, body.tool_choice),
+          responseFormat: firstValue(body.responseFormat, body.response_format),
+          maxRetries: body.max_retries,
+          headers: body.request_headers,
+          providerOptions,
+        }),
+      );
     }
     if (callType === CALL_TYPES.IMAGE_GEN) {
-      return ai.generateImage({ model: aiModel, prompt: body.prompt, n: body.n, size: body.size, aspectRatio: body.aspect_ratio, seed: body.seed, providerOptions });
+      return ai.generateImage(
+        pruneUndefined({
+          model: aiModel,
+          prompt: body.prompt,
+          n: body.n,
+          size: body.size,
+          aspectRatio: firstValue(body.aspectRatio, body.aspect_ratio),
+          seed: body.seed,
+          responseFormat: firstValue(body.responseFormat, body.response_format),
+          providerMetadata: firstValue(body.providerMetadata, body.provider_metadata),
+          providerOptions,
+        }),
+      );
     }
     if (callType === CALL_TYPES.VIDEO_GEN) {
-      return ai.experimental_generateVideo({ model: aiModel, prompt: body.prompt, providerOptions });
+      return ai.experimental_generateVideo(
+        pruneUndefined({
+          model: aiModel,
+          prompt: body.prompt,
+          providerOptions,
+        }),
+      );
     }
     if (callType === CALL_TYPES.AUDIO_GEN) {
-      return ai.experimental_generateSpeech({ model: aiModel, text: body.input, voice: body.voice, outputFormat: body.format, speed: body.speed, providerOptions });
+      return ai.experimental_generateSpeech(
+        pruneUndefined({
+          model: aiModel,
+          text: body.input,
+          voice: body.voice,
+          outputFormat: firstValue(body.outputFormat, body.response_format, body.format),
+          speed: body.speed,
+          instructions: body.instructions,
+          providerOptions,
+        }),
+      );
     }
     if (callType === CALL_TYPES.TRANSCRIBE) {
       const audio = await normalizeTranscriptionAudioInput(body.file);
-      return ai.experimental_transcribe({ model: aiModel, audio, providerOptions });
+      return ai.experimental_transcribe(
+        pruneUndefined({
+          model: aiModel,
+          audio,
+          language: body.language,
+          prompt: body.prompt,
+          temperature: body.temperature,
+          responseFormat: firstValue(body.responseFormat, body.response_format),
+          timestampGranularities: firstValue(body.timestampGranularities, body.timestamp_granularities),
+          providerOptions,
+        }),
+      );
     }
     if (callType === CALL_TYPES.EMBEDDING) {
-      return ai.embed({ model: aiModel, value: body.input, providerOptions });
+      return ai.embed(
+        pruneUndefined({
+          model: aiModel,
+          value: firstValue(body.value, body.input),
+          dimensions: body.dimensions,
+          encodingFormat: firstValue(body.encodingFormat, body.encoding_format),
+          user: body.user,
+          providerOptions,
+        }),
+      );
     }
     throw new Error(`Unsupported call type ${callType}`);
   }
@@ -1067,14 +1145,23 @@ function createApp(deps = {}) {
       });
 
       const startTime = nowFn().getTime();
-      const providerOptions = getProviderOptions(body);
       const result = await ai.streamText({
-        model: fallbackModel,
-        messages: body.messages,
-        prompt: body.prompt,
-        maxTokens: body.max_tokens,
-        temperature: body.temperature,
-        providerOptions,
+        ...pruneUndefined({
+          model: fallbackModel,
+          messages: body.messages,
+          prompt: body.prompt,
+          maxTokens: firstValue(body.maxTokens, body.max_tokens),
+          temperature: body.temperature,
+          topP: firstValue(body.topP, body.top_p),
+          frequencyPenalty: firstValue(body.frequencyPenalty, body.frequency_penalty),
+          presencePenalty: firstValue(body.presencePenalty, body.presence_penalty),
+          stopSequences: firstValue(body.stopSequences, body.stop),
+          seed: body.seed,
+          tools: body.tools,
+          toolChoice: firstValue(body.toolChoice, body.tool_choice),
+          responseFormat: firstValue(body.responseFormat, body.response_format),
+          providerOptions: firstValue(body.extra_body, body.providerOptions),
+        }),
         onFinish: async (event) => {
           const latencyMs = nowFn().getTime() - startTime;
           const selection = modelMap.get(fallbackModel.modelId) || candidates[0];

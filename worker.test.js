@@ -1593,4 +1593,174 @@ describe('extra_body 透传', () => {
     assert.deepStrictEqual(receivedOptions.providerOptions, extraBody);
     mockEnv._clear();
   });
+
+  it('executeAIRequest(chat) 在无 extra_body 时应回退 providerOptions 字段', async () => {
+    let receivedOptions;
+    const app = createApp({
+      ai: {
+        generateText: async (options) => {
+          receivedOptions = options;
+          return { text: 'ok', usage: {} };
+        },
+      },
+    });
+
+    const providerOptions = { openai: { reasoningEffort: 'low' } };
+    await app.executeAIRequest(
+      { modelId: 'mock-model' },
+      CALL_TYPES.CHAT,
+      { prompt: 'hello', providerOptions },
+    );
+
+    assert.deepStrictEqual(receivedOptions.providerOptions, providerOptions);
+  });
+});
+
+describe('V1 参数完整透传', () => {
+  it('executeAIRequest(chat) 应透传完整聊天参数', async () => {
+    let receivedOptions;
+    const app = createApp({
+      ai: {
+        generateText: async (options) => {
+          receivedOptions = options;
+          return { text: 'ok', usage: {} };
+        },
+      },
+    });
+    await app.executeAIRequest(
+      { modelId: 'chat-model' },
+      CALL_TYPES.CHAT,
+      {
+        messages: [{ role: 'user', content: 'hello' }],
+        max_tokens: 128,
+        temperature: 0.7,
+        top_p: 0.9,
+        frequency_penalty: 0.2,
+        presence_penalty: 0.1,
+        stop: ['DONE'],
+        seed: 42,
+        tools: [{ type: 'function', function: { name: 'get_weather' } }],
+        tool_choice: 'auto',
+        response_format: { type: 'json_object' },
+        extra_body: { openai: { reasoningEffort: 'medium' } },
+      },
+    );
+
+    assert.strictEqual(receivedOptions.maxTokens, 128);
+    assert.strictEqual(receivedOptions.topP, 0.9);
+    assert.strictEqual(receivedOptions.frequencyPenalty, 0.2);
+    assert.strictEqual(receivedOptions.presencePenalty, 0.1);
+    assert.deepStrictEqual(receivedOptions.stopSequences, ['DONE']);
+    assert.strictEqual(receivedOptions.seed, 42);
+    assert.deepStrictEqual(receivedOptions.tools, [{ type: 'function', function: { name: 'get_weather' } }]);
+    assert.strictEqual(receivedOptions.toolChoice, 'auto');
+    assert.deepStrictEqual(receivedOptions.responseFormat, { type: 'json_object' });
+  });
+
+  it('streamText 应透传完整聊天参数', async () => {
+    let receivedOptions;
+    const app = createApp({
+      providers: {
+        createOpenAI: () => ({
+          chat: (modelCode) => ({ modelCode }),
+        }),
+      },
+      ai: {
+        streamText: async (options) => {
+          receivedOptions = options;
+          return { textStream: ['ok'] };
+        },
+      },
+    });
+    const mockEnv = createMockEnv();
+    mockEnv._addChannel({
+      id: 'ch-stream-full-params',
+      name: 'OpenAI',
+      key: 'openai-stream-full-params',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-test',
+      base_url: '',
+      created_at: '2026-04-12T00:00:00Z',
+      updated_at: '2026-04-12T00:00:00Z',
+    });
+    mockEnv._addModel({
+      id: 'model-stream-full-params',
+      channel_id: 'ch-stream-full-params',
+      code: 'gpt-4o',
+      name: 'gpt-4o',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT]),
+      cost: '',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-12T00:00:00Z',
+      headers: '{}',
+    });
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_CHAT,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'hello' }],
+        stream: true,
+        max_tokens: 256,
+        top_p: 0.8,
+        frequency_penalty: 0.3,
+        presence_penalty: 0.4,
+        stop: ['END'],
+        seed: 99,
+        tool_choice: 'none',
+        response_format: { type: 'json_object' },
+        extra_body: { openrouter: { transforms: ['middle-out'] } },
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(receivedOptions.maxTokens, 256);
+    assert.strictEqual(receivedOptions.topP, 0.8);
+    assert.strictEqual(receivedOptions.frequencyPenalty, 0.3);
+    assert.strictEqual(receivedOptions.presencePenalty, 0.4);
+    assert.deepStrictEqual(receivedOptions.stopSequences, ['END']);
+    assert.strictEqual(receivedOptions.seed, 99);
+    assert.strictEqual(receivedOptions.toolChoice, 'none');
+    assert.deepStrictEqual(receivedOptions.responseFormat, { type: 'json_object' });
+    mockEnv._clear();
+  });
+
+  it('executeAIRequest(embedding) 应透传 embedding 参数', async () => {
+    let receivedOptions;
+    const app = createApp({
+      ai: {
+        embed: async (options) => {
+          receivedOptions = options;
+          return { embedding: [0.1, 0.2], usage: {} };
+        },
+      },
+    });
+    await app.executeAIRequest(
+      { modelId: 'embedding-model' },
+      CALL_TYPES.EMBEDDING,
+      {
+        input: ['hello', 'world'],
+        dimensions: 1024,
+        encoding_format: 'float',
+        user: 'user-1',
+        extra_body: { openai: { dimensions: 1024 } },
+      },
+    );
+
+    assert.deepStrictEqual(receivedOptions.value, ['hello', 'world']);
+    assert.strictEqual(receivedOptions.dimensions, 1024);
+    assert.strictEqual(receivedOptions.encodingFormat, 'float');
+    assert.strictEqual(receivedOptions.user, 'user-1');
+  });
 });

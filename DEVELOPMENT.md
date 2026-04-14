@@ -1052,6 +1052,35 @@ async function executeAIRequest(
 ): Promise<AIRequestResult>;
 
 /**
+ * V1 请求参数映射规则（网关入参 -> AI SDK 参数）
+ * 映射实现方式：在 executeAIRequest / streamText 调用前手工映射（snake_case -> camelCase）并统一 pruneUndefined。
+ * 兼容策略：优先读取规范字段，其次读取 OpenAI 风格字段（如 maxTokens/max_tokens、topP/top_p）。
+ * provider 专属参数：优先使用 extra_body，若未提供则回退 providerOptions。
+ * - chat:
+ *   - max_tokens -> maxTokens
+ *   - top_p -> topP
+ *   - frequency_penalty -> frequencyPenalty
+ *   - presence_penalty -> presencePenalty
+ *   - stop -> stopSequences
+ *   - tool_choice -> toolChoice
+ *   - response_format -> responseFormat
+ *   - extra_body -> providerOptions
+ * - image_gen:
+ *   - aspect_ratio -> aspectRatio
+ *   - response_format -> responseFormat
+ *   - extra_body -> providerOptions
+ * - audio_gen:
+ *   - response_format/format -> outputFormat（优先 response_format）
+ *   - extra_body -> providerOptions
+ * - transcribe:
+ *   - extra_body -> providerOptions
+ * - embedding:
+ *   - input -> value
+ *   - encoding_format -> encodingFormat
+ *   - extra_body -> providerOptions
+ */
+
+/**
  * 将 AI SDK 的响应转换为 OpenAI 兼容的 Response 对象
  *
  * - chat 流式：转为 SSE 格式的 ReadableStream
@@ -1203,6 +1232,8 @@ function buildPaginatedResponse<T>(data: T[], total: number, pagination: Paginat
 }
 ```
 `extra_body` 为可选对象；网关会将其映射为 Vercel AI SDK 调用参数 `providerOptions`（`generateText`/`streamText`/`generateImage`/`embed`/`experimental_generateSpeech`/`experimental_generateVideo`/`experimental_transcribe`），用于携带 provider 专属参数。
+
+补充：除 OpenAI 兼容核心字段外，网关还透传常见高级参数（如 `top_p`、`frequency_penalty`、`presence_penalty`、`stop`、`tools`、`tool_choice`、`response_format`、`seed`、`dimensions`、`encoding_format`、`user` 等），确保 `/v1/*` 具备完整网关能力。
 
 **非流式响应** (stream=false)：
 ```json
