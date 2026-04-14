@@ -20,10 +20,6 @@ function parseProviderOptions(options) {
   return options?.providerOptions?.[MICROSOFT_TTS_PROVIDER_NAME] || {};
 }
 
-function boolToString(value) {
-  return value ? 'true' : 'false';
-}
-
 function toHeadersRecord(headers) {
   if (!headers) return undefined;
   const entries = Object.entries(headers).filter(([, value]) => value !== undefined);

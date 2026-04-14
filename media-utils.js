@@ -70,7 +70,7 @@ async function extractMediaResources({ text = '', files = [] }) {
   if (pendingDownloads.size > 0) {
     const downloadResults = await Promise.all(
       [...pendingDownloads].map(async (url) => {
-        return await downloadFile(url, CONSTANTS.DOWNLOAD_TIMEOUT_MS);
+        return await downloadFile(url);
       }),
     );
 
@@ -80,7 +80,7 @@ async function extractMediaResources({ text = '', files = [] }) {
   return toMediaBuckets(resources);
 }
 
-async function downloadFile(url, timeout = 10000) {
+async function downloadFile(url, timeout = CONSTANTS.DOWNLOAD_TIMEOUT_MS) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   try {
@@ -89,7 +89,7 @@ async function downloadFile(url, timeout = 10000) {
       abortSignal: controller.signal,
     });
   } catch (error) {
-    console.warn(`资源${url}下载失败: `, error);
+    console.warn(`资源(${url})下载失败: `, error);
     return null;
   } finally {
     clearTimeout(timeoutId);

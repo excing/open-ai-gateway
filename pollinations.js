@@ -32,17 +32,6 @@ function parseSize(size) {
   return { width, height };
 }
 
-function toBase64(uint8Array) {
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.from(uint8Array).toString('base64');
-  }
-  let binary = '';
-  for (let i = 0; i < uint8Array.length; i += 1) {
-    binary += String.fromCharCode(uint8Array[i]);
-  }
-  return btoa(binary);
-}
-
 function buildUrl(baseURL, endpoint, prompt, query) {
   const url = new URL(`${resolveBaseURL(baseURL)}${endpoint}/${encodeURIComponent(prompt || '')}`);
   Object.entries(query).forEach(([key, value]) => {
@@ -71,7 +60,7 @@ async function fetchAsBase64({ fetchFn, url, headers, fallbackMediaType, abortSi
   const mediaType = response.headers.get('content-type') || fallbackMediaType;
   const headersRecord = toRecordHeaders(Object.fromEntries(response.headers.entries()));
   const bytes = new Uint8Array(await response.arrayBuffer());
-  return { mediaType, base64: toBase64(bytes), headers: headersRecord };
+  return { mediaType, data: bytes, headers: headersRecord };
 }
 
 class PollinationsImageModelV3 {
@@ -105,7 +94,7 @@ class PollinationsImageModelV3 {
     });
 
     return {
-      images: [media.base64],
+      images: [media.data],
       warnings: [],
       providerMetadata: {
         [this.config.providerName]: {
@@ -149,7 +138,7 @@ class PollinationsVideoModelV3 {
     });
 
     return {
-      videos: [{ type: 'base64', data: media.base64, mediaType: media.mediaType }],
+      videos: [{ type: 'binary', data: media.data, mediaType: media.mediaType }],
       warnings: [],
       providerMetadata: {
         [this.config.providerName]: {
