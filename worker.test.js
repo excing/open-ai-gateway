@@ -36,17 +36,27 @@ function createMockEnv() {
             
             // INSERT channel
             if (normalizedSql.includes('insert into channels')) {
-              const [id, name, key, provider, apiKey, baseURL, createdAt, updatedAt] = bindings;
-              channels.set(id, { id, name, key, provider, api_key: apiKey, base_url: baseURL, created_at: createdAt, updated_at: updatedAt });
+              const [id, name, key, provider, apiKey, baseURL, weight, createdAt, updatedAt] = bindings;
+              channels.set(id, {
+                id,
+                name,
+                key,
+                provider,
+                api_key: apiKey,
+                base_url: baseURL,
+                weight,
+                created_at: createdAt,
+                updated_at: updatedAt,
+              });
               return { success: true };
             }
             
             // INSERT model
             if (normalizedSql.includes('insert into channel_models')) {
-              const [id, channelId, code, name, desc, aliases, callType, capabilities, cost, status, weight] = bindings;
+              const [id, channelId, code, name, desc, aliases, callType, capabilities, inputCost, outputCost, status, weight] = bindings;
               models.set(id, { 
                 id, channel_id: channelId, code, name, desc, aliases, call_type: callType, 
-                capabilities, cost, status, weight, avg_latency_ms: 0, success_rate: 1, error_rate: 0,
+                capabilities, input_cost: inputCost, output_cost: outputCost, status, weight, avg_latency_ms: 0, success_rate: 1, error_rate: 0,
                 consecutive_failures: 0, cooldown_until: null, last_updated: new Date().toISOString(), headers: '{}'
               });
               return { success: true };
@@ -88,7 +98,15 @@ function createMockEnv() {
             
             // INSERT log
             if (normalizedSql.includes('insert into request_logs')) {
-              logs.push({ id: bindings[0], channel_id: bindings[1], channel_name: bindings[2], model_id: bindings[3] });
+              logs.push({
+                id: bindings[0],
+                channel_id: bindings[1],
+                channel_name: bindings[2],
+                model_id: bindings[3],
+                input_cost: bindings[12],
+                output_cost: bindings[13],
+                created_at: bindings[14],
+              });
               return { success: true };
             }
             
@@ -140,15 +158,6 @@ function createMockEnv() {
               return { results };
             }
             
-            // SELECT status base (join)
-            if (normalizedSql.includes('from channel_models cm join channels c')) {
-              const results = Array.from(models.values()).map(m => {
-                const ch = channels.get(m.channel_id);
-                return { ...m, channel_name: ch?.name || 'unknown' };
-              });
-              return { results };
-            }
-            
             // SELECT models by identifier
             if (normalizedSql.includes('where (cm.code =') || normalizedSql.includes('cm.aliases like')) {
               const modelIdentifier = bindings[0];
@@ -156,8 +165,26 @@ function createMockEnv() {
                 .filter(m => m.code === modelIdentifier)
                 .map(m => {
                   const ch = channels.get(m.channel_id);
-                  return { ...m, ch_id: ch?.id, ch_name: ch?.name, ch_key: ch?.key, provider: ch?.provider, api_key: ch?.api_key, base_url: ch?.base_url };
+                  return {
+                    ...m,
+                    ch_id: ch?.id,
+                    ch_name: ch?.name,
+                    ch_key: ch?.key,
+                    provider: ch?.provider,
+                    api_key: ch?.api_key,
+                    base_url: ch?.base_url,
+                    ch_weight: ch?.weight ?? 1,
+                  };
                 });
+              return { results };
+            }
+
+            // SELECT status base (join)
+            if (normalizedSql.includes('select cm.*, c.name as channel_name from channel_models cm join channels c')) {
+              const results = Array.from(models.values()).map(m => {
+                const ch = channels.get(m.channel_id);
+                return { ...m, channel_name: ch?.name || 'unknown' };
+              });
               return { results };
             }
             
@@ -1032,7 +1059,8 @@ describe('API: POST /v1/audio/transcriptions - multipart file', () => {
       aliases: '[]',
       call_type: CALL_TYPES.TRANSCRIBE,
       capabilities: JSON.stringify([CALL_TYPES.TRANSCRIBE]),
-      cost: '',
+      input_cost: '0',
+      output_cost: '0',
       status: MODEL_STATUS.ACTIVE,
       weight: 1,
       avg_latency_ms: 0,
@@ -1628,7 +1656,8 @@ describe('extra_body 透传', () => {
       aliases: '[]',
       call_type: CALL_TYPES.CHAT,
       capabilities: JSON.stringify([CALL_TYPES.CHAT]),
-      cost: '',
+      input_cost: '0',
+      output_cost: '0',
       status: MODEL_STATUS.ACTIVE,
       weight: 1,
       avg_latency_ms: 0,
@@ -1792,7 +1821,8 @@ describe('V1 参数完整透传', () => {
       aliases: '[]',
       call_type: CALL_TYPES.CHAT,
       capabilities: JSON.stringify([CALL_TYPES.CHAT]),
-      cost: '',
+      input_cost: '0',
+      output_cost: '0',
       status: MODEL_STATUS.ACTIVE,
       weight: 1,
       avg_latency_ms: 0,
@@ -1887,7 +1917,8 @@ describe('mix call_type 兼容', () => {
       aliases: '[]',
       call_type: CALL_TYPES.MIX,
       capabilities: JSON.stringify([CALL_TYPES.CHAT, CALL_TYPES.IMAGE_GEN, CALL_TYPES.AUDIO_GEN, CALL_TYPES.VIDEO_GEN]),
-      cost: '',
+      input_cost: '0',
+      output_cost: '0',
       status: MODEL_STATUS.ACTIVE,
       weight: 1,
       avg_latency_ms: 0,
@@ -2008,5 +2039,305 @@ describe('mix call_type 兼容', () => {
     const data = await response.json();
     assert.strictEqual(response.status, HTTP_STATUS.OK);
     assert.deepStrictEqual(data.data, [{ url: 'aGVsbG8=' }]);
+  });
+});
+
+describe('数据库字段升级: channels.weight + 双向成本字段', () => {
+  let app;
+  let mockEnv;
+
+  beforeEach(() => {
+    mockEnv = createMockEnv();
+    app = createApp({
+      now: () => new Date('2026-04-15T00:00:00.000Z'),
+      uuid: (() => {
+        let idx = 0;
+        return () => `uuid-${++idx}`;
+      })(),
+      providers: {
+        createOpenAI: () => ({ chat: (modelCode) => ({ modelCode }) }),
+      },
+      ai: {
+        generateText: async () => ({
+          text: 'ok',
+          usage: { promptTokens: 12, completionTokens: 7, totalTokens: 19 },
+        }),
+      },
+    });
+  });
+
+  afterEach(() => {
+    mockEnv._clear();
+  });
+
+  it('渠道权重应参与模型排序（channels.weight 更高者优先）', async () => {
+    mockEnv._addChannel({
+      id: 'ch-low',
+      name: 'Low Channel',
+      key: 'low-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-low',
+      base_url: '',
+      weight: 0.1,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    });
+    mockEnv._addChannel({
+      id: 'ch-high',
+      name: 'High Channel',
+      key: 'high-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-high',
+      base_url: '',
+      weight: 9.9,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    });
+    mockEnv._addModel({
+      id: 'model-low',
+      channel_id: 'ch-low',
+      code: 'gpt-4o',
+      name: 'gpt-4o',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT]),
+      input_cost: '1',
+      output_cost: '1',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-15T00:00:00.000Z',
+      headers: '{}',
+    });
+    mockEnv._addModel({
+      id: 'model-high',
+      channel_id: 'ch-high',
+      code: 'gpt-4o',
+      name: 'gpt-4o',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT]),
+      input_cost: '1',
+      output_cost: '1',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-15T00:00:00.000Z',
+      headers: '{}',
+    });
+
+    const result = await app.selectModels('gpt-4o', CALL_TYPES.CHAT, mockEnv);
+    assert.strictEqual(result.length, 2);
+    assert.strictEqual(result[0].channel.id, 'ch-high');
+    assert.strictEqual(result[1].channel.id, 'ch-low');
+  });
+
+  it('创建渠道时应写入模型 input_cost/output_cost', async () => {
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.API_CHANNEL,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        name: 'Cost Channel',
+        key: 'cost-channel',
+        provider: PROVIDERS.OPENAI,
+        apiKey: 'sk-test',
+        baseURL: '',
+        weight: 3.2,
+        models: [{
+          code: 'gpt-4o-mini',
+          name: 'gpt-4o-mini',
+          callType: CALL_TYPES.CHAT,
+          capabilities: [CALL_TYPES.CHAT],
+          inputCost: '0',
+          outputCost: '0.6/M',
+          weight: 1,
+        }],
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    assert.strictEqual(response.status, HTTP_STATUS.CREATED);
+
+    const createdChannel = Array.from(mockEnv._channels.values()).find((it) => it.key === 'cost-channel');
+    const createdModel = Array.from(mockEnv._models.values()).find((it) => it.code === 'gpt-4o-mini');
+    assert.ok(createdChannel);
+    assert.strictEqual(createdChannel.weight, 3.2);
+    assert.ok(createdModel);
+    assert.strictEqual(createdModel.input_cost, '0');
+    assert.strictEqual(createdModel.output_cost, '0.6/M');
+  });
+
+  it('请求成功日志应写入 input_cost/output_cost', async () => {
+    mockEnv._addChannel({
+      id: 'ch-log',
+      name: 'Log Channel',
+      key: 'log-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-log',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    });
+    mockEnv._addModel({
+      id: 'model-log',
+      channel_id: 'ch-log',
+      code: 'gpt-4o',
+      name: 'gpt-4o',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT]),
+      input_cost: '0',
+      output_cost: '1.2/M',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-15T00:00:00.000Z',
+      headers: '{}',
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_CHAT,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        model: 'gpt-4o',
+        messages: [{ role: 'user', content: 'hello' }],
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.ok(mockEnv._logs.length > 0);
+    const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
+    assert.strictEqual(latestLog.input_cost, '0');
+    assert.strictEqual(latestLog.output_cost, '0.0000084');
+  });
+
+  it('请求成功日志应按 token 与 /M 费率计算真实成本', async () => {
+    mockEnv._addChannel({
+      id: 'ch-real-cost',
+      name: 'Real Cost Channel',
+      key: 'real-cost-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-real-cost',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    });
+    mockEnv._addModel({
+      id: 'model-real-cost',
+      channel_id: 'ch-real-cost',
+      code: 'gpt-4o-cost',
+      name: 'gpt-4o-cost',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT]),
+      input_cost: '5/M',
+      output_cost: '10/M',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-15T00:00:00.000Z',
+      headers: '{}',
+    });
+
+    app = createApp({
+      now: () => new Date('2026-04-15T00:00:00.000Z'),
+      uuid: (() => {
+        let idx = 0;
+        return () => `uuid-real-cost-${++idx}`;
+      })(),
+      providers: {
+        createOpenAI: () => ({ chat: (modelCode) => ({ modelCode }) }),
+      },
+      ai: {
+        generateText: async () => ({
+          text: 'ok',
+          usage: { promptTokens: 100000, completionTokens: 100000, totalTokens: 200000 },
+        }),
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_CHAT,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        model: 'gpt-4o-cost',
+        messages: [{ role: 'user', content: 'hello' }],
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.ok(mockEnv._logs.length > 0);
+    const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
+    assert.strictEqual(latestLog.input_cost, '0.5');
+    assert.strictEqual(latestLog.output_cost, '1');
+  });
+});
+
+describe('自动迁移: initializeDatabase', () => {
+  it('应在缺失列时自动补列并执行 cost 回填 SQL', async () => {
+    const executedSql = [];
+    const env = {
+      DB: {
+        prepare: (sql) => ({
+          bind: function (...args) {
+            this._bindings = args;
+            return this;
+          },
+          run: async function () {
+            executedSql.push(sql);
+            return { success: true };
+          },
+          all: async function () {
+            executedSql.push(sql);
+            if (String(sql).includes('PRAGMA table_info(channels)')) {
+              return { results: [{ name: 'id' }, { name: 'name' }] };
+            }
+            if (String(sql).includes('PRAGMA table_info(channel_models)')) {
+              return { results: [{ name: 'id' }, { name: 'cost' }] };
+            }
+            if (String(sql).includes('PRAGMA table_info(request_logs)')) {
+              return { results: [{ name: 'id' }, { name: 'status' }] };
+            }
+            return { results: [] };
+          },
+        }),
+      },
+    };
+
+    await createApp().initializeDatabase(env);
+
+    assert.ok(executedSql.some((sql) => String(sql).includes('ALTER TABLE channels ADD COLUMN weight')));
+    assert.ok(executedSql.some((sql) => String(sql).includes('ALTER TABLE channel_models ADD COLUMN input_cost')));
+    assert.ok(executedSql.some((sql) => String(sql).includes('ALTER TABLE channel_models ADD COLUMN output_cost')));
+    assert.ok(executedSql.some((sql) => String(sql).includes('ALTER TABLE request_logs ADD COLUMN input_cost')));
+    assert.ok(executedSql.some((sql) => String(sql).includes('ALTER TABLE request_logs ADD COLUMN output_cost')));
+    assert.ok(executedSql.some((sql) => String(sql).includes('UPDATE channel_models') && String(sql).includes('COALESCE(NULLIF(cost')));
   });
 });

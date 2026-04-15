@@ -77,6 +77,7 @@ const CONSTANTS = {
   MAX_PAGE_SIZE: 100,
   SCORE_WEIGHTS: {
     WEIGHT_FACTOR: 10,
+    CHANNEL_WEIGHT_FACTOR: 10,
     SUCCESS_RATE_FACTOR: 50,
     LATENCY_PENALTY: 0.01,
     FAILURE_PENALTY: 20,
@@ -168,8 +169,8 @@ const CONSTANTS = {
   STREAM_DONE: '[DONE]',
   UUID_PREFIX: 'uuid-',
   SQL: {
-    INSERT_CHANNEL: `INSERT INTO channels (id, name, key, provider, api_key, base_url, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
-    INSERT_MODEL: `INSERT INTO channel_models (id, channel_id, code, name, desc, aliases, call_type, capabilities, cost, status, weight, avg_latency_ms, success_rate, error_rate, consecutive_failures, cooldown_until, last_updated, headers) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
+    INSERT_CHANNEL: `INSERT INTO channels (id, name, key, provider, api_key, base_url, weight, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
+    INSERT_MODEL: `INSERT INTO channel_models (id, channel_id, code, name, desc, aliases, call_type, capabilities, input_cost, output_cost, status, weight, avg_latency_ms, success_rate, error_rate, consecutive_failures, cooldown_until, last_updated, headers) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)`,
     SELECT_CHANNEL_BY_ID: `SELECT * FROM channels WHERE id = ?1`,
     SELECT_CHANNEL_BY_KEY: `SELECT * FROM channels WHERE key = ?1`,
     SELECT_MODELS_BY_CHANNEL_ID: `SELECT * FROM channel_models WHERE channel_id = ?1`,
@@ -179,11 +180,11 @@ const CONSTANTS = {
     SELECT_CHANNELS_PAGED: `SELECT * FROM channels ORDER BY created_at DESC LIMIT ?1 OFFSET ?2`,
     SELECT_MODEL_BY_ID: `SELECT * FROM channel_models WHERE id = ?1`,
     DELETE_MODEL: `DELETE FROM channel_models WHERE id = ?1`,
-    INSERT_LOG: `INSERT INTO request_logs (id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message, latency_ms, input_tokens, output_tokens, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)`,
+    INSERT_LOG: `INSERT INTO request_logs (id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message, latency_ms, input_tokens, output_tokens, input_cost, output_cost, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
     SELECT_LOGS_BASE: `SELECT * FROM request_logs`,
     COUNT_LOGS_BASE: `SELECT COUNT(*) as total FROM request_logs`,
     SELECT_STATUS_BASE: `SELECT cm.*, c.name as channel_name FROM channel_models cm JOIN channels c ON cm.channel_id = c.id`,
-    SELECT_MODELS_BY_IDENTIFIER_BASE: `SELECT cm.*, c.id as ch_id, c.name as ch_name, c.key as ch_key, c.provider, c.api_key, c.base_url FROM channel_models cm JOIN channels c ON cm.channel_id = c.id WHERE (cm.code = ?1 OR cm.aliases LIKE ?2) AND cm.status != ?3 AND (cm.cooldown_until IS NULL OR cm.cooldown_until < ?4)`,
+    SELECT_MODELS_BY_IDENTIFIER_BASE: `SELECT cm.*, c.id as ch_id, c.name as ch_name, c.key as ch_key, c.provider, c.api_key, c.base_url, c.weight as ch_weight FROM channel_models cm JOIN channels c ON cm.channel_id = c.id WHERE (cm.code = ?1 OR cm.aliases LIKE ?2) AND cm.status != ?3 AND (cm.cooldown_until IS NULL OR cm.cooldown_until < ?4)`,
     UPDATE_MODEL_STATS_BASE: `UPDATE channel_models SET `,
     UPDATE_CHANNEL_BASE: `UPDATE channels SET `,
     UPDATE_MODEL_BASE: `UPDATE channel_models SET `,
@@ -196,6 +197,7 @@ const CONSTANTS = {
         provider TEXT NOT NULL DEFAULT 'openai',
         api_key TEXT NOT NULL,
         base_url TEXT DEFAULT '',
+        weight REAL NOT NULL DEFAULT 1.0,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         updated_at TEXT NOT NULL DEFAULT (datetime('now'))
       )`,
@@ -208,7 +210,8 @@ const CONSTANTS = {
         aliases TEXT DEFAULT '[]',
         call_type TEXT NOT NULL DEFAULT 'chat',
         capabilities TEXT DEFAULT '["chat"]',
-        cost TEXT DEFAULT '',
+        input_cost TEXT DEFAULT '0',
+        output_cost TEXT DEFAULT '0',
         status TEXT NOT NULL DEFAULT 'active',
         weight REAL NOT NULL DEFAULT 1.0,
         avg_latency_ms REAL NOT NULL DEFAULT 0.0,
@@ -233,6 +236,8 @@ const CONSTANTS = {
         latency_ms INTEGER NOT NULL DEFAULT 0,
         input_tokens INTEGER DEFAULT 0,
         output_tokens INTEGER DEFAULT 0,
+        input_cost TEXT DEFAULT '0',
+        output_cost TEXT DEFAULT '0',
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       )`,
       CREATE_INDEX_CHANNEL_MODELS_CHANNEL_ID: `CREATE INDEX IF NOT EXISTS idx_channel_models_channel_id ON channel_models(channel_id)`,
@@ -315,6 +320,7 @@ const SCHEMAS = (() => {
     provider: ProviderEnum.default(PROVIDERS.OPENAI),
     apiKey: z.string(),
     baseURL: z.string().url().or(z.literal('')).default(''),
+    weight: z.number().min(0).max(100).default(1.0),
     models: z
       .array(
         z.object({
@@ -324,7 +330,8 @@ const SCHEMAS = (() => {
           aliases: z.array(z.string()).default([]),
           callType: CallTypeEnum.default(CALL_TYPES.CHAT),
           capabilities: z.array(z.string()).default([CALL_TYPES.CHAT]),
-          cost: z.string().default(''),
+          inputCost: z.string().default('0'),
+          outputCost: z.string().default('0'),
           weight: z.number().min(0).max(100).default(1.0),
           headers: z.record(z.string()).default({}),
         }),
@@ -342,7 +349,8 @@ const SCHEMAS = (() => {
       aliases: z.array(z.string()).optional(),
       callType: CallTypeEnum.optional(),
       capabilities: z.array(z.string()).optional(),
-      cost: z.string().optional(),
+      inputCost: z.string().optional(),
+      outputCost: z.string().optional(),
       status: z.enum([MODEL_STATUS.ACTIVE, MODEL_STATUS.OPEN, MODEL_STATUS.DISABLE]).optional(),
       weight: z.number().min(0).max(100).optional(),
       headers: z.record(z.string()).optional(),
@@ -547,6 +555,35 @@ function safeJsonParse(value, fallback) {
   }
 }
 
+function normalizeCostValue(value) {
+  if (value === undefined || value === null) return '0';
+  const normalized = String(value).trim();
+  return normalized.length > 0 ? normalized : '0';
+}
+
+function formatCostNumber(value) {
+  if (!Number.isFinite(value) || value <= 0) return '0';
+  return value.toFixed(12).replace(/\.?0+$/, '');
+}
+
+function calculateRequestCost(configCost, usageCount) {
+  const normalizedCost = normalizeCostValue(configCost);
+  if (normalizedCost === '0') return '0';
+  const normalizedUsage = Number(usageCount || 0);
+  const match = normalizedCost.match(/^([0-9]+(?:\.[0-9]+)?)\s*(\/[a-zA-Z]+)$/);
+  if (!match) return '0';
+  const price = Number(match[1]);
+  const unit = match[2].toLowerCase();
+  if (!Number.isFinite(price) || price <= 0) return '0';
+  if (unit === '/m') {
+    return formatCostNumber((Math.max(0, normalizedUsage) / 1_000_000) * price);
+  }
+  if (unit === '/req') {
+    return formatCostNumber(price);
+  }
+  return '0';
+}
+
 function getProviderOptions(payload) {
   const value = payload?.extra_body;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -567,8 +604,10 @@ function pruneUndefined(input) {
 }
 
 function calculateModelScore(modelRow) {
+  const channelWeight = modelRow.ch_weight ?? 1;
   return (
     modelRow.weight * SCORE_WEIGHTS.WEIGHT_FACTOR +
+    channelWeight * SCORE_WEIGHTS.CHANNEL_WEIGHT_FACTOR +
     modelRow.success_rate * SCORE_WEIGHTS.SUCCESS_RATE_FACTOR -
     modelRow.avg_latency_ms * SCORE_WEIGHTS.LATENCY_PENALTY -
     modelRow.consecutive_failures * SCORE_WEIGHTS.FAILURE_PENALTY
@@ -610,6 +649,74 @@ async function initializeDatabase(env) {
   for (const statement of statements) {
     await env.DB.prepare(statement).run();
   }
+
+  // ------------------- 数据迁移 START ------------------
+
+  const runMigrationIfColumnMissing = async (tableName, columnName, alterSql) => {
+    const pragmaSql = `PRAGMA table_info(${tableName})`;
+    const { results } = await env.DB.prepare(pragmaSql).all();
+    const columnExists = (results || []).some((column) => column.name === columnName);
+    if (!columnExists) {
+      await env.DB.prepare(alterSql).run();
+    }
+  };
+
+  await runMigrationIfColumnMissing(
+    'channels',
+    'weight',
+    `ALTER TABLE channels ADD COLUMN weight REAL NOT NULL DEFAULT 1.0`,
+  );
+
+  await runMigrationIfColumnMissing(
+    'channel_models',
+    'input_cost',
+    `ALTER TABLE channel_models ADD COLUMN input_cost TEXT DEFAULT '0'`,
+  );
+  await runMigrationIfColumnMissing(
+    'channel_models',
+    'output_cost',
+    `ALTER TABLE channel_models ADD COLUMN output_cost TEXT DEFAULT '0'`,
+  );
+
+  // 将历史 cost 平滑迁移到 input_cost/output_cost；已迁移数据不会被覆盖。
+  await env.DB
+    .prepare(
+      `UPDATE channel_models
+       SET input_cost = CASE
+             WHEN (input_cost IS NULL OR input_cost = '' OR input_cost = '0')
+                  AND cost IS NOT NULL
+                  AND cost != ''
+               THEN cost
+             ELSE COALESCE(input_cost, '0')
+           END,
+           output_cost = CASE
+             WHEN (output_cost IS NULL OR output_cost = '' OR output_cost = '0')
+                  AND cost IS NOT NULL
+                  AND cost != ''
+               THEN cost
+             ELSE COALESCE(output_cost, '0')
+           END
+       WHERE cost IS NOT NULL
+         AND cost != ''
+         AND (
+           input_cost IS NULL OR input_cost = '' OR input_cost = '0' OR
+           output_cost IS NULL OR output_cost = '' OR output_cost = '0'
+         )`,
+    )
+    .run();
+
+  await runMigrationIfColumnMissing(
+    'request_logs',
+    'input_cost',
+    `ALTER TABLE request_logs ADD COLUMN input_cost TEXT DEFAULT '0'`,
+  );
+  await runMigrationIfColumnMissing(
+    'request_logs',
+    'output_cost',
+    `ALTER TABLE request_logs ADD COLUMN output_cost TEXT DEFAULT '0'`,
+  );
+
+  // ------------------- 数据迁移 END ------------------
 
   env.__dbInitialized = true;
 }
@@ -1040,6 +1147,8 @@ function createApp(deps = {}) {
         entry.latency_ms,
         entry.input_tokens,
         entry.output_tokens,
+        entry.input_cost ?? '0',
+        entry.output_cost ?? '0',
         createdAt,
       )
       .run();
@@ -1169,6 +1278,8 @@ function createApp(deps = {}) {
                 latency_ms: latencyMs,
                 input_tokens: 0,
                 output_tokens: 0,
+                input_cost: selection.model.input_cost ?? '0',
+                output_cost: selection.model.output_cost ?? '0',
               },
               env,
             ),
@@ -1212,6 +1323,8 @@ function createApp(deps = {}) {
                 latency_ms: latencyMs,
                 input_tokens: event.usage?.promptTokens || 0,
                 output_tokens: event.usage?.completionTokens || 0,
+                input_cost: calculateRequestCost(selection.model.input_cost, event.usage?.promptTokens || 0),
+                output_cost: calculateRequestCost(selection.model.output_cost, event.usage?.completionTokens || 0),
               },
               env,
             ),
@@ -1239,6 +1352,9 @@ function createApp(deps = {}) {
 
         const result = await executeAIRequest(aiModel, selection.model.call_type, body);
         const latencyMs = nowFn().getTime() - startTime;
+        const inputCost = calculateRequestCost(selection.model.input_cost, result.usage?.promptTokens || 0);
+        const outputCost = calculateRequestCost(selection.model.output_cost, result.usage?.completionTokens || 0);
+        console.info(`input:${selection.model.input_cost}, ${result.usage?.promptTokens || 0} ${inputCost}, output: ${selection.model.output_cost}, ${result.usage?.completionTokens || 0} ${outputCost}`);
 
         waitUntil(recordSuccess(selection.model.id, latencyMs, env));
         waitUntil(
@@ -1255,6 +1371,8 @@ function createApp(deps = {}) {
               latency_ms: latencyMs,
               input_tokens: result.usage?.promptTokens || 0,
               output_tokens: result.usage?.completionTokens || 0,
+              input_cost: calculateRequestCost(selection.model.input_cost, result.usage?.promptTokens || 0),
+              output_cost: calculateRequestCost(selection.model.output_cost, result.usage?.completionTokens || 0),
             },
             env,
           ),
@@ -1280,6 +1398,8 @@ function createApp(deps = {}) {
               latency_ms: latencyMs,
               input_tokens: 0,
               output_tokens: 0,
+              input_cost: selection.model.input_cost ?? '0',
+              output_cost: selection.model.output_cost ?? '0',
             },
             env,
           ),
@@ -1335,7 +1455,7 @@ function createApp(deps = {}) {
 
     await env.DB
       .prepare(SQL.INSERT_CHANNEL)
-      .bind(channelId, parsed.name, parsed.key, parsed.provider, parsed.apiKey, parsed.baseURL, timestamp, timestamp)
+      .bind(channelId, parsed.name, parsed.key, parsed.provider, parsed.apiKey, parsed.baseURL, parsed.weight, timestamp, timestamp)
       .run();
 
     for (const model of parsed.models) {
@@ -1351,7 +1471,8 @@ function createApp(deps = {}) {
           JSON.stringify(model.aliases || []),
           model.callType,
           JSON.stringify(model.capabilities || []),
-          model.cost,
+          model.inputCost,
+          model.outputCost,
           MODEL_STATUS.ACTIVE,
           model.weight,
           0,
@@ -1405,6 +1526,7 @@ function createApp(deps = {}) {
     if (parsed.provider) pushUpdate('provider', parsed.provider);
     if (parsed.apiKey) pushUpdate('api_key', parsed.apiKey);
     if (parsed.baseURL !== undefined) pushUpdate('base_url', parsed.baseURL);
+    if (parsed.weight !== undefined) pushUpdate('weight', parsed.weight);
 
     pushUpdate('updated_at', nowIso(nowFn));
 
@@ -1429,7 +1551,8 @@ function createApp(deps = {}) {
             JSON.stringify(model.aliases || []),
             model.callType || CALL_TYPES.CHAT,
             JSON.stringify(model.capabilities || []),
-            model.cost || '',
+            model.inputCost ?? '0',
+            model.outputCost ?? '0',
             MODEL_STATUS.ACTIVE,
             model.weight ?? 1,
             0,
@@ -1518,7 +1641,8 @@ function createApp(deps = {}) {
     if (parsed.aliases) pushUpdate('aliases', JSON.stringify(parsed.aliases));
     if (parsed.callType) pushUpdate('call_type', parsed.callType);
     if (parsed.capabilities) pushUpdate('capabilities', JSON.stringify(parsed.capabilities));
-    if (parsed.cost !== undefined) pushUpdate('cost', parsed.cost);
+    if (parsed.inputCost !== undefined) pushUpdate('input_cost', parsed.inputCost);
+    if (parsed.outputCost !== undefined) pushUpdate('output_cost', parsed.outputCost);
     if (parsed.status) pushUpdate('status', parsed.status);
     if (parsed.weight !== undefined) pushUpdate('weight', parsed.weight);
     if (parsed.headers) pushUpdate('headers', JSON.stringify(parsed.headers));

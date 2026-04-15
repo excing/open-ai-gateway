@@ -1,4 +1,4 @@
-import { downloadFile } from "./media-utils";
+import { downloadFile } from './media-utils.js';
 
 const EXACG_PROVIDER_NAME = 'exacg';
 const EXACG_DEFAULT_BASE_URL = 'https://sd.exacg.cc/api/v1';

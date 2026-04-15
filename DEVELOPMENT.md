@@ -109,6 +109,7 @@ graph LR
 | `provider` | TEXT | NOT NULL, DEFAULT 'openai' | AI 平台标识。取值：`openai`/`openai-compatible`、`google`/`gemini`、`anthropic`/`claude`、`openrouter`、`pollinations`、`exacg`、`microsoft-tts`。同一平台的别名等价（如 `google` 与 `gemini` 行为一致）。决定使用哪个 Vercel AI SDK provider 创建函数 |
 | `api_key` | TEXT | NOT NULL | 该渠道对应平台的 API 密钥，用于鉴权请求。部分 provider（如 pollinations）可为空字符串；`exacg` 必须提供有效 API Key |
 | `base_url` | TEXT | DEFAULT '' | 自定义 API 基础地址，为空时使用 SDK 默认地址 |
+| `weight` | REAL | NOT NULL, DEFAULT 1.0 | 渠道权重，取值范围 `[0.0, 100.0]`，默认 `1.0`。该值参与模型选择评分排序，值越高越优先 |
 | `created_at` | TEXT | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 创建时间，ISO 8601 格式 |
 | `updated_at` | TEXT | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 最后更新时间，ISO 8601 格式 |
 
@@ -120,6 +121,7 @@ CREATE TABLE channels (
     provider TEXT NOT NULL DEFAULT 'openai',
     api_key TEXT NOT NULL,
     base_url TEXT DEFAULT '',
+    weight REAL NOT NULL DEFAULT 1.0,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -137,7 +139,8 @@ CREATE TABLE channels (
 | `aliases` | TEXT | DEFAULT '[]' | JSON 数组字符串，模型别名列表，如 `["gpt4o","gpt-4-omni"]`。用户请求中的 model 字段若匹配任一别名，等同于请求该模型 |
 | `call_type` | TEXT | NOT NULL, DEFAULT 'chat' | 请求该模型时需要调用的接口类型。取值范围见 `CALL_TYPES` 常量。决定使用 AI SDK 的哪个函数（generateText/streamText/generateImage 等） |
 | `capabilities` | TEXT | DEFAULT '["chat"]' | JSON 数组字符串，该模型支持的能力列表。取值范围见 `MODEL_CAPABILITIES` 常量。用于模型列表展示和能力过滤 |
-| `cost` | TEXT | DEFAULT '' | 成本描述字符串。格式为 `数值+单位`，如 "0.5/M"（每百万 token $0.5）、"0.02/img"（每张图 $0.02）、"0.006/sec"（每秒 $0.006）、"1/req"（每次请求 $1） |
+| `input_cost` | TEXT | DEFAULT '0' | 模型输入成本。格式为 `数值+单位`（如 `0.5/M`），值为 `'0'` 表示输入免费 |
+| `output_cost` | TEXT | DEFAULT '0' | 模型输出成本。格式为 `数值+单位`（如 `2.0/M`），值为 `'0'` 表示输出免费 |
 | `status` | TEXT | NOT NULL, DEFAULT 'active' | 模型状态。`active`=正常参与调度；`open`=熔断器开启，冷却期中不参与调度；`disable`=管理员手动禁用，不参与调度 |
 | `weight` | REAL | NOT NULL, DEFAULT 1.0 | 路由权重，值越大被选中概率越高。取值范围 `[0.0, 100.0]`，默认 1.0。设为 0 等效于禁用 |
 | `avg_latency_ms` | REAL | NOT NULL, DEFAULT 0.0 | 近期平均响应时间（毫秒），由系统自动计算更新。值越大被选中概率越小。初始为 0 表示无历史数据 |
@@ -158,7 +161,8 @@ CREATE TABLE channel_models (
     aliases TEXT DEFAULT '[]',
     call_type TEXT NOT NULL DEFAULT 'chat',
     capabilities TEXT DEFAULT '["chat"]',
-    cost TEXT DEFAULT '',
+    input_cost TEXT DEFAULT '0',
+    output_cost TEXT DEFAULT '0',
     status TEXT NOT NULL DEFAULT 'active',
     weight REAL NOT NULL DEFAULT 1.0,
     avg_latency_ms REAL NOT NULL DEFAULT 0.0,
@@ -192,6 +196,8 @@ CREATE INDEX idx_channel_models_call_type ON channel_models(call_type);
 | `latency_ms` | INTEGER | NOT NULL, DEFAULT 0 | 请求耗时（毫秒），从发起 AI 请求到收到响应/第一个 chunk 的时间 |
 | `input_tokens` | INTEGER | DEFAULT 0 | 输入 token 数量（仅 chat/embedding 类型有效） |
 | `output_tokens` | INTEGER | DEFAULT 0 | 输出 token 数量（仅 chat 类型有效） |
+| `input_cost` | TEXT | DEFAULT '0' | 本次请求真实输入成本（由 `channel_models.input_cost` 与本次 `input_tokens` 计算得到）。示例：配置 `10/M` 且 `input_tokens=100000`，则记录 `1` |
+| `output_cost` | TEXT | DEFAULT '0' | 本次请求真实输出成本（由 `channel_models.output_cost` 与本次 `output_tokens` 计算得到）。示例：配置 `10/M` 且 `output_tokens=100000`，则记录 `1` |
 | `created_at` | TEXT | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 请求发生时间 |
 
 ```sql
@@ -208,6 +214,8 @@ CREATE TABLE request_logs (
     latency_ms INTEGER NOT NULL DEFAULT 0,
     input_tokens INTEGER DEFAULT 0,
     output_tokens INTEGER DEFAULT 0,
+    input_cost TEXT DEFAULT '0',
+    output_cost TEXT DEFAULT '0',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX idx_request_logs_created_at ON request_logs(created_at);
@@ -274,6 +282,7 @@ interface ChannelRow {
     provider: Provider;
     api_key: string;
     base_url: string;
+    weight: number;
     created_at: string;
     updated_at: string;
 }
@@ -288,7 +297,8 @@ interface ChannelModelRow {
     aliases: string;          // JSON 字符串，运行时解析为 string[]
     call_type: CallType;
     capabilities: string;     // JSON 字符串，运行时解析为 ModelCapability[]
-    cost: string;
+    input_cost: string;
+    output_cost: string;
     status: ModelStatus;
     weight: number;
     avg_latency_ms: number;
@@ -314,6 +324,8 @@ interface RequestLogRow {
     latency_ms: number;
     input_tokens: number;
     output_tokens: number;
+    input_cost: string;
+    output_cost: string;
     created_at: string;
 }
 
@@ -504,6 +516,7 @@ const CreateChannelSchema = z.object({
     provider: z.enum(['openai', 'openai-compatible', 'google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations', 'exacg', 'microsoft-tts']).default('openai'),
     apiKey: z.string(),                                   // API 密钥
     baseURL: z.string().url().or(z.literal('')).default(''), // 自定义基础地址
+    weight: z.number().min(0).max(100).default(1.0),      // 渠道权重
     models: z.array(z.object({
         code: z.string().min(1),                          // 模型代码
         name: z.string().min(1),                          // 模型显示名称
@@ -511,7 +524,8 @@ const CreateChannelSchema = z.object({
         aliases: z.array(z.string()).default([]),          // 模型别名列表
         callType: z.enum(['chat', 'image_gen', 'audio_gen', 'video_gen', 'transcribe', 'embedding']).default('chat'),
         capabilities: z.array(z.string()).default(['chat']),
-        cost: z.string().default(''),
+        inputCost: z.string().default('0'),
+        outputCost: z.string().default('0'),
         weight: z.number().min(0).max(100).default(1.0),
         headers: z.record(z.string()).default({}),
     })).default([]),
@@ -528,7 +542,8 @@ const UpdateModelSchema = z.object({
     aliases: z.array(z.string()).optional(),
     callType: z.enum(['chat', 'image_gen', 'audio_gen', 'video_gen', 'transcribe', 'embedding']).optional(),
     capabilities: z.array(z.string()).optional(),
-    cost: z.string().optional(),
+    inputCost: z.string().optional(),
+    outputCost: z.string().optional(),
     status: z.enum(['active', 'open', 'disable']).optional(),
     weight: z.number().min(0).max(100).optional(),
     headers: z.record(z.string()).optional(),
@@ -932,7 +947,7 @@ async function selectModels(
 
 /**
  * 计算单个模型的调度评分
- * 评分公式：score = weight * WEIGHT_FACTOR + successRate * SUCCESS_RATE_FACTOR
+* 评分公式：score = modelWeight * WEIGHT_FACTOR + channelWeight * CHANNEL_WEIGHT_FACTOR + successRate * SUCCESS_RATE_FACTOR
  *                    - avgLatencyMs * LATENCY_PENALTY - consecutiveFailures * FAILURE_PENALTY
  * 评分下限为 0.01（确保每个可用模型都有非零概率被选中）
  *
@@ -1363,6 +1378,7 @@ data: [DONE]
     "provider": "openai",
     "apiKey": "sk-xxx",
     "baseURL": "",
+    "weight": 1.5,
     "models": [
         {
             "code": "gpt-4o",
@@ -1371,7 +1387,8 @@ data: [DONE]
             "aliases": ["gpt4o", "gpt-4-omni"],
             "callType": "chat",
             "capabilities": ["chat", "image_in"],
-            "cost": "2.5/M",
+            "inputCost": "0",
+            "outputCost": "2.5/M",
             "weight": 1.0,
             "headers": {}
         }
@@ -1390,6 +1407,7 @@ data: [DONE]
         "provider": "openai",
         "api_key": "sk-xxx",
         "base_url": "",
+        "weight": 1.5,
         "created_at": "2026-04-08T00:00:00Z",
         "updated_at": "2026-04-08T00:00:00Z",
         "models": [{ "id": "uuid-yyy", "code": "gpt-4o", ... }]
@@ -1468,6 +1486,8 @@ data: [DONE]
             "latency_ms": 1200,
             "input_tokens": 100,
             "output_tokens": 50,
+            "input_cost": "0",
+            "output_cost": "2.5/M",
             "created_at": "2026-04-08T00:00:00Z"
         }
     ],
