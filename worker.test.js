@@ -1320,13 +1320,29 @@ describe('Pollinations: 仅图片与视频生成', () => {
 describe('Exacg: 仅图片生成', () => {
   let app;
   let mockEnv;
+  let originalFetch;
 
   beforeEach(() => {
     mockEnv = createMockEnv();
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      const target = typeof input === 'string' ? input : input?.url || input?.toString?.() || '';
+      if (String(target).includes('https://example.com/image.jpg')) {
+        return new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { 'content-type': 'image/jpeg' },
+        });
+      }
+      if (typeof originalFetch === 'function') {
+        return originalFetch(input, init);
+      }
+      return new Response('not found', { status: 404 });
+    };
   });
 
   afterEach(() => {
     mockEnv._clear();
+    globalThis.fetch = originalFetch;
   });
 
   it('exacg 的 image_gen 模型检测应成功', async () => {
@@ -1348,12 +1364,6 @@ describe('Exacg: 仅图片生成', () => {
           }), {
             status: 200,
             headers: { 'content-type': 'application/json' },
-          });
-        }
-        if (target.includes('https://example.com/image.jpg')) {
-          return new Response(new Uint8Array([1, 2, 3]), {
-            status: 200,
-            headers: { 'content-type': 'image/jpeg' },
           });
         }
         return new Response('not found', { status: 404 });
@@ -1401,12 +1411,6 @@ describe('Exacg: 仅图片生成', () => {
           }), {
             status: 200,
             headers: { 'content-type': 'application/json' },
-          });
-        }
-        if (target.includes('https://example.com/image.jpg')) {
-          return new Response(new Uint8Array([1, 2, 3]), {
-            status: 200,
-            headers: { 'content-type': 'image/jpeg' },
           });
         }
         return new Response('not found', { status: 404 });
@@ -2300,8 +2304,8 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
   });
 });
 
-describe('自动迁移: initializeDatabase', () => {
-  it('应在缺失列时自动补列并执行 cost 回填 SQL', async () => {
+describe('数据库初始化: initializeDatabase', () => {
+  it('应执行最终表结构与索引DDL', async () => {
     const executedSql = [];
     const env = {
       DB: {
@@ -2314,30 +2318,38 @@ describe('自动迁移: initializeDatabase', () => {
             executedSql.push(sql);
             return { success: true };
           },
-          all: async function () {
-            executedSql.push(sql);
-            if (String(sql).includes('PRAGMA table_info(channels)')) {
-              return { results: [{ name: 'id' }, { name: 'name' }] };
-            }
-            if (String(sql).includes('PRAGMA table_info(channel_models)')) {
-              return { results: [{ name: 'id' }, { name: 'cost' }] };
-            }
-            if (String(sql).includes('PRAGMA table_info(request_logs)')) {
-              return { results: [{ name: 'id' }, { name: 'status' }] };
-            }
-            return { results: [] };
-          },
         }),
       },
     };
 
     await createApp().initializeDatabase(env);
 
-    assert.ok(executedSql.some((sql) => String(sql).includes('ALTER TABLE channels ADD COLUMN weight')));
-    assert.ok(executedSql.some((sql) => String(sql).includes('ALTER TABLE channel_models ADD COLUMN input_cost')));
-    assert.ok(executedSql.some((sql) => String(sql).includes('ALTER TABLE channel_models ADD COLUMN output_cost')));
-    assert.ok(executedSql.some((sql) => String(sql).includes('ALTER TABLE request_logs ADD COLUMN input_cost')));
-    assert.ok(executedSql.some((sql) => String(sql).includes('ALTER TABLE request_logs ADD COLUMN output_cost')));
-    assert.ok(executedSql.some((sql) => String(sql).includes('UPDATE channel_models') && String(sql).includes('COALESCE(NULLIF(cost')));
+    assert.ok(executedSql.some((sql) => String(sql).includes('CREATE TABLE IF NOT EXISTS channels')));
+    assert.ok(executedSql.some((sql) => String(sql).includes('CREATE TABLE IF NOT EXISTS channel_models')));
+    assert.ok(executedSql.some((sql) => String(sql).includes('CREATE TABLE IF NOT EXISTS request_logs')));
+    assert.ok(executedSql.some((sql) => String(sql).includes('CREATE INDEX IF NOT EXISTS idx_channel_models_channel_id')));
+    assert.ok(executedSql.some((sql) => String(sql).includes('CREATE INDEX IF NOT EXISTS idx_request_logs_created_at')));
+    assert.strictEqual(env.__dbInitialized, true);
+  });
+
+  it('应在已初始化后跳过重复DDL执行', async () => {
+    const executedSql = [];
+    const env = {
+      DB: {
+        prepare: (sql) => ({
+          run: async function () {
+            executedSql.push(sql);
+            return { success: true };
+          },
+        }),
+      },
+    };
+
+    const app = createApp();
+    await app.initializeDatabase(env);
+    const firstRunCount = executedSql.length;
+
+    await app.initializeDatabase(env);
+    assert.strictEqual(executedSql.length, firstRunCount);
   });
 });
