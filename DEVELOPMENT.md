@@ -196,8 +196,11 @@ CREATE INDEX idx_channel_models_call_type ON channel_models(call_type);
 | `latency_ms` | INTEGER | NOT NULL, DEFAULT 0 | 请求耗时（毫秒），从发起 AI 请求到收到响应/第一个 chunk 的时间 |
 | `input_tokens` | INTEGER | DEFAULT 0 | 输入 token 数量（仅 chat/embedding 类型有效） |
 | `output_tokens` | INTEGER | DEFAULT 0 | 输出 token 数量（仅 chat 类型有效） |
+| `input_price` | TEXT | DEFAULT '0' | 请求发生时模型输入单价快照，格式与 `channel_models.input_cost` 一致（如 `5/M`、`2/req`、`0`） |
+| `output_price` | TEXT | DEFAULT '0' | 请求发生时模型输出单价快照，格式与 `channel_models.output_cost` 一致（如 `10/M`、`0`） |
 | `input_cost` | INTEGER | DEFAULT 0 | 本次请求真实输入成本（整数最小单位，缩放系数 `COST_SCALE_FACTOR=1_000_000_000`）。示例：真实成本 `0.5` 记录为 `500000000` |
 | `output_cost` | INTEGER | DEFAULT 0 | 本次请求真实输出成本（整数最小单位，缩放系数 `COST_SCALE_FACTOR=1_000_000_000`）。示例：真实成本 `0.0000084` 记录为 `8400` |
+| `total_cost` | INTEGER | DEFAULT 0 | 本次请求总花费，等于 `input_cost + output_cost`，同样使用最小成本单位整数 |
 | `created_at` | TEXT | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 请求发生时间 |
 
 ```sql
@@ -214,8 +217,11 @@ CREATE TABLE request_logs (
     latency_ms INTEGER NOT NULL DEFAULT 0,
     input_tokens INTEGER DEFAULT 0,
     output_tokens INTEGER DEFAULT 0,
+    input_price TEXT DEFAULT '0',
+    output_price TEXT DEFAULT '0',
     input_cost INTEGER DEFAULT 0,
     output_cost INTEGER DEFAULT 0,
+    total_cost INTEGER DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX idx_request_logs_created_at ON request_logs(created_at);
@@ -324,12 +330,16 @@ interface RequestLogRow {
     latency_ms: number;
     input_tokens: number;
     output_tokens: number;
+    input_price: string;
+    output_price: string;
     input_cost: number;
     output_cost: number;
+    total_cost: number;
     created_at: string;
 }
 
-// input_cost/output_cost: 最小成本单位整数，缩放系数固定为 COST_SCALE_FACTOR=1_000_000_000
+// input_price/output_price: 请求发生时模型单价快照，避免模型后续调价导致历史日志失真
+// input_cost/output_cost/total_cost: 最小成本单位整数，缩放系数固定为 COST_SCALE_FACTOR=1_000_000_000
 
 /** 模型可用性检测结果 */
 interface ModelCheckResult {
@@ -1130,6 +1140,22 @@ function formatAIResponse(result: AIRequestResult, callType: CallType, modelCode
  * @param env - 环境变量
  */
 async function writeLog(log: Omit<RequestLogRow, 'id' | 'created_at'>, env: Env): Promise<void>;
+
+/**
+ * 构建日志价格快照与成本字段（原子化封装，避免各调用路径重复计算）
+ *
+ * @param inputPriceConfig - 模型输入单价配置（如 '5/M'、'2/req'、'0'）
+ * @param outputPriceConfig - 模型输出单价配置（如 '10/M'、'0'）
+ * @param inputTokens - 本次请求输入 token 数
+ * @param outputTokens - 本次请求输出 token 数
+ * @returns 日志价格快照与成本：input_price/output_price/input_cost/output_cost/total_cost
+ */
+function buildLogCostSnapshot(
+  inputPriceConfig: string | undefined,
+  outputPriceConfig: string | undefined,
+  inputTokens: number,
+  outputTokens: number
+): Pick<RequestLogRow, 'input_price' | 'output_price' | 'input_cost' | 'output_cost' | 'total_cost'>;
 ```
 
 ### 7.11 工具函数
@@ -1488,8 +1514,11 @@ data: [DONE]
             "latency_ms": 1200,
             "input_tokens": 100,
             "output_tokens": 50,
+            "input_price": "0",
+            "output_price": "50/M",
             "input_cost": 0,
             "output_cost": 2500000000,
+            "total_cost": 2500000000,
             "created_at": "2026-04-08T00:00:00Z"
         }
     ],

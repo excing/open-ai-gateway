@@ -615,7 +615,13 @@
                       <p class="text-base font-semibold text-[var(--text)]">{{ log.model_code }} · {{ log.status }}</p>
                       <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">{{ log.error_message || '无错误' }}</p>
                       <p class="mt-2 text-xs text-[var(--text-soft)]">
-                        输入成本: {{ actions.formatCostDisplay(log.input_cost) }} · 输出成本: {{ actions.formatCostDisplay(log.output_cost) }}
+                        输入 Token: {{ actions.formatTokenDisplay(log.input_tokens) }} · 输出 Token: {{ actions.formatTokenDisplay(log.output_tokens) }} · 总 Token: {{ actions.formatTokenDisplay((Number(log.input_tokens || 0) + Number(log.output_tokens || 0))) }}
+                      </p>
+                      <p class="mt-2 text-xs text-[var(--text-soft)]">
+                        输入单价: {{ actions.formatPriceDisplay(log.input_price) }} · 输出单价: {{ actions.formatPriceDisplay(log.output_price) }}
+                      </p>
+                      <p class="mt-1 text-xs text-[var(--text-soft)]">
+                        输入花费: {{ actions.formatCostDisplay(log.input_cost) }} · 输出花费: {{ actions.formatCostDisplay(log.output_cost) }} · 总花费: {{ actions.formatCostDisplay(log.total_cost) }}
                       </p>
                     </div>
                     <span class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">{{ log.created_at }}</span>
@@ -1013,6 +1019,15 @@
 
           const actions = {
             parseStoredJsonArray,
+            formatTokenDisplay: (rawValue) => {
+              const numericValue = Number(rawValue ?? 0);
+              if (!Number.isFinite(numericValue) || numericValue <= 0) return '0';
+              return String(Math.round(numericValue));
+            },
+            formatPriceDisplay: (rawValue) => {
+              const normalized = String(rawValue ?? '').trim();
+              return normalized.length > 0 ? normalized : '0';
+            },
             formatCostDisplay: (rawValue) => {
               const scaledValue = Number(rawValue ?? 0);
               if (!Number.isFinite(scaledValue) || scaledValue <= 0) return '0';

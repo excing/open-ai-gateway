@@ -181,7 +181,7 @@ const CONSTANTS = {
     SELECT_CHANNELS_PAGED: `SELECT * FROM channels ORDER BY created_at DESC LIMIT ?1 OFFSET ?2`,
     SELECT_MODEL_BY_ID: `SELECT * FROM channel_models WHERE id = ?1`,
     DELETE_MODEL: `DELETE FROM channel_models WHERE id = ?1`,
-    INSERT_LOG: `INSERT INTO request_logs (id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message, latency_ms, input_tokens, output_tokens, input_cost, output_cost, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)`,
+    INSERT_LOG: `INSERT INTO request_logs (id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message, latency_ms, input_tokens, output_tokens, input_price, output_price, input_cost, output_cost, total_cost, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
     SELECT_LOGS_BASE: `SELECT * FROM request_logs`,
     COUNT_LOGS_BASE: `SELECT COUNT(*) as total FROM request_logs`,
     SELECT_STATUS_BASE: `SELECT cm.*, c.name as channel_name FROM channel_models cm JOIN channels c ON cm.channel_id = c.id`,
@@ -237,8 +237,11 @@ const CONSTANTS = {
         latency_ms INTEGER NOT NULL DEFAULT 0,
         input_tokens INTEGER DEFAULT 0,
         output_tokens INTEGER DEFAULT 0,
+        input_price TEXT DEFAULT '0',
+        output_price TEXT DEFAULT '0',
         input_cost INTEGER DEFAULT 0,
         output_cost INTEGER DEFAULT 0,
+        total_cost INTEGER DEFAULT 0,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       )`,
       CREATE_INDEX_CHANNEL_MODELS_CHANNEL_ID: `CREATE INDEX IF NOT EXISTS idx_channel_models_channel_id ON channel_models(channel_id)`,
@@ -598,6 +601,20 @@ function calculateRequestCost(configCost, usageCount) {
   return 0;
 }
 
+function buildLogCostSnapshot(inputPriceConfig, outputPriceConfig, inputTokens, outputTokens) {
+  const inputPrice = normalizeCostValue(inputPriceConfig);
+  const outputPrice = normalizeCostValue(outputPriceConfig);
+  const inputCost = calculateRequestCost(inputPrice, inputTokens);
+  const outputCost = calculateRequestCost(outputPrice, outputTokens);
+  return {
+    input_price: inputPrice,
+    output_price: outputPrice,
+    input_cost: inputCost,
+    output_cost: outputCost,
+    total_cost: inputCost + outputCost,
+  };
+}
+
 function getProviderOptions(payload) {
   const value = payload?.extra_body;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -678,20 +695,46 @@ async function migrateRequestLogsCostColumnsToInteger(env) {
 
   const inputCostType = String(columns.find((column) => column.name === 'input_cost')?.type || '').toUpperCase();
   const outputCostType = String(columns.find((column) => column.name === 'output_cost')?.type || '').toUpperCase();
-  if (inputCostType === 'INTEGER' && outputCostType === 'INTEGER') return;
+  const hasInputPrice = columns.some((column) => column.name === 'input_price');
+  const hasOutputPrice = columns.some((column) => column.name === 'output_price');
+  const hasTotalCost = columns.some((column) => column.name === 'total_cost');
+  const shouldKeepSchema =
+    inputCostType === 'INTEGER'
+    && outputCostType === 'INTEGER'
+    && hasInputPrice
+    && hasOutputPrice
+    && hasTotalCost;
+  if (shouldKeepSchema) return;
+
+  const buildCostMigrateExpression = (columnName, columnType) => {
+    if (columnType === 'INTEGER') {
+      return `COALESCE(CAST(${columnName} AS INTEGER), 0)`;
+    }
+    return `CAST(ROUND(COALESCE(CAST(${columnName} AS REAL), 0) * ${COST_SCALE_FACTOR}) AS INTEGER)`;
+  };
+  const inputCostExpression = buildCostMigrateExpression('input_cost', inputCostType);
+  const outputCostExpression = buildCostMigrateExpression('output_cost', outputCostType);
+  const inputPriceExpression = hasInputPrice ? `COALESCE(input_price, '0')` : `'0'`;
+  const outputPriceExpression = hasOutputPrice ? `COALESCE(output_price, '0')` : `'0'`;
+  const totalCostExpression = hasTotalCost
+    ? buildCostMigrateExpression('total_cost', String(columns.find((column) => column.name === 'total_cost')?.type || '').toUpperCase())
+    : `${inputCostExpression} + ${outputCostExpression}`;
 
   await env.DB.prepare(`ALTER TABLE request_logs RENAME TO request_logs_legacy`).run();
   await env.DB.prepare(SQL.DDL.CREATE_REQUEST_LOGS_TABLE).run();
   await env.DB.prepare(
     `INSERT INTO request_logs (
       id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message,
-      latency_ms, input_tokens, output_tokens, input_cost, output_cost, created_at
+      latency_ms, input_tokens, output_tokens, input_price, output_price, input_cost, output_cost, total_cost, created_at
     )
     SELECT
       id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message,
       latency_ms, input_tokens, output_tokens,
-      CAST(ROUND(COALESCE(CAST(input_cost AS REAL), 0) * ${COST_SCALE_FACTOR}) AS INTEGER),
-      CAST(ROUND(COALESCE(CAST(output_cost AS REAL), 0) * ${COST_SCALE_FACTOR}) AS INTEGER),
+      ${inputPriceExpression},
+      ${outputPriceExpression},
+      ${inputCostExpression},
+      ${outputCostExpression},
+      ${totalCostExpression},
       created_at
     FROM request_logs_legacy`,
   ).run();
@@ -1129,8 +1172,11 @@ function createApp(deps = {}) {
         entry.latency_ms,
         entry.input_tokens,
         entry.output_tokens,
+        entry.input_price,
+        entry.output_price,
         entry.input_cost,
         entry.output_cost,
+        entry.total_cost,
         createdAt,
       )
       .run();
@@ -1245,6 +1291,7 @@ function createApp(deps = {}) {
           const selection = modelMap.get(modelId);
           if (!selection) return;
           const latencyMs = 0;
+          const costSnapshot = buildLogCostSnapshot(selection.model.input_cost, selection.model.output_cost, 0, 0);
           waitUntil(recordFailure(selection.model.id, env));
           waitUntil(
             writeLog(
@@ -1260,8 +1307,7 @@ function createApp(deps = {}) {
                 latency_ms: latencyMs,
                 input_tokens: 0,
                 output_tokens: 0,
-                input_cost: 0,
-                output_cost: 0,
+                ...costSnapshot,
               },
               env,
             ),
@@ -1291,6 +1337,12 @@ function createApp(deps = {}) {
           const latencyMs = nowFn().getTime() - startTime;
           const selection = modelMap.get(fallbackModel.modelId) || candidates[0];
           const usageTokens = getUsageTokens(event.usage);
+          const costSnapshot = buildLogCostSnapshot(
+            selection.model.input_cost,
+            selection.model.output_cost,
+            usageTokens.input,
+            usageTokens.output,
+          );
           waitUntil(recordSuccess(selection.model.id, latencyMs, env));
           waitUntil(
             writeLog(
@@ -1306,8 +1358,7 @@ function createApp(deps = {}) {
                 latency_ms: latencyMs,
                 input_tokens: usageTokens.input,
                 output_tokens: usageTokens.output,
-                input_cost: calculateRequestCost(selection.model.input_cost, usageTokens.input),
-                output_cost: calculateRequestCost(selection.model.output_cost, usageTokens.output),
+                ...costSnapshot,
               },
               env,
             ),
@@ -1336,6 +1387,12 @@ function createApp(deps = {}) {
         const result = await executeAIRequest(aiModel, selection.model.call_type, body);
         const latencyMs = nowFn().getTime() - startTime;
         const usageTokens = getUsageTokens(result.usage);
+        const costSnapshot = buildLogCostSnapshot(
+          selection.model.input_cost,
+          selection.model.output_cost,
+          usageTokens.input,
+          usageTokens.output,
+        );
 
         waitUntil(recordSuccess(selection.model.id, latencyMs, env));
         waitUntil(
@@ -1352,8 +1409,7 @@ function createApp(deps = {}) {
               latency_ms: latencyMs,
               input_tokens: usageTokens.input,
               output_tokens: usageTokens.output,
-              input_cost: calculateRequestCost(selection.model.input_cost, usageTokens.input),
-              output_cost: calculateRequestCost(selection.model.output_cost, usageTokens.output),
+              ...costSnapshot,
             },
             env,
           ),
@@ -1364,6 +1420,7 @@ function createApp(deps = {}) {
         console.error(error);
         const latencyMs = nowFn().getTime() - startTime;
         lastError = error;
+        const costSnapshot = buildLogCostSnapshot(selection.model.input_cost, selection.model.output_cost, 0, 0);
         waitUntil(recordFailure(selection.model.id, env));
         waitUntil(
           writeLog(
@@ -1379,8 +1436,7 @@ function createApp(deps = {}) {
               latency_ms: latencyMs,
               input_tokens: 0,
               output_tokens: 0,
-              input_cost: 0,
-              output_cost: 0,
+              ...costSnapshot,
             },
             env,
           ),

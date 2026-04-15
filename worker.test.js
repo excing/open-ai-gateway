@@ -103,9 +103,12 @@ function createMockEnv() {
                 channel_id: bindings[1],
                 channel_name: bindings[2],
                 model_id: bindings[3],
-                input_cost: bindings[12],
-                output_cost: bindings[13],
-                created_at: bindings[14],
+                input_price: bindings[12],
+                output_price: bindings[13],
+                input_cost: bindings[14],
+                output_cost: bindings[15],
+                total_cost: bindings[16],
+                created_at: bindings[17],
               });
               return { success: true };
             }
@@ -2230,8 +2233,11 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(response.status, HTTP_STATUS.OK);
     assert.ok(mockEnv._logs.length > 0);
     const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
+    assert.strictEqual(latestLog.input_price, '0');
+    assert.strictEqual(latestLog.output_price, '1.2/M');
     assert.strictEqual(latestLog.input_cost, 0);
     assert.strictEqual(latestLog.output_cost, 8400);
+    assert.strictEqual(latestLog.total_cost, 8400);
   });
 
   it('请求成功日志应按 token 与 /M 费率计算真实成本', async () => {
@@ -2299,8 +2305,11 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(response.status, HTTP_STATUS.OK);
     assert.ok(mockEnv._logs.length > 0);
     const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
+    assert.strictEqual(latestLog.input_price, '5/M');
+    assert.strictEqual(latestLog.output_price, '10/M');
     assert.strictEqual(latestLog.input_cost, 500000000);
     assert.strictEqual(latestLog.output_cost, 1000000000);
+    assert.strictEqual(latestLog.total_cost, 1500000000);
   });
 
   it('应优先读取 AI SDK v6 usage.inputTokens/outputTokens', async () => {
@@ -2368,8 +2377,11 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(responseData.usage.total_tokens, 500000);
 
     const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
+    assert.strictEqual(latestLog.input_price, '5/M');
+    assert.strictEqual(latestLog.output_price, '10/M');
     assert.strictEqual(latestLog.input_cost, 1000000000);
     assert.strictEqual(latestLog.output_cost, 3000000000);
+    assert.strictEqual(latestLog.total_cost, 4000000000);
   });
 
   it('stream 回退错误日志应按规则计算 input_cost/output_cost', async () => {
@@ -2445,7 +2457,14 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     const response = await app.handleRequest(request, mockEnv);
     assert.strictEqual(response.status, HTTP_STATUS.OK);
     assert.ok(mockEnv._logs.length >= 1);
-    const errorLog = mockEnv._logs.find((log) => log.model_id === 'model-stream-cost' && log.input_cost === 2000000000 && log.output_cost === 0);
+    const errorLog = mockEnv._logs.find((log) => (
+      log.model_id === 'model-stream-cost'
+      && log.input_price === '2/req'
+      && log.output_price === '10/M'
+      && log.input_cost === 2000000000
+      && log.output_cost === 0
+      && log.total_cost === 2000000000
+    ));
     assert.ok(errorLog);
   });
 });
