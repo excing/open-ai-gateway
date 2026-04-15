@@ -196,8 +196,8 @@ CREATE INDEX idx_channel_models_call_type ON channel_models(call_type);
 | `latency_ms` | INTEGER | NOT NULL, DEFAULT 0 | 请求耗时（毫秒），从发起 AI 请求到收到响应/第一个 chunk 的时间 |
 | `input_tokens` | INTEGER | DEFAULT 0 | 输入 token 数量（仅 chat/embedding 类型有效） |
 | `output_tokens` | INTEGER | DEFAULT 0 | 输出 token 数量（仅 chat 类型有效） |
-| `input_cost` | TEXT | DEFAULT '0' | 本次请求真实输入成本（由 `channel_models.input_cost` 与本次 `input_tokens` 计算得到）。示例：配置 `10/M` 且 `input_tokens=100000`，则记录 `1` |
-| `output_cost` | TEXT | DEFAULT '0' | 本次请求真实输出成本（由 `channel_models.output_cost` 与本次 `output_tokens` 计算得到）。示例：配置 `10/M` 且 `output_tokens=100000`，则记录 `1` |
+| `input_cost` | INTEGER | DEFAULT 0 | 本次请求真实输入成本（整数最小单位，缩放系数 `COST_SCALE_FACTOR=1_000_000_000`）。示例：真实成本 `0.5` 记录为 `500000000` |
+| `output_cost` | INTEGER | DEFAULT 0 | 本次请求真实输出成本（整数最小单位，缩放系数 `COST_SCALE_FACTOR=1_000_000_000`）。示例：真实成本 `0.0000084` 记录为 `8400` |
 | `created_at` | TEXT | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 请求发生时间 |
 
 ```sql
@@ -214,8 +214,8 @@ CREATE TABLE request_logs (
     latency_ms INTEGER NOT NULL DEFAULT 0,
     input_tokens INTEGER DEFAULT 0,
     output_tokens INTEGER DEFAULT 0,
-    input_cost TEXT DEFAULT '0',
-    output_cost TEXT DEFAULT '0',
+    input_cost INTEGER DEFAULT 0,
+    output_cost INTEGER DEFAULT 0,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX idx_request_logs_created_at ON request_logs(created_at);
@@ -324,10 +324,12 @@ interface RequestLogRow {
     latency_ms: number;
     input_tokens: number;
     output_tokens: number;
-    input_cost: string;
-    output_cost: string;
+    input_cost: number;
+    output_cost: number;
     created_at: string;
 }
+
+// input_cost/output_cost: 最小成本单位整数，缩放系数固定为 COST_SCALE_FACTOR=1_000_000_000
 
 /** 模型可用性检测结果 */
 interface ModelCheckResult {
@@ -1486,8 +1488,8 @@ data: [DONE]
             "latency_ms": 1200,
             "input_tokens": 100,
             "output_tokens": 50,
-            "input_cost": "0",
-            "output_cost": "2.5/M",
+            "input_cost": 0,
+            "output_cost": 2500000000,
             "created_at": "2026-04-08T00:00:00Z"
         }
     ],

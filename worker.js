@@ -65,6 +65,7 @@ const CONSTANTS = {
     SECOND: '/sec',
     REQUEST: '/req',
   },
+  COST_SCALE_FACTOR: 1_000_000_000,
   COOLDOWN_TIERS: [
     { minFailures: 2, maxFailures: 4, durationMs: 60_000 },
     { minFailures: 4, maxFailures: 8, durationMs: 300_000 },
@@ -236,8 +237,8 @@ const CONSTANTS = {
         latency_ms INTEGER NOT NULL DEFAULT 0,
         input_tokens INTEGER DEFAULT 0,
         output_tokens INTEGER DEFAULT 0,
-        input_cost TEXT DEFAULT '0',
-        output_cost TEXT DEFAULT '0',
+        input_cost INTEGER DEFAULT 0,
+        output_cost INTEGER DEFAULT 0,
         created_at TEXT NOT NULL DEFAULT (datetime('now'))
       )`,
       CREATE_INDEX_CHANNEL_MODELS_CHANNEL_ID: `CREATE INDEX IF NOT EXISTS idx_channel_models_channel_id ON channel_models(channel_id)`,
@@ -271,6 +272,7 @@ const {
   SSE_CONTENT_TYPE,
   OPENAI_OBJECTS,
   STREAM_DONE,
+  COST_SCALE_FACTOR,
   SQL,
 } = CONSTANTS;
 
@@ -561,27 +563,39 @@ function normalizeCostValue(value) {
   return normalized.length > 0 ? normalized : '0';
 }
 
-function formatCostNumber(value) {
-  if (!Number.isFinite(value) || value <= 0) return '0';
-  return value.toFixed(12).replace(/\.?0+$/, '');
+function convertCostToStorageInteger(value) {
+  const numericValue = Number(value || 0);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) return 0;
+  return Math.round(numericValue * COST_SCALE_FACTOR);
+}
+
+function getUsageTokens(usage) {
+  const inputTokens = Number(usage?.inputTokens ?? usage?.promptTokens ?? 0);
+  const outputTokens = Number(usage?.outputTokens ?? usage?.completionTokens ?? 0);
+  const totalTokens = Number(usage?.totalTokens ?? inputTokens + outputTokens);
+  return {
+    input: Number.isFinite(inputTokens) ? Math.max(0, inputTokens) : 0,
+    output: Number.isFinite(outputTokens) ? Math.max(0, outputTokens) : 0,
+    total: Number.isFinite(totalTokens) ? Math.max(0, totalTokens) : 0,
+  };
 }
 
 function calculateRequestCost(configCost, usageCount) {
   const normalizedCost = normalizeCostValue(configCost);
-  if (normalizedCost === '0') return '0';
+  if (normalizedCost === '0') return 0;
   const normalizedUsage = Number(usageCount || 0);
   const match = normalizedCost.match(/^([0-9]+(?:\.[0-9]+)?)\s*(\/[a-zA-Z]+)$/);
-  if (!match) return '0';
+  if (!match) return 0;
   const price = Number(match[1]);
   const unit = match[2].toLowerCase();
-  if (!Number.isFinite(price) || price <= 0) return '0';
+  if (!Number.isFinite(price) || price <= 0) return 0;
   if (unit === '/m') {
-    return formatCostNumber((Math.max(0, normalizedUsage) / 1_000_000) * price);
+    return convertCostToStorageInteger((Math.max(0, normalizedUsage) / 1_000_000) * price);
   }
   if (unit === '/req') {
-    return formatCostNumber(price);
+    return convertCostToStorageInteger(price);
   }
-  return '0';
+  return 0;
 }
 
 function getProviderOptions(payload) {
@@ -649,8 +663,43 @@ async function initializeDatabase(env) {
   for (const statement of statements) {
     await env.DB.prepare(statement).run();
   }
+  await migrateRequestLogsCostColumnsToInteger(env);
 
   env.__dbInitialized = true;
+}
+
+async function migrateRequestLogsCostColumnsToInteger(env) {
+  if (!env?.DB?.prepare) return;
+  const pragmaQuery = env.DB.prepare(`PRAGMA table_info(request_logs)`);
+  if (!pragmaQuery || typeof pragmaQuery.all !== 'function') return;
+  const pragmaResult = await pragmaQuery.all();
+  const columns = pragmaResult?.results || [];
+  if (!Array.isArray(columns) || columns.length === 0) return;
+
+  const inputCostType = String(columns.find((column) => column.name === 'input_cost')?.type || '').toUpperCase();
+  const outputCostType = String(columns.find((column) => column.name === 'output_cost')?.type || '').toUpperCase();
+  if (inputCostType === 'INTEGER' && outputCostType === 'INTEGER') return;
+
+  await env.DB.prepare(`ALTER TABLE request_logs RENAME TO request_logs_legacy`).run();
+  await env.DB.prepare(SQL.DDL.CREATE_REQUEST_LOGS_TABLE).run();
+  await env.DB.prepare(
+    `INSERT INTO request_logs (
+      id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message,
+      latency_ms, input_tokens, output_tokens, input_cost, output_cost, created_at
+    )
+    SELECT
+      id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message,
+      latency_ms, input_tokens, output_tokens,
+      CAST(ROUND(COALESCE(CAST(input_cost AS REAL), 0) * ${COST_SCALE_FACTOR}) AS INTEGER),
+      CAST(ROUND(COALESCE(CAST(output_cost AS REAL), 0) * ${COST_SCALE_FACTOR}) AS INTEGER),
+      created_at
+    FROM request_logs_legacy`,
+  ).run();
+  await env.DB.prepare(`DROP TABLE request_logs_legacy`).run();
+  await env.DB.prepare(SQL.DDL.CREATE_INDEX_REQUEST_LOGS_CREATED_AT).run();
+  await env.DB.prepare(SQL.DDL.CREATE_INDEX_REQUEST_LOGS_CHANNEL_ID).run();
+  await env.DB.prepare(SQL.DDL.CREATE_INDEX_REQUEST_LOGS_MODEL_ID).run();
+  await env.DB.prepare(SQL.DDL.CREATE_INDEX_REQUEST_LOGS_STATUS).run();
 }
 
 // 自定义封装 fetch, 支持请求日志打印
@@ -957,6 +1006,7 @@ function createApp(deps = {}) {
 
   async function formatAIResponse(result, userCallType, modelCallType, modelCode) {
     const created = toEpochSeconds(nowFn());
+    const usageTokens = getUsageTokens(result.usage);
     if (userCallType === CALL_TYPES.CHAT) {
       return jsonResponse({
         id: `${CONSTANTS.UUID_PREFIX}${uuidFn()}`,
@@ -971,9 +1021,9 @@ function createApp(deps = {}) {
           },
         ],
         usage: {
-          prompt_tokens: result.usage?.promptTokens || 0,
-          completion_tokens: result.usage?.completionTokens || 0,
-          total_tokens: result.usage?.totalTokens || 0,
+          prompt_tokens: usageTokens.input,
+          completion_tokens: usageTokens.output,
+          total_tokens: usageTokens.total,
         },
       });
     }
@@ -1022,7 +1072,7 @@ function createApp(deps = {}) {
         object: OPENAI_OBJECTS.LIST,
         data: [{ object: OPENAI_OBJECTS.EMBEDDING, embedding: result.embedding || [], index: 0 }],
         model: modelCode,
-        usage: { prompt_tokens: result.usage?.promptTokens || 0, total_tokens: result.usage?.totalTokens || 0 },
+        usage: { prompt_tokens: usageTokens.input, total_tokens: usageTokens.total },
       });
     }
 
@@ -1079,8 +1129,8 @@ function createApp(deps = {}) {
         entry.latency_ms,
         entry.input_tokens,
         entry.output_tokens,
-        entry.input_cost ?? '0',
-        entry.output_cost ?? '0',
+        entry.input_cost,
+        entry.output_cost,
         createdAt,
       )
       .run();
@@ -1210,8 +1260,8 @@ function createApp(deps = {}) {
                 latency_ms: latencyMs,
                 input_tokens: 0,
                 output_tokens: 0,
-                input_cost: selection.model.input_cost ?? '0',
-                output_cost: selection.model.output_cost ?? '0',
+                input_cost: 0,
+                output_cost: 0,
               },
               env,
             ),
@@ -1240,6 +1290,7 @@ function createApp(deps = {}) {
         onFinish: async (event) => {
           const latencyMs = nowFn().getTime() - startTime;
           const selection = modelMap.get(fallbackModel.modelId) || candidates[0];
+          const usageTokens = getUsageTokens(event.usage);
           waitUntil(recordSuccess(selection.model.id, latencyMs, env));
           waitUntil(
             writeLog(
@@ -1253,10 +1304,10 @@ function createApp(deps = {}) {
                 status: LOG_STATUS.SUCCESS,
                 error_message: '',
                 latency_ms: latencyMs,
-                input_tokens: event.usage?.promptTokens || 0,
-                output_tokens: event.usage?.completionTokens || 0,
-                input_cost: calculateRequestCost(selection.model.input_cost, event.usage?.promptTokens || 0),
-                output_cost: calculateRequestCost(selection.model.output_cost, event.usage?.completionTokens || 0),
+                input_tokens: usageTokens.input,
+                output_tokens: usageTokens.output,
+                input_cost: calculateRequestCost(selection.model.input_cost, usageTokens.input),
+                output_cost: calculateRequestCost(selection.model.output_cost, usageTokens.output),
               },
               env,
             ),
@@ -1284,9 +1335,7 @@ function createApp(deps = {}) {
 
         const result = await executeAIRequest(aiModel, selection.model.call_type, body);
         const latencyMs = nowFn().getTime() - startTime;
-        const inputCost = calculateRequestCost(selection.model.input_cost, result.usage?.promptTokens || 0);
-        const outputCost = calculateRequestCost(selection.model.output_cost, result.usage?.completionTokens || 0);
-        console.info(`input:${selection.model.input_cost}, ${result.usage?.promptTokens || 0} ${inputCost}, output: ${selection.model.output_cost}, ${result.usage?.completionTokens || 0} ${outputCost}`);
+        const usageTokens = getUsageTokens(result.usage);
 
         waitUntil(recordSuccess(selection.model.id, latencyMs, env));
         waitUntil(
@@ -1301,10 +1350,10 @@ function createApp(deps = {}) {
               status: LOG_STATUS.SUCCESS,
               error_message: '',
               latency_ms: latencyMs,
-              input_tokens: result.usage?.promptTokens || 0,
-              output_tokens: result.usage?.completionTokens || 0,
-              input_cost: calculateRequestCost(selection.model.input_cost, result.usage?.promptTokens || 0),
-              output_cost: calculateRequestCost(selection.model.output_cost, result.usage?.completionTokens || 0),
+              input_tokens: usageTokens.input,
+              output_tokens: usageTokens.output,
+              input_cost: calculateRequestCost(selection.model.input_cost, usageTokens.input),
+              output_cost: calculateRequestCost(selection.model.output_cost, usageTokens.output),
             },
             env,
           ),
@@ -1330,8 +1379,8 @@ function createApp(deps = {}) {
               latency_ms: latencyMs,
               input_tokens: 0,
               output_tokens: 0,
-              input_cost: selection.model.input_cost ?? '0',
-              output_cost: selection.model.output_cost ?? '0',
+              input_cost: 0,
+              output_cost: 0,
             },
             env,
           ),

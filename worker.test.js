@@ -2230,8 +2230,8 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(response.status, HTTP_STATUS.OK);
     assert.ok(mockEnv._logs.length > 0);
     const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
-    assert.strictEqual(latestLog.input_cost, '0');
-    assert.strictEqual(latestLog.output_cost, '0.0000084');
+    assert.strictEqual(latestLog.input_cost, 0);
+    assert.strictEqual(latestLog.output_cost, 8400);
   });
 
   it('请求成功日志应按 token 与 /M 费率计算真实成本', async () => {
@@ -2299,8 +2299,154 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(response.status, HTTP_STATUS.OK);
     assert.ok(mockEnv._logs.length > 0);
     const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
-    assert.strictEqual(latestLog.input_cost, '0.5');
-    assert.strictEqual(latestLog.output_cost, '1');
+    assert.strictEqual(latestLog.input_cost, 500000000);
+    assert.strictEqual(latestLog.output_cost, 1000000000);
+  });
+
+  it('应优先读取 AI SDK v6 usage.inputTokens/outputTokens', async () => {
+    mockEnv._addChannel({
+      id: 'ch-v6-usage',
+      name: 'V6 Usage Channel',
+      key: 'v6-usage-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-v6-usage',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    });
+    mockEnv._addModel({
+      id: 'model-v6-usage',
+      channel_id: 'ch-v6-usage',
+      code: 'gpt-4o-v6-usage',
+      name: 'gpt-4o-v6-usage',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT]),
+      input_cost: '5/M',
+      output_cost: '10/M',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-15T00:00:00.000Z',
+      headers: '{}',
+    });
+
+    app = createApp({
+      now: () => new Date('2026-04-15T00:00:00.000Z'),
+      providers: {
+        createOpenAI: () => ({ chat: (modelCode) => ({ modelCode }) }),
+      },
+      ai: {
+        generateText: async () => ({
+          text: 'ok',
+          usage: { inputTokens: 200000, outputTokens: 300000, totalTokens: 500000 },
+        }),
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_CHAT,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        model: 'gpt-4o-v6-usage',
+        messages: [{ role: 'user', content: 'hello' }],
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    const responseData = await response.json();
+    assert.strictEqual(responseData.usage.prompt_tokens, 200000);
+    assert.strictEqual(responseData.usage.completion_tokens, 300000);
+    assert.strictEqual(responseData.usage.total_tokens, 500000);
+
+    const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
+    assert.strictEqual(latestLog.input_cost, 1000000000);
+    assert.strictEqual(latestLog.output_cost, 3000000000);
+  });
+
+  it('stream 回退错误日志应按规则计算 input_cost/output_cost', async () => {
+    mockEnv._addChannel({
+      id: 'ch-stream-cost',
+      name: 'Stream Cost Channel',
+      key: 'stream-cost-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-stream-cost',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    });
+    mockEnv._addModel({
+      id: 'model-stream-cost',
+      channel_id: 'ch-stream-cost',
+      code: 'gpt-4o-stream-cost',
+      name: 'gpt-4o-stream-cost',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT]),
+      input_cost: '2/req',
+      output_cost: '10/M',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-15T00:00:00.000Z',
+      headers: '{}',
+    });
+
+    app = createApp({
+      now: () => new Date('2026-04-15T00:00:00.000Z'),
+      providers: {
+        createOpenAI: () => ({ chat: () => ({ modelCode: 'gpt-4o-stream-cost' }) }),
+      },
+      createFallback: ({ onError }) => ({
+        modelId: 'gpt-4o-stream-cost',
+        async doGenerate() {
+          await onError(new Error('stream fallback error'), 'gpt-4o-stream-cost');
+          return { textStream: [], warnings: [] };
+        },
+      }),
+      ai: {
+        streamText: async ({ model, onFinish }) => {
+          if (model?.doGenerate) {
+            await model.doGenerate();
+          }
+          if (onFinish) {
+            await onFinish({ usage: { promptTokens: 0, completionTokens: 0 } });
+          }
+          return { textStream: [] };
+        },
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_CHAT,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        model: 'gpt-4o-stream-cost',
+        messages: [{ role: 'user', content: 'hello' }],
+        stream: true,
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.ok(mockEnv._logs.length >= 1);
+    const errorLog = mockEnv._logs.find((log) => log.model_id === 'model-stream-cost' && log.input_cost === 2000000000 && log.output_cost === 0);
+    assert.ok(errorLog);
   });
 });
 
