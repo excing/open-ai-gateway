@@ -1533,6 +1533,37 @@ data: [DONE]
 }
 ```
 
+#### 管理台日志页（`public/index.html`）展示规范
+
+1. 列表呈现方式：必须使用按行可展开的数据表格（Table + Expandable Row），默认收起详情。
+2. 主表字段（从左到右）：
+   - `status`：请求状态，标签化显示（`success`→`成功`，`error`→`错误`）。
+   - `call_type`：请求类型，标签化中文显示。
+   - `channel_name`：渠道名称。
+   - `request_model`：请求模型名称（客户端提交值）。
+   - `latency_ms`：耗时（单位 `ms`）。
+   - `input_tokens`：输入 tokens。
+   - `output_tokens`：输出 tokens。
+   - `total_cost`：总花费（由最小成本单位整数换算为真实金额显示）。
+   - `created_at`：时间，必须做本地格式化展示（`Intl.DateTimeFormat`）。
+3. 行展开详情规则：
+   - 当 `status=error`：显示 `error_message`（为空时显示“无错误详情”）。
+   - 当 `status=success`：显示 `request_model`（请求模型 code）与 `model_code`（真实模型 code）。
+   - 同时显示成本计算公式说明（仅用于展示）：
+     - 第一行：输入价格（示例：`$1.75 / 1M tokens`）
+     - 第二行：输出价格（示例：`$14 / 1M tokens`）
+     - 第三行：`输入 X tokens / 1M tokens * $A + 输出 Y tokens / 1M tokens * $B = $Z`
+     - 第四行：`仅供参考，以实际扣费为准`
+4. `call_type` 中文映射（前端常量化，禁止散落硬编码）：
+   - `chat`→`对话`
+   - `image_gen`→`图像生成`
+   - `audio_gen`→`音频生成`
+   - `video_gen`→`视频生成`
+   - `transcribe`→`转写`
+   - `embedding`→`向量`
+   - `mix`→`混合`
+5. 所有金额、token、状态、时间格式化逻辑必须复用公共方法，避免在模板中重复拼接。
+
 #### POST /api/channel/models
 
 按连接参数获取上游模型列表，不依赖已保存渠道。通过调用上游 provider 的 `/v1/models` API 获取可用模型列表。

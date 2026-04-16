@@ -264,6 +264,93 @@
         gap: 0.5rem;
       }
 
+      .log-table-wrap {
+        max-width: 100%;
+        overflow: hidden;
+        border-radius: 20px;
+        border: 1px solid rgba(185, 150, 117, 0.24);
+        background: rgba(255, 251, 244, 0.82);
+      }
+
+      .log-table-scroll {
+        max-width: 100%;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      .log-table {
+        width: 100%;
+        min-width: 1120px;
+        border-collapse: separate;
+        border-spacing: 0;
+      }
+
+      .log-table thead th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        white-space: nowrap;
+        background: rgba(252, 241, 226, 0.9);
+        padding: 0.85rem 0.9rem;
+        border-bottom: 1px solid rgba(185, 150, 117, 0.2);
+        text-align: left;
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-soft);
+      }
+
+      .log-row-main {
+        cursor: pointer;
+      }
+
+      .log-row-main td {
+        padding: 0.8rem 0.9rem;
+        border-bottom: 1px solid rgba(185, 150, 117, 0.14);
+        vertical-align: top;
+      }
+
+      .log-row-main:hover {
+        background: rgba(255, 245, 232, 0.55);
+      }
+
+      .log-row-expanded td {
+        padding: 0;
+        border-bottom: 1px solid rgba(185, 150, 117, 0.2);
+      }
+
+      .log-expand-panel {
+        background: rgba(255, 248, 236, 0.68);
+        padding: 0.95rem 1rem 1rem;
+      }
+
+      .tag {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 0.25rem 0.6rem;
+        border: 1px solid rgba(185, 150, 117, 0.22);
+        font-size: 0.72rem;
+        line-height: 1;
+        white-space: nowrap;
+      }
+
+      .tag-success {
+        color: var(--success);
+        background: rgba(74, 176, 112, 0.1);
+      }
+
+      .tag-error {
+        color: var(--danger);
+        background: rgba(220, 114, 92, 0.1);
+      }
+
+      .tag-neutral {
+        color: var(--text-soft);
+        background: rgba(204, 169, 135, 0.08);
+      }
+
       .chip {
         display: inline-flex;
         align-items: center;
@@ -465,7 +552,7 @@
             </div>
           </aside>
 
-          <main class="space-y-6">
+          <main class="panel min-w-0 space-y-6">
             <section v-if="state.view === constants.VIEWS.STATUS" class="panel px-5 py-5 sm:px-6 sm:py-6">
               <div class="toolbar justify-between">
                 <h2 class="section-title font-semibold text-[var(--text)]">模型状态</h2>
@@ -608,25 +695,60 @@
                 </select>
                 <button @click="actions.loadLogs" class="btn btn-primary">查询</button>
               </div>
-              <div class="mt-5 space-y-3">
-                <article v-for="log in state.logs" :key="log.id" class="panel-quiet p-4 sm:p-5">
-                  <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                    <div>
-                      <p class="text-base font-semibold text-[var(--text)]">{{ log.model_code }} · {{ log.status }}</p>
-                      <p class="mt-2 text-sm leading-6 text-[var(--text-soft)]">{{ log.error_message || '无错误' }}</p>
-                      <p class="mt-2 text-xs text-[var(--text-soft)]">
-                        输入 Token: {{ actions.formatTokenDisplay(log.input_tokens) }} · 输出 Token: {{ actions.formatTokenDisplay(log.output_tokens) }} · 总 Token: {{ actions.formatTokenDisplay((Number(log.input_tokens || 0) + Number(log.output_tokens || 0))) }}
-                      </p>
-                      <p class="mt-2 text-xs text-[var(--text-soft)]">
-                        输入单价: {{ actions.formatPriceDisplay(log.input_price) }} · 输出单价: {{ actions.formatPriceDisplay(log.output_price) }}
-                      </p>
-                      <p class="mt-1 text-xs text-[var(--text-soft)]">
-                        输入花费: {{ actions.formatCostDisplay(log.input_cost) }} · 输出花费: {{ actions.formatCostDisplay(log.output_cost) }} · 总花费: {{ actions.formatCostDisplay(log.total_cost) }}
-                      </p>
-                    </div>
-                    <span class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">{{ log.created_at }}</span>
-                  </div>
-                </article>
+              <div class="mt-5 log-table-wrap">
+                <div class="log-table-scroll">
+                  <table class="log-table">
+                    <thead>
+                      <tr>
+                        <th>状态</th>
+                        <th>请求类型</th>
+                        <th>渠道名称</th>
+                        <th>请求模型</th>
+                        <th>耗时</th>
+                        <th>输入</th>
+                        <th>输出</th>
+                        <th>总花费</th>
+                        <th>时间</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <template v-for="log in state.logs" :key="log.id">
+                        <tr class="log-row-main" @click="actions.toggleLogExpanded(log.id)">
+                          <td>
+                            <span class="tag" :class="actions.getStatusTagClass(log.status)">{{ actions.getStatusLabel(log.status) }}</span>
+                          </td>
+                          <td>
+                            <span class="tag tag-neutral">{{ actions.getCallTypeLabel(log.call_type) }}</span>
+                          </td>
+                          <td class="text-sm text-[var(--text)]">{{ log.channel_name || '-' }}</td>
+                          <td class="text-sm text-[var(--text)]">{{ log.request_model || '-' }}</td>
+                          <td class="text-sm text-[var(--text-soft)]">{{ actions.getLatencyDisplay(log.latency_ms) }}</td>
+                          <td class="text-sm text-[var(--text-soft)]">{{ actions.formatTokenDisplay(log.input_tokens) }}</td>
+                          <td class="text-sm text-[var(--text-soft)]">{{ actions.formatTokenDisplay(log.output_tokens) }}</td>
+                          <td class="text-sm font-semibold text-[var(--text)]">${{ actions.formatCostDisplay(log.total_cost) }}</td>
+                          <td class="text-sm text-[var(--text-soft)]">{{ actions.formatLocalDateTime(log.created_at) }}</td>
+                        </tr>
+                        <tr v-if="actions.isLogExpanded(log.id)" class="log-row-expanded">
+                          <td colspan="9">
+                            <div class="log-expand-panel">
+                              <div v-if="log.status === 'error'" class="space-y-2">
+                                <p class="text-xs uppercase tracking-[0.12em] text-[var(--text-soft)]">错误信息</p>
+                                <p class="text-sm leading-6 text-[var(--danger)]">{{ log.error_message || '无错误详情' }}</p>
+                              </div>
+                              <div v-else class="space-y-3">
+                                <div class="grid gap-2 sm:grid-cols-2">
+                                  <p class="text-sm text-[var(--text-soft)]">请求模型 code：<span class="font-semibold text-[var(--text)]">{{ log.request_model || '-' }}</span></p>
+                                  <p class="text-sm text-[var(--text-soft)]">真实模型 code：<span class="font-semibold text-[var(--text)]">{{ log.model_code || '-' }}</span></p>
+                                </div>
+                                <pre class="rounded-2xl border border-[rgba(185,150,117,0.2)] bg-[rgba(255,252,247,0.92)] p-3 text-xs leading-6 text-[var(--text-soft)] whitespace-pre-wrap">{{ actions.formatCostFormula(log) }}</pre>
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      </template>
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </section>
           </main>
@@ -864,6 +986,21 @@
         PROVIDERS: ['openai', 'openai-compatible', 'google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations', 'exacg', 'microsoft-tts'],
         MODEL_STATUS: ['active', 'open', 'disable'],
         LOG_STATUS_LIST: ['success', 'error'],
+        CALL_TYPE_LABELS: {
+          chat: '对话',
+          image_gen: '图像生成',
+          audio_gen: '音频生成',
+          video_gen: '视频生成',
+          transcribe: '转写',
+          embedding: '向量',
+          mix: '混合',
+        },
+        STATUS_LABELS: {
+          success: '成功',
+          error: '错误',
+        },
+        TOKEN_UNIT_BASE: 1000000,
+        CURRENCY_SYMBOL: '$',
         COST_SCALE_FACTOR: 1000000000,
         DETECT_STATUS: {
           IDLE: 'idle',
@@ -942,6 +1079,7 @@
             channels: [],
             statusModels: [],
             logs: [],
+            expandedLogId: '',
             notice: '',
             channelDrawerOpen: false,
             modelDrawerOpen: false,
@@ -1033,6 +1171,54 @@
               if (!Number.isFinite(scaledValue) || scaledValue <= 0) return '0';
               const value = scaledValue / constants.COST_SCALE_FACTOR;
               return value.toFixed(12).replace(/\.?0+$/, '');
+            },
+            formatLocalDateTime: (rawValue) => {
+              if (!rawValue) return '-';
+              const date = new Date(rawValue);
+              if (Number.isNaN(date.getTime())) return String(rawValue);
+              return new Intl.DateTimeFormat('zh-CN', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false,
+              }).format(date);
+            },
+            getCallTypeLabel: (callType) => constants.CALL_TYPE_LABELS[String(callType || '').trim()] || '未知类型',
+            getStatusLabel: (status) => constants.STATUS_LABELS[String(status || '').trim()] || String(status || '未知'),
+            getStatusTagClass: (status) => (status === 'success' ? 'tag-success' : status === 'error' ? 'tag-error' : 'tag-neutral'),
+            getLatencyDisplay: (rawValue) => {
+              const latency = Number(rawValue ?? 0);
+              if (!Number.isFinite(latency) || latency < 0) return '-';
+              return `${Math.round(latency)} ms`;
+            },
+            isLogExpanded: (logId) => state.expandedLogId === logId,
+            toggleLogExpanded: (logId) => {
+              state.expandedLogId = state.expandedLogId === logId ? '' : logId;
+            },
+            formatCostFormula: (log) => {
+              const inputPrice = actions.formatPriceDisplay(log.input_price);
+              const outputPrice = actions.formatPriceDisplay(log.output_price);
+              const inputTokens = Number(log.input_tokens || 0);
+              const outputTokens = Number(log.output_tokens || 0);
+              const totalCost = actions.formatCostDisplay(log.total_cost);
+              const parsePrice = (priceRaw) => {
+                const normalized = String(priceRaw || '').trim().toLowerCase();
+                if (!normalized || normalized === '0') return 0;
+                const [valuePart] = normalized.split('/');
+                const numericValue = Number(valuePart);
+                return Number.isFinite(numericValue) ? numericValue : 0;
+              };
+              const inputPriceValue = parsePrice(log.input_price);
+              const outputPriceValue = parsePrice(log.output_price);
+              return [
+                `输入价格：${constants.CURRENCY_SYMBOL}${inputPriceValue} / 1M tokens`,
+                `输出价格：${constants.CURRENCY_SYMBOL}${outputPriceValue} / 1M tokens`,
+                `输入 ${inputTokens} tokens / ${constants.TOKEN_UNIT_BASE} tokens * ${constants.CURRENCY_SYMBOL}${inputPriceValue} + 输出 ${outputTokens} tokens / ${constants.TOKEN_UNIT_BASE} tokens * ${constants.CURRENCY_SYMBOL}${outputPriceValue} = ${constants.CURRENCY_SYMBOL}${totalCost}`,
+                '仅供参考，以实际扣费为准',
+              ].join('\n');
             },
             setNotice: (message) => {
               state.notice = message;
@@ -1368,6 +1554,7 @@
               if (state.logFilters.status) params.set('status', state.logFilters.status);
               const res = await apiRequest(`${constants.API.LOG}?${params.toString()}`);
               state.logs = res.data?.data || [];
+              state.expandedLogId = '';
             },
           };
 
