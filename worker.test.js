@@ -1138,6 +1138,58 @@ describe('API: POST /v1/audio/transcriptions - multipart file', () => {
     assert.ok(receivedAudio instanceof Uint8Array);
     assert.deepStrictEqual(Array.from(receivedAudio), Array.from(expectedAudio));
   });
+
+  it('multipart 多个 file 字段时，transcribe 应使用第一个文件', async () => {
+    let receivedAudio;
+    const firstAudio = new Uint8Array([1, 2, 3]);
+    const secondAudio = new Uint8Array([9, 8, 7]);
+
+    app = createApp({
+      providers: {
+        createOpenAI: () => ({
+          transcription: (modelCode) => ({ modelCode }),
+        }),
+      },
+      ai: {
+        experimental_transcribe: async ({ audio }) => {
+          receivedAudio = audio;
+          return { text: 'ok-multi-file' };
+        },
+      },
+    });
+
+    const form = new FormData();
+    form.append('model', 'whisper-1');
+    form.append('file', new Blob([firstAudio], { type: 'audio/mpeg' }));
+    form.append('file', new Blob([secondAudio], { type: 'audio/mpeg' }));
+
+    const request = {
+      method: 'POST',
+      url: `https://example.com${ROUTES.V1_TRANSCRIBE}`,
+      headers: {
+        get: (key) => {
+          if (String(key).toLowerCase() === HEADERS.CONTENT_TYPE.toLowerCase()) {
+            return `${MULTIPART_CONTENT_TYPE}; boundary=----test-boundary`;
+          }
+          if (String(key).toLowerCase() === HEADERS.AUTHORIZATION.toLowerCase()) {
+            return 'Bearer test-admin-key';
+          }
+          return undefined;
+        },
+      },
+      formData: async () => form,
+      json: async () => {
+        throw new Error('should not parse json for multipart');
+      },
+    };
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.text, 'ok-multi-file');
+    assert.ok(receivedAudio instanceof Uint8Array);
+    assert.deepStrictEqual(Array.from(receivedAudio), [1, 2, 3]);
+  });
 });
 
 describe('API: 参数校验错误应返回具体原因', () => {
@@ -2245,6 +2297,64 @@ describe('mix call_type 兼容', () => {
     assert.strictEqual(fileMessage.content[1].type, 'file');
     assert.ok(fileMessage.content[1].data instanceof Uint8Array);
     assert.deepStrictEqual(Array.from(fileMessage.content[1].data), [65, 66, 67]);
+  });
+
+  it('POST /v1/audio/speech multipart 多文件并跨字段传递时，mix 应按顺序注入多个 file content', async () => {
+    let receivedOptions;
+    const app = createApp({
+      providers: {
+        createOpenAI: () => ({
+          chat: () => ({ modelCode: 'gpt-4o-mix' }),
+        }),
+      },
+      ai: {
+        generateText: async (options) => {
+          receivedOptions = options;
+          return { text: 'ok', usage: {} };
+        },
+      },
+    });
+    const mockEnv = seedMixModelEnv();
+
+    const form = new FormData();
+    form.append('model', 'gpt-4o-mix');
+    form.append('input', 'say hi');
+    form.append('file', new Blob([new Uint8Array([1])], { type: 'audio/mpeg' }));
+    form.append('file', new Blob([new Uint8Array([2])], { type: 'audio/mpeg' }));
+    form.append('image', new Blob([new Uint8Array([3])], { type: 'image/png' }));
+    form.append('input_image', new Blob([new Uint8Array([4])], { type: 'image/png' }));
+    form.append('inputImage', new Blob([new Uint8Array([5])], { type: 'image/png' }));
+
+    const request = {
+      method: 'POST',
+      url: `https://example.com${ROUTES.V1_AUDIO}`,
+      headers: {
+        get: (key) => {
+          if (String(key).toLowerCase() === HEADERS.CONTENT_TYPE.toLowerCase()) {
+            return `${MULTIPART_CONTENT_TYPE}; boundary=----test-boundary`;
+          }
+          if (String(key).toLowerCase() === HEADERS.AUTHORIZATION.toLowerCase()) {
+            return 'Bearer test-admin-key';
+          }
+          return undefined;
+        },
+      },
+      formData: async () => form,
+      json: async () => {
+        throw new Error('should not parse json for multipart');
+      },
+    };
+
+    await app.handleRequest(request, mockEnv);
+    const userMessage = receivedOptions.messages.at(-1);
+    assert.strictEqual(userMessage.role, 'user');
+    const fileContents = userMessage.content.filter((item) => item.type === 'file');
+    assert.strictEqual(fileContents.length, 5);
+    assert.deepStrictEqual(Array.from(fileContents[0].data), [1]);
+    assert.deepStrictEqual(Array.from(fileContents[1].data), [2]);
+    assert.deepStrictEqual(Array.from(fileContents[2].data), [3]);
+    assert.deepStrictEqual(Array.from(fileContents[3].data), [4]);
+    assert.deepStrictEqual(Array.from(fileContents[4].data), [5]);
   });
 });
 

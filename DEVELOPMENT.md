@@ -2495,6 +2495,9 @@ async function parseRequestBody(request: Request): Promise<
 - 失败：返回 `success: false` 和具体 `error`。
 - 边界：`content-type` 非 JSON/FormData 时，按 JSON 解析。
 - multipart 文件字段规则：若 FormData 值为 `Blob/File`，在写入 `body[key]` 前统一归一化为 `Uint8Array`。
+- multipart 重复字段规则：
+  - 若同名字段只出现一次，`body[key]` 为单值。
+  - 若同名字段出现多次，`body[key]` 为数组，顺序与上传顺序一致。
 
 ```ts
 async function normalizeBinaryInput(input: unknown): Promise<string | Uint8Array | ArrayBuffer>;
@@ -2513,6 +2516,18 @@ async function normalizeTranscriptionAudioInput(input: unknown): Promise<string 
 
 - 含义：转录专用输入归一化函数。
 - 约束：内部必须复用 `normalizeBinaryInput`，禁止重复实现同类二进制转换逻辑。
+
+```ts
+function collectBinaryFieldValues(
+  body: Record<string, unknown>,
+): Array<unknown>;
+```
+
+- 含义：统一读取 `file|image|input_image|inputImage` 的单值或数组并扁平化。
+- 优先级与合并顺序：`file -> image -> input_image -> inputImage`。
+- 边界：
+  - 若四个字段都不存在，返回空数组。
+  - 若同时传多个字段，不报错，按固定顺序合并。
 
 ```ts
 function formatValidationError(error: unknown): string;

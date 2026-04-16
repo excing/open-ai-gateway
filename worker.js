@@ -470,7 +470,16 @@ async function parseRequestBody(request) {
       const form = await request.formData();
       body = {};
       for (const [key, value] of form.entries()) {
-        body[key] = value;
+        const normalizedValue = value;
+        if (Object.prototype.hasOwnProperty.call(body, key)) {
+          if (Array.isArray(body[key])) {
+            body[key].push(normalizedValue);
+          } else {
+            body[key] = [body[key], normalizedValue];
+          }
+        } else {
+          body[key] = normalizedValue;
+        }
       }
     } else {
       body = await request.json();
@@ -518,6 +527,21 @@ function extractBearerToken(request) {
   const auth = request.headers.get(HEADERS.AUTHORIZATION);
   if (!auth || !auth.startsWith(BEARER_PREFIX)) return null;
   return auth.slice(BEARER_PREFIX.length).trim();
+}
+
+function collectBinaryFieldValues(body) {
+  const binaryFieldOrder = ['file', 'image', 'input_image', 'inputImage'];
+  const values = [];
+  for (const key of binaryFieldOrder) {
+    const rawValue = body?.[key];
+    if (rawValue === undefined || rawValue === null) continue;
+    if (Array.isArray(rawValue)) {
+      values.push(...rawValue);
+    } else {
+      values.push(rawValue);
+    }
+  }
+  return values;
 }
 
 async function buildMixAugmentedMessages(userCallType, body) {
@@ -576,12 +600,12 @@ async function buildMixAugmentedMessages(userCallType, body) {
     text: payloadString,
   }]
 
-  const fileCandidate = firstValue(body.file, body.image, body.input_image, body.inputImage);
-  if (fileCandidate !== undefined) {
+  const fileCandidates = collectBinaryFieldValues(body);
+  for (const fileCandidate of fileCandidates) {
     content.push({
       type: 'file',
       data: await normalizeBinaryInput(fileCandidate),
-      mediaType: fileCandidate.type || "application/octet-stream",
+      mediaType: fileCandidate?.type || 'application/octet-stream',
     });
   }
 
@@ -1099,7 +1123,9 @@ function createApp(deps = {}) {
       );
     }
     if (callType === CALL_TYPES.TRANSCRIBE) {
-      const audio = await normalizeTranscriptionAudioInput(body.file);
+      const fileCandidates = collectBinaryFieldValues(body);
+      const firstAudioInput = firstValue(fileCandidates[0], body.file);
+      const audio = await normalizeTranscriptionAudioInput(firstAudioInput);
       return ai.experimental_transcribe(
         pruneUndefined({
           model: aiModel,
