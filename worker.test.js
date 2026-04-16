@@ -164,8 +164,18 @@ function createMockEnv() {
             // SELECT models by identifier
             if (normalizedSql.includes('where (cm.code =') || normalizedSql.includes('cm.aliases like')) {
               const modelIdentifier = bindings[0];
+              const aliasLike = String(bindings[1] || '');
+              const aliasQuoted = aliasLike.replaceAll('%', '').replace(/^"+|"+$/g, '');
               const results = Array.from(models.values())
-                .filter(m => m.code === modelIdentifier)
+                .filter((m) => {
+                  if (m.code === modelIdentifier) return true;
+                  try {
+                    const aliases = JSON.parse(m.aliases || '[]');
+                    return Array.isArray(aliases) && aliases.includes(aliasQuoted);
+                  } catch {
+                    return false;
+                  }
+                })
                 .map(m => {
                   const ch = channels.get(m.channel_id);
                   return {
@@ -1873,6 +1883,67 @@ describe('V1 参数完整透传', () => {
     mockEnv._clear();
   });
 
+  it('POST /v1/chat/completions 使用模型别名应命中真实模型', async () => {
+    const app = createApp({
+      providers: {
+        createOpenAI: () => ({
+          chat: (modelCode) => ({ modelCode }),
+        }),
+      },
+      ai: {
+        generateText: async () => ({ text: 'alias matched', usage: {} }),
+      },
+    });
+    const mockEnv = createMockEnv();
+    mockEnv._addChannel({
+      id: 'ch-alias-match',
+      name: 'OpenAI Alias',
+      key: 'openai-alias-match',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-test',
+      base_url: '',
+      created_at: '2026-04-15T00:00:00Z',
+      updated_at: '2026-04-15T00:00:00Z',
+    });
+    mockEnv._addModel({
+      id: 'model-alias-match',
+      channel_id: 'ch-alias-match',
+      code: 'gpt-4o',
+      name: 'gpt-4o',
+      desc: '',
+      aliases: JSON.stringify(['my-gpt']),
+      call_type: CALL_TYPES.CHAT,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT]),
+      input_cost: '0',
+      output_cost: '0',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-15T00:00:00Z',
+      headers: '{}',
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_CHAT,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        model: 'my-gpt',
+        messages: [{ role: 'user', content: 'hello alias' }],
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.choices[0].message.content, 'alias matched');
+    mockEnv._clear();
+  });
+
   it('executeAIRequest(embedding) 应透传 embedding 参数', async () => {
     let receivedOptions;
     const app = createApp({
@@ -2046,6 +2117,134 @@ describe('mix call_type 兼容', () => {
     const data = await response.json();
     assert.strictEqual(response.status, HTTP_STATUS.OK);
     assert.deepStrictEqual(data.data, [{ url: 'aGVsbG8=' }]);
+  });
+
+  it('POST /v1/images/generations 使用 mix 模型时应将接口专属参数拼接进 messages', async () => {
+    let receivedOptions;
+    const app = createApp({
+      providers: {
+        createOpenAI: () => ({
+          chat: () => ({ modelCode: 'gpt-4o-mix' }),
+        }),
+      },
+      ai: {
+        generateText: async (options) => {
+          receivedOptions = options;
+          return { text: 'image data:data:image/png;base64,aGVsbG8=', usage: {} };
+        },
+      },
+    });
+    const mockEnv = seedMixModelEnv();
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_IMAGES,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        model: 'gpt-4o-mix',
+        prompt: 'draw a fox',
+        n: 2,
+        size: '1024x1024',
+        aspect_ratio: '1:1',
+        response_format: 'b64_json',
+      },
+    });
+
+    await app.handleRequest(request, mockEnv);
+    assert.strictEqual(Array.isArray(receivedOptions.messages), true);
+    const contextMessage = receivedOptions.messages.at(-1);
+    assert.strictEqual(contextMessage.role, 'system');
+    const contextText = contextMessage.content[0].text;
+    assert.strictEqual(contextText.includes('"image_gen"'), true);
+    assert.strictEqual(contextText.includes('"n":2'), true);
+    assert.strictEqual(contextText.includes('"size":"1024x1024"'), true);
+    assert.strictEqual(contextText.includes('"aspect_ratio":"1:1"'), true);
+    assert.strictEqual(contextText.includes('"response_format":"b64_json"'), true);
+  });
+
+  it('POST /v1/audio/speech 使用 mix 模型时应将 audio 参数拼接进 messages 且 file 单独注入', async () => {
+    let receivedOptions;
+    const app = createApp({
+      providers: {
+        createOpenAI: () => ({
+          chat: () => ({ modelCode: 'gpt-4o-mix' }),
+        }),
+      },
+      ai: {
+        generateText: async (options) => {
+          receivedOptions = options;
+          return { text: 'audio data:audio/mpeg;base64,aGVsbG8=', usage: {} };
+        },
+      },
+    });
+    const mockEnv = seedMixModelEnv();
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_AUDIO,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        model: 'gpt-4o-mix',
+        input: 'say hi',
+        voice: 'alloy',
+        speed: 1.1,
+        format: 'mp3',
+        file: 'data:audio/mpeg;base64,AAAA',
+      },
+    });
+
+    await app.handleRequest(request, mockEnv);
+    assert.strictEqual(Array.isArray(receivedOptions.messages), true);
+    assert.strictEqual(receivedOptions.messages.length >= 2, true);
+    const contextMessage = receivedOptions.messages.at(-2);
+    const fileMessage = receivedOptions.messages.at(-1);
+    assert.strictEqual(contextMessage.role, 'system');
+    const contextText = contextMessage.content[0].text;
+    assert.strictEqual(contextText.includes('"audio_gen"'), true);
+    assert.strictEqual(contextText.includes('"voice":"alloy"'), true);
+    assert.strictEqual(contextText.includes('"speed":1.1'), true);
+    assert.strictEqual(contextText.includes('"output_format":"mp3"'), true);
+    assert.strictEqual(fileMessage.role, 'user');
+    assert.strictEqual(fileMessage.content[0].type, 'file');
+    assert.strictEqual(fileMessage.content[0].data, 'data:audio/mpeg;base64,AAAA');
+  });
+
+  it('POST /v1/audio/speech multipart 传入文件时，mix 消息中的 file.data 应为 Uint8Array', async () => {
+    let receivedOptions;
+    const app = createApp({
+      providers: {
+        createOpenAI: () => ({
+          chat: () => ({ modelCode: 'gpt-4o-mix' }),
+        }),
+      },
+      ai: {
+        generateText: async (options) => {
+          receivedOptions = options;
+          return { text: 'audio data:audio/mpeg;base64,aGVsbG8=', usage: {} };
+        },
+      },
+    });
+    const mockEnv = seedMixModelEnv();
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_AUDIO,
+      headers: {
+        authorization: 'Bearer test-admin-key',
+        [HEADERS.CONTENT_TYPE.toLowerCase()]: `${MULTIPART_CONTENT_TYPE}; boundary=----test-boundary`,
+      },
+      body: {
+        model: 'gpt-4o-mix',
+        input: 'say hi',
+        file: new Blob([new Uint8Array([65, 66, 67])], { type: 'audio/mpeg' }),
+      },
+    });
+
+    await app.handleRequest(request, mockEnv);
+    const fileMessage = receivedOptions.messages.at(-1);
+    assert.strictEqual(fileMessage.role, 'user');
+    assert.strictEqual(Array.isArray(fileMessage.content), true);
+    assert.strictEqual(fileMessage.content[0].type, 'text');
+    assert.strictEqual(fileMessage.content[1].type, 'file');
+    assert.ok(fileMessage.content[1].data instanceof Uint8Array);
+    assert.deepStrictEqual(Array.from(fileMessage.content[1].data), [65, 66, 67]);
   });
 });
 

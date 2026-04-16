@@ -520,6 +520,79 @@ function extractBearerToken(request) {
   return auth.slice(BEARER_PREFIX.length).trim();
 }
 
+async function buildMixAugmentedMessages(userCallType, body) {
+  const messages = Array.isArray(body.messages) ? [...body.messages] : [];
+  const prompt = body.prompt ?? body.input;
+  const mixParamPayload = {
+    image_gen: {
+      count: body.n,
+      size: body.size,
+      aspect_ratio: firstValue(body.aspectRatio, body.aspect_ratio),
+      response_format: firstValue(body.responseFormat, body.response_format),
+      provider_metadata: firstValue(body.providerMetadata, body.provider_metadata),
+    },
+    video_gen: {
+      duration: body.duration,
+      fps: body.fps,
+      size: body.size,
+      aspect_ratio: firstValue(body.aspectRatio, body.aspect_ratio),
+      response_format: firstValue(body.responseFormat, body.response_format),
+      provider_metadata: firstValue(body.providerMetadata, body.provider_metadata),
+    },
+    audio_gen: {
+      voice: body.voice,
+      speed: body.speed,
+      instructions: body.instructions,
+      output_format: firstValue(body.outputFormat, body.response_format, body.format),
+      provider_metadata: firstValue(body.providerMetadata, body.provider_metadata),
+    },
+    transcribe: {
+      language: body.language,
+      temperature: body.temperature,
+      response_format: firstValue(body.responseFormat, body.response_format),
+      timestamp_granularities: firstValue(body.timestampGranularities, body.timestamp_granularities),
+    },
+  };
+
+  const compactPayload = pruneUndefined(mixParamPayload[userCallType]);
+  Object.keys(compactPayload).forEach((groupKey) => {
+    if (typeof compactPayload[groupKey] === 'object' && compactPayload[groupKey] !== null) {
+      const nested = pruneUndefined(compactPayload[groupKey]);
+      if (Object.keys(nested).length === 0) {
+        delete compactPayload[groupKey];
+      } else {
+        compactPayload[groupKey] = nested;
+      }
+    }
+  });
+
+  const payloadString = [
+    prompt,
+    JSON.stringify(compactPayload),
+  ].join('\n');
+
+  const content = [{
+    type: 'text',
+    text: payloadString,
+  }]
+
+  const fileCandidate = firstValue(body.file, body.image, body.input_image, body.inputImage);
+  if (fileCandidate !== undefined) {
+    content.push({
+      type: 'file',
+      data: await normalizeBinaryInput(fileCandidate),
+      mediaType: fileCandidate.type || "application/octet-stream",
+    });
+  }
+
+  messages.push({
+    role: 'user',
+    content,
+  });
+
+  return messages;
+}
+
 function extractPathParam(pathname, prefix) {
   if (!pathname.startsWith(prefix)) return null;
   const value = pathname.slice(prefix.length);
@@ -788,7 +861,7 @@ async function getRequestBody(body) {
   return '';
 }
 
-async function normalizeTranscriptionAudioInput(input) {
+async function normalizeBinaryInput(input) {
   if (typeof input === 'string' || input instanceof Uint8Array || input instanceof ArrayBuffer) {
     return input;
   }
@@ -799,16 +872,24 @@ async function normalizeTranscriptionAudioInput(input) {
   }
 
   if (input && typeof input === 'object') {
-    if (input.data) return normalizeTranscriptionAudioInput(input.data);
-    if (input.uint8ArrayData) return normalizeTranscriptionAudioInput(input.uint8ArrayData);
-    if (input.base64) return normalizeTranscriptionAudioInput(input.base64);
+    if (input.data !== undefined) return normalizeBinaryInput(input.data);
+    if (input.uint8ArrayData !== undefined) return normalizeBinaryInput(input.uint8ArrayData);
+    if (input.base64 !== undefined) return normalizeBinaryInput(input.base64);
     if (typeof input.arrayBuffer === 'function') {
       const arrayBuffer = await input.arrayBuffer();
       return new Uint8Array(arrayBuffer);
     }
   }
 
-  throw new Error('Invalid transcription file');
+  throw new Error('Invalid binary input');
+}
+
+async function normalizeTranscriptionAudioInput(input) {
+  try {
+    return await normalizeBinaryInput(input);
+  } catch {
+    throw new Error('Invalid transcription file');
+  }
 }
 
 function createApp(deps = {}) {
@@ -954,11 +1035,13 @@ function createApp(deps = {}) {
   async function executeAIRequest(aiModel, callType, body) {
     const providerOptions = firstValue(body.extra_body, body.providerOptions);
     if (callType === CALL_TYPES.CHAT || callType === CALL_TYPES.MIX) {
+      const messages = body.messages;
+      const prompt = messages ? undefined : body.prompt;
       return ai.generateText(
         pruneUndefined({
           model: aiModel,
-          messages: body.messages,
-          prompt: body.prompt,
+          messages,
+          prompt,
           maxTokens: firstValue(body.maxTokens, body.max_tokens),
           temperature: body.temperature,
           topP: firstValue(body.topP, body.top_p),
@@ -1226,7 +1309,7 @@ function createApp(deps = {}) {
     const baseQuery = SQL.SELECT_MODELS_BY_IDENTIFIER_BASE;
     const hasChannel = Boolean(channelId);
     const query = hasChannel ? `${baseQuery} AND cm.channel_id = ?5` : baseQuery;
-    const params = [modelIdentifier, `\"${modelIdentifier}\"`, MODEL_STATUS.DISABLE, nowValue];
+    const params = [modelIdentifier, `%\"${modelIdentifier}\"%`, MODEL_STATUS.DISABLE, nowValue];
     if (hasChannel) params.push(channelId);
     const { results } = await env.DB.prepare(query).bind(...params).all();
     if (!results || results.length === 0) return [];
@@ -1384,6 +1467,9 @@ function createApp(deps = {}) {
           env,
         );
 
+        body.messages = selection.model.call_type === CALL_TYPES.MIX && userCallType !== CALL_TYPES.CHAT
+          ? await buildMixAugmentedMessages(userCallType, body)
+          : body.messages;
         const result = await executeAIRequest(aiModel, selection.model.call_type, body);
         const latencyMs = nowFn().getTime() - startTime;
         const usageTokens = getUsageTokens(result.usage);

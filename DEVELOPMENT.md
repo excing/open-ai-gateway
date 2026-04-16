@@ -180,6 +180,10 @@ CREATE INDEX idx_channel_models_status ON channel_models(status);
 CREATE INDEX idx_channel_models_call_type ON channel_models(call_type);
 ```
 
+> 别名匹配规则（运行时）：
+> - 请求参数 `model` 与 `channel_models.code` 做精确匹配（`=`）。
+> - 同时对 `channel_models.aliases`（JSON 字符串）做包含匹配，SQL 使用 `LIKE '%"别名值"%'`，确保仅匹配 JSON 数组中的完整字符串元素，避免子串误命中。
+
 #### `request_logs` 表 — 请求日志
 
 | 字段 | 类型 | 约束 | 说明 |
@@ -2490,6 +2494,25 @@ async function parseRequestBody(request: Request): Promise<
 - 成功：返回 `success: true` 和 `body`。
 - 失败：返回 `success: false` 和具体 `error`。
 - 边界：`content-type` 非 JSON/FormData 时，按 JSON 解析。
+- multipart 文件字段规则：若 FormData 值为 `Blob/File`，在写入 `body[key]` 前统一归一化为 `Uint8Array`。
+
+```ts
+async function normalizeBinaryInput(input: unknown): Promise<string | Uint8Array | ArrayBuffer>;
+```
+
+- 含义：统一归一化二进制输入。
+- 输入支持：`string`、`Uint8Array`、`ArrayBuffer`、`Blob/File`、以及包含 `data|uint8ArrayData|base64|arrayBuffer()` 的对象。
+- 输出规则：
+  - 文本输入保持为 `string`。
+  - 二进制输入统一输出 `Uint8Array`（`ArrayBuffer` 原样透传）。
+- 异常：不支持的输入类型抛出 `Error('Invalid binary input')`。
+
+```ts
+async function normalizeTranscriptionAudioInput(input: unknown): Promise<string | Uint8Array | ArrayBuffer>;
+```
+
+- 含义：转录专用输入归一化函数。
+- 约束：内部必须复用 `normalizeBinaryInput`，禁止重复实现同类二进制转换逻辑。
 
 ```ts
 function formatValidationError(error: unknown): string;
@@ -2570,3 +2593,49 @@ async function selectModels(
   channelId?: string
 ): Promise<ModelSelection[]>;
 ```
+
+```ts
+/**
+ * 仅供 mix 模型使用：把各 V1 接口专属参数打包进文本消息，并可附加文件消息。
+ *
+ * 含义：
+ * - 将 image_gen / video_gen / audio_gen / transcribe / embedding 的关键参数聚合为结构化 JSON
+ * - 追加一个 system message，文本内容包含 `MIX_REQUEST_CONTEXT` 与 JSON 载荷
+ * - 若请求体含 file/image/input_image/inputImage，则追加一个 user file message
+ *
+ * 签名：
+ * buildMixAugmentedMessages(body: Record<string, any>): Array<Record<string, any>>
+ *
+ * 输入字段语义与边界：
+ * - body.messages: 原始对话数组；可为空，空时按空数组处理
+ * - body.file | body.image | body.input_image | body.inputImage: 任一存在即注入文件消息
+ * - body.prompt/input/voice/speed/size/n/aspect_ratio/format...：按原值透传到 context JSON，不做业务改写
+ *
+ * 错误与边界：
+ * - 本函数不抛业务错误；仅做参数收集和消息拼接
+ * - 空字段会被 pruneUndefined 剔除，避免污染上下文
+ */
+function buildMixAugmentedMessages(body: Record<string, any>): Array<Record<string, any>>;
+```
+
+### 14.6 mix 请求参数透传规则（2026-04-15 更新）
+
+- 适用范围：`executeAIRequest` 中 `callType === "mix"` 分支。
+- 执行方式：
+  - 请求仍走 `generateText`（保持既有 mix 行为）。
+  - `messages` 不再直接使用 `body.messages`，而是使用 `buildMixAugmentedMessages(body)` 的结果。
+- context 文本内容：
+  - 固定前缀 `MIX_REQUEST_CONTEXT`
+  - 结构化 JSON（按接口分组）：
+    - `image_gen`: `prompt/n/size/aspect_ratio/response_format/provider_metadata`
+    - `video_gen`: `prompt/duration/fps/size/aspect_ratio/response_format/provider_metadata`
+    - `audio_gen`: `input/voice/speed/instructions/output_format/provider_metadata`
+    - `transcribe`: `language/prompt/temperature/response_format/timestamp_granularities`
+    - `embedding`: `input/dimensions/encoding_format/user`
+- 文件消息规则：
+  - 若请求含 `file|image|input_image|inputImage`，追加独立 `user` message：
+    - `content[0].type = "file"`
+    - `content[0].data = <原始文件字段值>`
+- 兼容性：
+  - chat 非 mix 模型不受影响，继续使用原有 `messages/prompt` 映射。
+  - mix 的响应转换规则（14.4）不变。
