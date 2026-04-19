@@ -198,8 +198,8 @@ CREATE INDEX idx_channel_models_call_type ON channel_models(call_type);
 | `status` | TEXT | NOT NULL | 请求结果状态：`success` 或 `error` |
 | `error_message` | TEXT | DEFAULT '' | 当 status='error' 时的错误信息 |
 | `latency_ms` | INTEGER | NOT NULL, DEFAULT 0 | 请求耗时（毫秒），从发起 AI 请求到收到响应/第一个 chunk 的时间 |
-| `input_tokens` | INTEGER | DEFAULT 0 | 输入 token 数量（仅 chat/embedding 类型有效） |
-| `output_tokens` | INTEGER | DEFAULT 0 | 输出 token 数量（仅 chat 类型有效） |
+| `input_quantity` | INTEGER | DEFAULT 0 | 输入计量值。chat/embedding/transcribe/mix 使用输入 tokens；image_gen 使用输入图片数；audio_gen/video_gen 使用输入秒数。 |
+| `output_quantity` | INTEGER | DEFAULT 0 | 输出计量值。chat/mix 使用输出 tokens；image_gen 使用输出图片数；audio_gen/video_gen 使用输出秒数。 |
 | `input_price` | TEXT | DEFAULT '0' | 请求发生时模型输入单价快照，格式与 `channel_models.input_cost` 一致（如 `5/M`、`2/req`、`0`） |
 | `output_price` | TEXT | DEFAULT '0' | 请求发生时模型输出单价快照，格式与 `channel_models.output_cost` 一致（如 `10/M`、`0`） |
 | `input_cost` | INTEGER | DEFAULT 0 | 本次请求真实输入成本（整数最小单位，缩放系数 `COST_SCALE_FACTOR=1_000_000_000`）。示例：真实成本 `0.5` 记录为 `500000000` |
@@ -219,8 +219,8 @@ CREATE TABLE request_logs (
     status TEXT NOT NULL,
     error_message TEXT DEFAULT '',
     latency_ms INTEGER NOT NULL DEFAULT 0,
-    input_tokens INTEGER DEFAULT 0,
-    output_tokens INTEGER DEFAULT 0,
+    input_quantity INTEGER DEFAULT 0,
+    output_quantity INTEGER DEFAULT 0,
     input_price TEXT DEFAULT '0',
     output_price TEXT DEFAULT '0',
     input_cost INTEGER DEFAULT 0,
@@ -332,8 +332,8 @@ interface RequestLogRow {
     status: LogStatus;
     error_message: string;
     latency_ms: number;
-    input_tokens: number;
-    output_tokens: number;
+    input_quantity: number;
+    output_quantity: number;
     input_price: string;
     output_price: string;
     input_cost: number;
@@ -1150,15 +1150,15 @@ async function writeLog(log: Omit<RequestLogRow, 'id' | 'created_at'>, env: Env)
  *
  * @param inputPriceConfig - 模型输入单价配置（如 '5/M'、'2/req'、'0'）
  * @param outputPriceConfig - 模型输出单价配置（如 '10/M'、'0'）
- * @param inputTokens - 本次请求输入 token 数
- * @param outputTokens - 本次请求输出 token 数
+ * @param inputQuantity - 本次请求输入计量值（按单价单位解释，输入与输出独立）
+ * @param outputQuantity - 本次请求输出计量值（按单价单位解释，输入与输出独立）
  * @returns 日志价格快照与成本：input_price/output_price/input_cost/output_cost/total_cost
  */
 function buildLogCostSnapshot(
   inputPriceConfig: string | undefined,
   outputPriceConfig: string | undefined,
-  inputTokens: number,
-  outputTokens: number
+  inputQuantity: number,
+  outputQuantity: number
 ): Pick<RequestLogRow, 'input_price' | 'output_price' | 'input_cost' | 'output_cost' | 'total_cost'>;
 ```
 
@@ -1516,8 +1516,8 @@ data: [DONE]
             "status": "success",
             "error_message": "",
             "latency_ms": 1200,
-            "input_tokens": 100,
-            "output_tokens": 50,
+            "input_quantity": 100,
+            "output_quantity": 50,
             "input_price": "0",
             "output_price": "50/M",
             "input_cost": 0,
@@ -1542,8 +1542,8 @@ data: [DONE]
    - `channel_name`：渠道名称。
    - `request_model`：请求模型名称（客户端提交值）。
    - `latency_ms`：耗时（单位 `ms`）。
-   - `input_tokens`：输入 tokens。
-   - `output_tokens`：输出 tokens。
+   - `input_quantity`：输入 tokens。
+   - `output_quantity`：输出 tokens。
    - `total_cost`：总花费（由最小成本单位整数换算为真实金额显示）。
    - `created_at`：时间，必须做本地格式化展示（`Intl.DateTimeFormat`）。
 3. 行展开详情规则：
@@ -2080,8 +2080,8 @@ async function handleV1Proxy(request, env, userCallType) {
                     status: 'success',
                     error_message: '',
                     latency_ms: latencyMs,
-                    input_tokens: result.usage?.promptTokens || 0,
-                    output_tokens: result.usage?.completionTokens || 0,
+                    input_quantity: result.usage?.promptTokens || 0,
+                    output_quantity: result.usage?.completionTokens || 0,
                 }, env));
 
                 return formatAIResponse(result, selection.model.call_type, selection.model.code);
@@ -2100,8 +2100,8 @@ async function handleV1Proxy(request, env, userCallType) {
                     status: 'error',
                     error_message: error.message || 'Unknown error',
                     latency_ms: latencyMs,
-                    input_tokens: 0,
-                    output_tokens: 0,
+                    input_quantity: 0,
+                    output_quantity: 0,
                 }, env));
                 // 继续重试下一个候选模型
             }

@@ -103,6 +103,8 @@ function createMockEnv() {
                 channel_id: bindings[1],
                 channel_name: bindings[2],
                 model_id: bindings[3],
+                input_quantity: bindings[10],
+                output_quantity: bindings[11],
                 input_price: bindings[12],
                 output_price: bindings[13],
                 input_cost: bindings[14],
@@ -2494,6 +2496,94 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(createdModel.output_cost, '0.6/M');
   });
 
+  it('统一日志函数: success 应写入日志并按显式 usageQuantities 计算成本', async () => {
+    mockEnv._addChannel({
+      id: 'ch-unified-success',
+      name: 'Unified Success Channel',
+      key: 'unified-success-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-unified-success',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    });
+    mockEnv._addModel({
+      id: 'model-unified-success',
+      channel_id: 'ch-unified-success',
+      code: 'gpt-4o-unified-success',
+      name: 'gpt-4o-unified-success',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT]),
+      input_cost: '2/M',
+      output_cost: '3/M',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-15T00:00:00.000Z',
+      headers: '{}',
+    });
+
+    const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
+    assert.strictEqual(latestLog.channel_id, 'ch-unified-success');
+    assert.strictEqual(latestLog.model_id, 'model-unified-success');
+    assert.strictEqual(latestLog.input_quantity, 500000);
+    assert.strictEqual(latestLog.output_quantity, 1000000);
+    assert.strictEqual(latestLog.input_cost, 1000000000);
+    assert.strictEqual(latestLog.output_cost, 3000000000);
+    assert.strictEqual(latestLog.total_cost, 4000000000);
+  });
+
+  it('统一日志函数: error 在缺省 usage 时应写入 0 用量和错误成本快照', async () => {
+    mockEnv._addChannel({
+      id: 'ch-unified-error',
+      name: 'Unified Error Channel',
+      key: 'unified-error-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-unified-error',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    });
+    mockEnv._addModel({
+      id: 'model-unified-error',
+      channel_id: 'ch-unified-error',
+      code: 'gpt-4o-unified-error',
+      name: 'gpt-4o-unified-error',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT]),
+      input_cost: '2/req',
+      output_cost: '8/M',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-15T00:00:00.000Z',
+      headers: '{}',
+    });
+
+    const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
+    assert.strictEqual(latestLog.channel_id, 'ch-unified-error');
+    assert.strictEqual(latestLog.model_id, 'model-unified-error');
+    assert.strictEqual(latestLog.input_quantity, 0);
+    assert.strictEqual(latestLog.output_quantity, 0);
+    assert.strictEqual(latestLog.input_cost, 2000000000);
+    assert.strictEqual(latestLog.output_cost, 0);
+    assert.strictEqual(latestLog.total_cost, 2000000000);
+  });
+
   it('请求成功日志应写入 input_cost/output_cost', async () => {
     mockEnv._addChannel({
       id: 'ch-log',
@@ -2614,6 +2704,8 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(response.status, HTTP_STATUS.OK);
     assert.ok(mockEnv._logs.length > 0);
     const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
+    assert.strictEqual(latestLog.input_quantity, 100000);
+    assert.strictEqual(latestLog.output_quantity, 100000);
     assert.strictEqual(latestLog.input_price, '5/M');
     assert.strictEqual(latestLog.output_price, '10/M');
     assert.strictEqual(latestLog.input_cost, 500000000);
@@ -2686,6 +2778,8 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(responseData.usage.total_tokens, 500000);
 
     const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
+    assert.strictEqual(latestLog.input_quantity, 200000);
+    assert.strictEqual(latestLog.output_quantity, 300000);
     assert.strictEqual(latestLog.input_price, '5/M');
     assert.strictEqual(latestLog.output_price, '10/M');
     assert.strictEqual(latestLog.input_cost, 1000000000);
@@ -2776,6 +2870,206 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     ));
     assert.ok(errorLog);
   });
+
+  it('image_gen 请求应优先按请求输入图片数与输出 images.length 手动统计', async () => {
+    mockEnv._addChannel({
+      id: 'ch-img-cost',
+      name: 'Image Cost Channel',
+      key: 'image-cost-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-image-cost',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    });
+    mockEnv._addModel({
+      id: 'model-img-cost',
+      channel_id: 'ch-img-cost',
+      code: 'gpt-image-1',
+      name: 'gpt-image-1',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.IMAGE_GEN,
+      capabilities: JSON.stringify([CALL_TYPES.IMAGE_GEN]),
+      input_cost: '0',
+      output_cost: '0.02/img',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-15T00:00:00.000Z',
+      headers: '{}',
+    });
+
+    app = createApp({
+      now: () => new Date('2026-04-15T00:00:00.000Z'),
+      providers: {
+        createOpenAI: () => ({ image: (modelCode) => ({ modelCode }) }),
+      },
+      ai: {
+        generateImage: async () => ({
+          inputImageCount: 99,
+          images: [{ base64: 'a' }, { base64: 'b' }, { base64: 'c' }],
+        }),
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_IMAGES,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        model: 'gpt-image-1',
+        prompt: 'draw',
+        n: 3,
+        input_images_count: 2,
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
+    assert.strictEqual(latestLog.output_price, '0.02/img');
+    assert.strictEqual(latestLog.input_quantity, 2);
+    assert.strictEqual(latestLog.output_quantity, 3);
+    assert.strictEqual(latestLog.input_cost, 0);
+    assert.strictEqual(latestLog.output_cost, 60000000);
+    assert.strictEqual(latestLog.total_cost, 60000000);
+  });
+
+  it('audio_gen 请求应优先按输入秒数与音频二进制手动时长统计', async () => {
+    mockEnv._addChannel({
+      id: 'ch-audio-cost',
+      name: 'Audio Cost Channel',
+      key: 'audio-cost-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-audio-cost',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    });
+    mockEnv._addModel({
+      id: 'model-audio-cost',
+      channel_id: 'ch-audio-cost',
+      code: 'gpt-audio-1',
+      name: 'gpt-audio-1',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.AUDIO_GEN,
+      capabilities: JSON.stringify([CALL_TYPES.AUDIO_GEN]),
+      input_cost: '0',
+      output_cost: '0.5/sec',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-15T00:00:00.000Z',
+      headers: '{}',
+    });
+
+    app = createApp({
+      now: () => new Date('2026-04-15T00:00:00.000Z'),
+      providers: {
+        createOpenAI: () => ({ speech: (modelCode) => ({ modelCode }) }),
+      },
+      ai: {
+        experimental_generateSpeech: async () => ({
+          audio: { uint8Array: new Uint8Array([1, 2, 3]), mediaType: 'audio/mpeg' },
+          inputDurationSeconds: 1.5,
+          durationSeconds: 999,
+        }),
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_AUDIO,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: { model: 'gpt-audio-1', input: 'hello', inputDuration: 1.5 },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
+    assert.strictEqual(latestLog.output_price, '0.5/sec');
+    assert.strictEqual(latestLog.input_quantity, 1.5);
+    assert.strictEqual(latestLog.output_quantity, 0);
+    assert.strictEqual(latestLog.input_cost, 0);
+    assert.strictEqual(latestLog.output_cost, 0);
+    assert.strictEqual(latestLog.total_cost, 0);
+  });
+
+  it('video_gen 请求应按媒体二进制手动计算输出秒数并与输入秒数分离', async () => {
+    mockEnv._addChannel({
+      id: 'ch-video-cost',
+      name: 'Video Cost Channel',
+      key: 'video-cost-channel',
+      provider: PROVIDERS.POLLINATIONS,
+      api_key: 'sk-video-cost',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    });
+    mockEnv._addModel({
+      id: 'model-video-cost',
+      channel_id: 'ch-video-cost',
+      code: 'gpt-video-1',
+      name: 'gpt-video-1',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.VIDEO_GEN,
+      capabilities: JSON.stringify([CALL_TYPES.VIDEO_GEN]),
+      input_cost: '0',
+      output_cost: '0.5/sec',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-15T00:00:00.000Z',
+      headers: '{}',
+    });
+
+    app = createApp({
+      now: () => new Date('2026-04-15T00:00:00.000Z'),
+      providers: {
+        createPollinations: () => ({ video: (modelCode) => ({ modelCode }) }),
+      },
+      ai: {
+        experimental_generateVideo: async () => ({
+          videos: [{ base64: 'AAAA' }],
+          inputDurationSeconds: 2,
+          durationSeconds: 888,
+        }),
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_VIDEO,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: { model: 'gpt-video-1', prompt: 'hello', inputDuration: 2 },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
+    assert.strictEqual(latestLog.output_price, '0.5/sec');
+    assert.strictEqual(latestLog.input_quantity, 2);
+    assert.strictEqual(latestLog.output_quantity, 0);
+    assert.strictEqual(latestLog.total_cost, 0);
+  });
 });
 
 describe('数据库初始化: initializeDatabase', () => {
@@ -2825,5 +3119,40 @@ describe('数据库初始化: initializeDatabase', () => {
 
     await app.initializeDatabase(env);
     assert.strictEqual(executedSql.length, firstRunCount);
+  });
+
+  it('迁移前存在 request_logs_legacy 时应先清理再迁移', async () => {
+    const executedSql = [];
+    const env = {
+      DB: {
+        prepare: (sql) => ({
+          all: async function () {
+            if (String(sql).includes('PRAGMA table_info(request_logs)')) {
+              return {
+                results: [
+                  { name: 'id', type: 'TEXT' },
+                  { name: 'input_tokens', type: 'INTEGER' },
+                  { name: 'output_tokens', type: 'INTEGER' },
+                  { name: 'input_cost', type: 'TEXT' },
+                  { name: 'output_cost', type: 'TEXT' },
+                ],
+              };
+            }
+            return { results: [] };
+          },
+          run: async function () {
+            executedSql.push(String(sql));
+            return { success: true };
+          },
+        }),
+      },
+    };
+
+    await createApp().initializeDatabase(env);
+
+    const hasDropLegacy = executedSql.some((sql) => sql.includes('DROP TABLE IF EXISTS request_logs_legacy'));
+    const hasRename = executedSql.some((sql) => sql.includes('ALTER TABLE request_logs RENAME TO request_logs_legacy'));
+    assert.strictEqual(hasDropLegacy, true);
+    assert.strictEqual(hasRename, true);
   });
 });

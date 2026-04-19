@@ -96,4 +96,110 @@ async function downloadFile(url, timeout = CONSTANTS.DOWNLOAD_TIMEOUT_MS) {
   }
 }
 
-export { extractMediaResources, downloadFile };
+function getMp3Duration(uint8) {
+  const now = new Date();
+  const data = uint8;
+  const len = data.length;
+
+  let i = 0;
+
+  // 跳过 ID3
+  if (
+    data[0] === 0x49 && // I
+    data[1] === 0x44 && // D
+    data[2] === 0x33
+  ) {
+    const size =
+      ((data[6] & 0x7f) << 21) |
+      ((data[7] & 0x7f) << 14) |
+      ((data[8] & 0x7f) << 7) |
+      (data[9] & 0x7f);
+
+    i = 10 + size;
+  }
+
+  for (; i < len - 4; i++) {
+    if (data[i] === 0xff && (data[i + 1] & 0xe0) === 0xe0) {
+      const bitrateIndex = (data[i + 2] >> 4) & 0x0f;
+
+      const bitrateTable = [
+        0, 32, 40, 48, 56, 64, 80, 96,
+        112, 128, 160, 192, 224, 256, 320, 0
+      ];
+
+      const bitrate = bitrateTable[bitrateIndex];
+
+      if (!bitrate) continue;
+
+      const duration = (len * 8) / (bitrate * 1000);
+
+      console.info('timeMs', new Date() - now);
+      return duration;
+    }
+  }
+
+  return null;
+}
+
+function getMp4Duration(uint8) {
+  const data = uint8;
+  const view = new DataView(data.buffer);
+
+  let offset = 0;
+
+  while (offset < data.length) {
+    const size = view.getUint32(offset);
+    const type =
+      String.fromCharCode(
+        data[offset + 4],
+        data[offset + 5],
+        data[offset + 6],
+        data[offset + 7]
+      );
+
+    if (type === "moov") {
+      return parseMoov(data.subarray(offset + 8, offset + size));
+    }
+
+    offset += size;
+  }
+
+  return null;
+}
+
+function parseMoov(data) {
+  const view = new DataView(data.buffer);
+
+  let offset = 0;
+
+  while (offset < data.length) {
+    const size = view.getUint32(offset);
+    const type =
+      String.fromCharCode(
+        data[offset + 4],
+        data[offset + 5],
+        data[offset + 6],
+        data[offset + 7]
+      );
+
+    if (type === "mvhd") {
+      const version = data[offset + 8];
+
+      if (version === 1) {
+        const timescale = view.getUint32(offset + 28);
+        const duration = Number(view.getBigUint64(offset + 32));
+        return duration / timescale;
+      } else {
+        const timescale = view.getUint32(offset + 20);
+        const duration = view.getUint32(offset + 24);
+        return duration / timescale;
+      }
+    }
+
+    offset += size;
+  }
+
+  return null;
+}
+
+export { extractMediaResources, downloadFile, getMp3Duration, getMp4Duration };

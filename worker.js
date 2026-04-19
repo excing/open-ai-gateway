@@ -16,7 +16,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createPollinations } from './pollinations.js';
 import { createExacg } from './exacg.js';
 import { createMicrosoftTTS } from './microsoft-tts.js';
-import { extractMediaResources } from './media-utils.js';
+import { extractMediaResources, getMp3Duration, getMp4Duration } from './media-utils.js';
 
 const CONSTANTS = {
   PROVIDERS: {
@@ -181,7 +181,7 @@ const CONSTANTS = {
     SELECT_CHANNELS_PAGED: `SELECT * FROM channels ORDER BY created_at DESC LIMIT ?1 OFFSET ?2`,
     SELECT_MODEL_BY_ID: `SELECT * FROM channel_models WHERE id = ?1`,
     DELETE_MODEL: `DELETE FROM channel_models WHERE id = ?1`,
-    INSERT_LOG: `INSERT INTO request_logs (id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message, latency_ms, input_tokens, output_tokens, input_price, output_price, input_cost, output_cost, total_cost, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
+    INSERT_LOG: `INSERT INTO request_logs (id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message, latency_ms, input_quantity, output_quantity, input_price, output_price, input_cost, output_cost, total_cost, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
     SELECT_LOGS_BASE: `SELECT * FROM request_logs`,
     COUNT_LOGS_BASE: `SELECT COUNT(*) as total FROM request_logs`,
     SELECT_STATUS_BASE: `SELECT cm.*, c.name as channel_name FROM channel_models cm JOIN channels c ON cm.channel_id = c.id`,
@@ -235,8 +235,8 @@ const CONSTANTS = {
         status TEXT NOT NULL,
         error_message TEXT DEFAULT '',
         latency_ms INTEGER NOT NULL DEFAULT 0,
-        input_tokens INTEGER DEFAULT 0,
-        output_tokens INTEGER DEFAULT 0,
+        input_quantity INTEGER DEFAULT 0,
+        output_quantity INTEGER DEFAULT 0,
         input_price TEXT DEFAULT '0',
         output_price TEXT DEFAULT '0',
         input_cost INTEGER DEFAULT 0,
@@ -275,6 +275,7 @@ const {
   SSE_CONTENT_TYPE,
   OPENAI_OBJECTS,
   STREAM_DONE,
+  COST_UNITS,
   COST_SCALE_FACTOR,
   SQL,
 } = CONSTANTS;
@@ -657,18 +658,6 @@ function safeJsonParse(value, fallback) {
   }
 }
 
-function normalizeCostValue(value) {
-  if (value === undefined || value === null) return '0';
-  const normalized = String(value).trim();
-  return normalized.length > 0 ? normalized : '0';
-}
-
-function convertCostToStorageInteger(value) {
-  const numericValue = Number(value || 0);
-  if (!Number.isFinite(numericValue) || numericValue <= 0) return 0;
-  return Math.round(numericValue * COST_SCALE_FACTOR);
-}
-
 function getUsageTokens(usage) {
   const inputTokens = Number(usage?.inputTokens ?? usage?.promptTokens ?? 0);
   const outputTokens = Number(usage?.outputTokens ?? usage?.completionTokens ?? 0);
@@ -677,38 +666,6 @@ function getUsageTokens(usage) {
     input: Number.isFinite(inputTokens) ? Math.max(0, inputTokens) : 0,
     output: Number.isFinite(outputTokens) ? Math.max(0, outputTokens) : 0,
     total: Number.isFinite(totalTokens) ? Math.max(0, totalTokens) : 0,
-  };
-}
-
-function calculateRequestCost(configCost, usageCount) {
-  const normalizedCost = normalizeCostValue(configCost);
-  if (normalizedCost === '0') return 0;
-  const normalizedUsage = Number(usageCount || 0);
-  const match = normalizedCost.match(/^([0-9]+(?:\.[0-9]+)?)\s*(\/[a-zA-Z]+)$/);
-  if (!match) return 0;
-  const price = Number(match[1]);
-  const unit = match[2].toLowerCase();
-  if (!Number.isFinite(price) || price <= 0) return 0;
-  if (unit === '/m') {
-    return convertCostToStorageInteger((Math.max(0, normalizedUsage) / 1_000_000) * price);
-  }
-  if (unit === '/req') {
-    return convertCostToStorageInteger(price);
-  }
-  return 0;
-}
-
-function buildLogCostSnapshot(inputPriceConfig, outputPriceConfig, inputTokens, outputTokens) {
-  const inputPrice = normalizeCostValue(inputPriceConfig);
-  const outputPrice = normalizeCostValue(outputPriceConfig);
-  const inputCost = calculateRequestCost(inputPrice, inputTokens);
-  const outputCost = calculateRequestCost(outputPrice, outputTokens);
-  return {
-    input_price: inputPrice,
-    output_price: outputPrice,
-    input_cost: inputCost,
-    output_cost: outputCost,
-    total_cost: inputCost + outputCost,
   };
 }
 
@@ -795,12 +752,18 @@ async function migrateRequestLogsCostColumnsToInteger(env) {
   const hasInputPrice = columns.some((column) => column.name === 'input_price');
   const hasOutputPrice = columns.some((column) => column.name === 'output_price');
   const hasTotalCost = columns.some((column) => column.name === 'total_cost');
+  const hasInputQuantity = columns.some((column) => column.name === 'input_quantity');
+  const hasOutputQuantity = columns.some((column) => column.name === 'output_quantity');
+  const hasInputTokens = columns.some((column) => column.name === 'input_tokens');
+  const hasOutputTokens = columns.some((column) => column.name === 'output_tokens');
   const shouldKeepSchema =
     inputCostType === 'INTEGER'
     && outputCostType === 'INTEGER'
     && hasInputPrice
     && hasOutputPrice
-    && hasTotalCost;
+    && hasTotalCost
+    && hasInputQuantity
+    && hasOutputQuantity;
   if (shouldKeepSchema) return;
 
   const buildCostMigrateExpression = (columnName, columnType) => {
@@ -813,20 +776,28 @@ async function migrateRequestLogsCostColumnsToInteger(env) {
   const outputCostExpression = buildCostMigrateExpression('output_cost', outputCostType);
   const inputPriceExpression = hasInputPrice ? `COALESCE(input_price, '0')` : `'0'`;
   const outputPriceExpression = hasOutputPrice ? `COALESCE(output_price, '0')` : `'0'`;
+  const inputQuantityExpression = hasInputQuantity
+    ? `COALESCE(CAST(input_quantity AS INTEGER), 0)`
+    : (hasInputTokens ? `COALESCE(CAST(input_tokens AS INTEGER), 0)` : `0`);
+  const outputQuantityExpression = hasOutputQuantity
+    ? `COALESCE(CAST(output_quantity AS INTEGER), 0)`
+    : (hasOutputTokens ? `COALESCE(CAST(output_tokens AS INTEGER), 0)` : `0`);
   const totalCostExpression = hasTotalCost
     ? buildCostMigrateExpression('total_cost', String(columns.find((column) => column.name === 'total_cost')?.type || '').toUpperCase())
     : `${inputCostExpression} + ${outputCostExpression}`;
 
+  // 幂等迁移: 上次迁移中断时可能遗留 request_logs_legacy，重试前先清理
+  await env.DB.prepare(`DROP TABLE IF EXISTS request_logs_legacy`).run();
   await env.DB.prepare(`ALTER TABLE request_logs RENAME TO request_logs_legacy`).run();
   await env.DB.prepare(SQL.DDL.CREATE_REQUEST_LOGS_TABLE).run();
   await env.DB.prepare(
     `INSERT INTO request_logs (
       id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message,
-      latency_ms, input_tokens, output_tokens, input_price, output_price, input_cost, output_cost, total_cost, created_at
+      latency_ms, input_quantity, output_quantity, input_price, output_price, input_cost, output_cost, total_cost, created_at
     )
     SELECT
       id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message,
-      latency_ms, input_tokens, output_tokens,
+      latency_ms, ${inputQuantityExpression}, ${outputQuantityExpression},
       ${inputPriceExpression},
       ${outputPriceExpression},
       ${inputCostExpression},
@@ -1279,8 +1250,8 @@ function createApp(deps = {}) {
         entry.status,
         entry.error_message,
         entry.latency_ms,
-        entry.input_tokens,
-        entry.output_tokens,
+        entry.input_quantity,
+        entry.output_quantity,
         entry.input_price,
         entry.output_price,
         entry.input_cost,
@@ -1399,28 +1370,7 @@ function createApp(deps = {}) {
         onError: async (error, modelId) => {
           const selection = modelMap.get(modelId);
           if (!selection) return;
-          const latencyMs = 0;
-          const costSnapshot = buildLogCostSnapshot(selection.model.input_cost, selection.model.output_cost, 0, 0);
           waitUntil(recordFailure(selection.model.id, env));
-          waitUntil(
-            writeLog(
-              {
-                channel_id: selection.channel.id,
-                channel_name: selection.channel.name,
-                model_id: selection.model.id,
-                model_code: selection.model.code,
-                call_type: userCallType,
-                request_model: body.model,
-                status: LOG_STATUS.ERROR,
-                error_message: error?.message || ERROR_MESSAGES.PROVIDER_ERROR,
-                latency_ms: latencyMs,
-                input_tokens: 0,
-                output_tokens: 0,
-                ...costSnapshot,
-              },
-              env,
-            ),
-          );
         },
       });
 
@@ -1445,33 +1395,7 @@ function createApp(deps = {}) {
         onFinish: async (event) => {
           const latencyMs = nowFn().getTime() - startTime;
           const selection = modelMap.get(fallbackModel.modelId) || candidates[0];
-          const usageTokens = getUsageTokens(event.usage);
-          const costSnapshot = buildLogCostSnapshot(
-            selection.model.input_cost,
-            selection.model.output_cost,
-            usageTokens.input,
-            usageTokens.output,
-          );
           waitUntil(recordSuccess(selection.model.id, latencyMs, env));
-          waitUntil(
-            writeLog(
-              {
-                channel_id: selection.channel.id,
-                channel_name: selection.channel.name,
-                model_id: selection.model.id,
-                model_code: selection.model.code,
-                call_type: userCallType,
-                request_model: body.model,
-                status: LOG_STATUS.SUCCESS,
-                error_message: '',
-                latency_ms: latencyMs,
-                input_tokens: usageTokens.input,
-                output_tokens: usageTokens.output,
-                ...costSnapshot,
-              },
-              env,
-            ),
-          );
         },
       });
 
@@ -1498,61 +1422,14 @@ function createApp(deps = {}) {
           : body.messages;
         const result = await executeAIRequest(aiModel, selection.model.call_type, body);
         const latencyMs = nowFn().getTime() - startTime;
-        const usageTokens = getUsageTokens(result.usage);
-        const costSnapshot = buildLogCostSnapshot(
-          selection.model.input_cost,
-          selection.model.output_cost,
-          usageTokens.input,
-          usageTokens.output,
-        );
-
         waitUntil(recordSuccess(selection.model.id, latencyMs, env));
-        waitUntil(
-          writeLog(
-            {
-              channel_id: selection.channel.id,
-              channel_name: selection.channel.name,
-              model_id: selection.model.id,
-              model_code: selection.model.code,
-              call_type: userCallType,
-              request_model: body.model,
-              status: LOG_STATUS.SUCCESS,
-              error_message: '',
-              latency_ms: latencyMs,
-              input_tokens: usageTokens.input,
-              output_tokens: usageTokens.output,
-              ...costSnapshot,
-            },
-            env,
-          ),
-        );
 
         return formatAIResponse(result, userCallType, selection.model.call_type, selection.model.code);
       } catch (error) {
         console.error(error);
         const latencyMs = nowFn().getTime() - startTime;
         lastError = error;
-        const costSnapshot = buildLogCostSnapshot(selection.model.input_cost, selection.model.output_cost, 0, 0);
         waitUntil(recordFailure(selection.model.id, env));
-        waitUntil(
-          writeLog(
-            {
-              channel_id: selection.channel.id,
-              channel_name: selection.channel.name,
-              model_id: selection.model.id,
-              model_code: selection.model.code,
-              call_type: userCallType,
-              request_model: body.model,
-              status: LOG_STATUS.ERROR,
-              error_message: error?.message || ERROR_MESSAGES.PROVIDER_ERROR,
-              latency_ms: latencyMs,
-              input_tokens: 0,
-              output_tokens: 0,
-              ...costSnapshot,
-            },
-            env,
-          ),
-        );
       }
     }
 

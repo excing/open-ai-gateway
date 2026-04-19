@@ -723,8 +723,8 @@
                           <td class="text-sm text-[var(--text)]">{{ log.channel_name || '-' }}</td>
                           <td class="text-sm text-[var(--text)]">{{ log.request_model || '-' }}</td>
                           <td class="text-sm text-[var(--text-soft)]">{{ actions.getLatencyDisplay(log.latency_ms) }}</td>
-                          <td class="text-sm text-[var(--text-soft)]">{{ actions.formatTokenDisplay(log.input_tokens) }}</td>
-                          <td class="text-sm text-[var(--text-soft)]">{{ actions.formatTokenDisplay(log.output_tokens) }}</td>
+                          <td class="text-sm text-[var(--text-soft)]">{{ actions.formatQuantityDisplay(log.input_quantity) }}</td>
+                          <td class="text-sm text-[var(--text-soft)]">{{ actions.formatQuantityDisplay(log.output_quantity) }}</td>
                           <td class="text-sm font-semibold text-[var(--text)]">${{ actions.formatCostDisplay(log.total_cost) }}</td>
                           <td class="text-sm text-[var(--text-soft)]">{{ actions.formatLocalDateTime(log.created_at) }}</td>
                         </tr>
@@ -823,8 +823,8 @@
                   <input v-model="model.code" type="text" class="field" placeholder="模型 code" />
                   <input v-model="model.name" type="text" class="field" placeholder="模型名称" />
                   <input v-model="model.desc" type="text" class="field sm:col-span-2" placeholder="模型描述" />
-                  <input v-model="model.inputCost" type="text" class="field" placeholder="输入成本，例如 0 或 2.5/M" />
-                  <input v-model="model.outputCost" type="text" class="field" placeholder="输出成本，例如 0 或 10/M" />
+                  <input v-model="model.inputCost" type="text" class="field" placeholder="输入成本，例如 0、2.5/M、0.02/img、0.5/sec" />
+                  <input v-model="model.outputCost" type="text" class="field" placeholder="输出成本，例如 0、10/M、0.02/img、0.5/sec" />
                   <select v-model="model.callType" class="field-select">
                     <option v-for="callType in constants.CALL_TYPES" :key="callType" :value="callType">{{ callType }}</option>
                   </select>
@@ -899,8 +899,8 @@
             <select v-model="state.modelForm.callType" class="field-select">
               <option v-for="callType in constants.CALL_TYPES" :key="callType" :value="callType">{{ callType }}</option>
             </select>
-            <input v-model="state.modelForm.inputCost" type="text" class="field" placeholder="输入成本，例如 0 或 2.5/M" />
-            <input v-model="state.modelForm.outputCost" type="text" class="field" placeholder="输出成本，例如 0 或 10/M" />
+            <input v-model="state.modelForm.inputCost" type="text" class="field" placeholder="输入成本，例如 0、2.5/M、0.02/img、0.5/sec" />
+            <input v-model="state.modelForm.outputCost" type="text" class="field" placeholder="输出成本，例如 0、10/M、0.02/img、0.5/sec" />
           </div>
 
           <div class="mt-6 space-y-4">
@@ -999,9 +999,14 @@
           success: '成功',
           error: '错误',
         },
-        TOKEN_UNIT_BASE: 1000000,
         CURRENCY_SYMBOL: '$',
         COST_SCALE_FACTOR: 1000000000,
+        COST_UNITS: {
+          MILLION: '/m',
+          REQUEST: '/req',
+          IMAGE: '/img',
+          SECOND: '/sec',
+        },
         DETECT_STATUS: {
           IDLE: 'idle',
           LOADING: 'loading',
@@ -1157,7 +1162,7 @@
 
           const actions = {
             parseStoredJsonArray,
-            formatTokenDisplay: (rawValue) => {
+            formatQuantityDisplay: (rawValue) => {
               const numericValue = Number(rawValue ?? 0);
               if (!Number.isFinite(numericValue) || numericValue <= 0) return '0';
               return String(Math.round(numericValue));
@@ -1194,6 +1199,37 @@
               if (!Number.isFinite(latency) || latency < 0) return '-';
               return `${Math.round(latency)} ms`;
             },
+            parsePrice: (priceRaw) => {
+              const normalized = String(priceRaw ?? '').trim().toLowerCase();
+              if (!normalized || normalized === '0') return { value: 0, unit: '' };
+              const match = normalized.match(/^([0-9]+(?:\.[0-9]+)?)\s*(\/[a-zA-Z]+)$/);
+              if (!match) return { value: 0, unit: '' };
+              const value = Number(match[1]);
+              if (!Number.isFinite(value) || value < 0) return { value: 0, unit: '' };
+              return { value, unit: match[2].toLowerCase() };
+            },
+            getQuantityUnitLabel: (unit) => {
+              if (unit === constants.COST_UNITS.MILLION) return 'tokens';
+              if (unit === constants.COST_UNITS.IMAGE) return 'images';
+              if (unit === constants.COST_UNITS.SECOND) return 'seconds';
+              if (unit === constants.COST_UNITS.REQUEST) return 'requests';
+              return 'units';
+            },
+            buildCostExplainLine: (sideLabel, quantity, priceValue, unit, totalCost) => {
+              if (unit === constants.COST_UNITS.MILLION) {
+                return `${sideLabel} ${quantity} tokens / 1000000 tokens * ${constants.CURRENCY_SYMBOL}${priceValue} = ${constants.CURRENCY_SYMBOL}${totalCost}`;
+              }
+              if (unit === constants.COST_UNITS.REQUEST) {
+                return `${sideLabel}按请求计费：${constants.CURRENCY_SYMBOL}${priceValue} / request`;
+              }
+              if (unit === constants.COST_UNITS.IMAGE) {
+                return `${sideLabel} ${quantity} images * ${constants.CURRENCY_SYMBOL}${priceValue} / image = ${constants.CURRENCY_SYMBOL}${totalCost}`;
+              }
+              if (unit === constants.COST_UNITS.SECOND) {
+                return `${sideLabel} ${quantity} seconds * ${constants.CURRENCY_SYMBOL}${priceValue} / second = ${constants.CURRENCY_SYMBOL}${totalCost}`;
+              }
+              return `${sideLabel}单位未知，按实际计费为准`;
+            },
             isLogExpanded: (logId) => state.expandedLogId === logId,
             toggleLogExpanded: (logId) => {
               state.expandedLogId = state.expandedLogId === logId ? '' : logId;
@@ -1201,22 +1237,21 @@
             formatCostFormula: (log) => {
               const inputPrice = actions.formatPriceDisplay(log.input_price);
               const outputPrice = actions.formatPriceDisplay(log.output_price);
-              const inputTokens = Number(log.input_tokens || 0);
-              const outputTokens = Number(log.output_tokens || 0);
+              const inputQuantity = Number(log.input_quantity || 0);
+              const outputQuantity = Number(log.output_quantity || 0);
+              const inputCost = actions.formatCostDisplay(log.input_cost);
+              const outputCost = actions.formatCostDisplay(log.output_cost);
               const totalCost = actions.formatCostDisplay(log.total_cost);
-              const parsePrice = (priceRaw) => {
-                const normalized = String(priceRaw || '').trim().toLowerCase();
-                if (!normalized || normalized === '0') return 0;
-                const [valuePart] = normalized.split('/');
-                const numericValue = Number(valuePart);
-                return Number.isFinite(numericValue) ? numericValue : 0;
-              };
-              const inputPriceValue = parsePrice(log.input_price);
-              const outputPriceValue = parsePrice(log.output_price);
+              const inputParsed = actions.parsePrice(log.input_price);
+              const outputParsed = actions.parsePrice(log.output_price);
+              const inputUnitLabel = actions.getQuantityUnitLabel(inputParsed.unit);
+              const outputUnitLabel = actions.getQuantityUnitLabel(outputParsed.unit);
               return [
-                `输入价格：${constants.CURRENCY_SYMBOL}${inputPriceValue} / 1M tokens`,
-                `输出价格：${constants.CURRENCY_SYMBOL}${outputPriceValue} / 1M tokens`,
-                `输入 ${inputTokens} tokens / ${constants.TOKEN_UNIT_BASE} tokens * ${constants.CURRENCY_SYMBOL}${inputPriceValue} + 输出 ${outputTokens} tokens / ${constants.TOKEN_UNIT_BASE} tokens * ${constants.CURRENCY_SYMBOL}${outputPriceValue} = ${constants.CURRENCY_SYMBOL}${totalCost}`,
+                `输入价格：${inputPrice}（计量单位：${inputUnitLabel}）`,
+                `输出价格：${outputPrice}（计量单位：${outputUnitLabel}）`,
+                actions.buildCostExplainLine('输入', inputQuantity, inputParsed.value, inputParsed.unit, inputCost),
+                actions.buildCostExplainLine('输出', outputQuantity, outputParsed.value, outputParsed.unit, outputCost),
+                `输入成本 ${constants.CURRENCY_SYMBOL}${inputCost} + 输出成本 ${constants.CURRENCY_SYMBOL}${outputCost} = ${constants.CURRENCY_SYMBOL}${totalCost}`,
                 '仅供参考，以实际扣费为准',
               ].join('\n');
             },
