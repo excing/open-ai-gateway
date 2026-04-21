@@ -6,21 +6,23 @@ const CONSTANTS = {
 
 const downloadWithAiSdk = createDownload();
 
-function toMediaBuckets(resources) {
-  const buckets = { all: [], images: [], videos: [], audios: [] };
+function toMediaBuckets(text, resources, usage) {
+  const buckets = { text, files: [], images: [], video: null, videos: [], audios: [], audio: null, usage };
   for (const resource of resources) {
     if (!resource?.uint8Array || typeof resource?.mediaType !== 'string') continue;
     if (resource.mediaType.startsWith('image/')) buckets.images.push(resource);
     if (resource.mediaType.startsWith('video/')) buckets.videos.push(resource);
     if (resource.mediaType.startsWith('audio/')) buckets.audios.push(resource);
-    buckets.all.push(resource);
+    buckets.files.push(resource);
   }
+  if (0 < buckets.videos.length) buckets.video = buckets.videos[0];
+  if (0 < buckets.audios.length) buckets.audio = buckets.audios[0];
   return buckets;
 }
 
-async function extractMediaResources({ text = '', files = [] }) {
+async function extractMediaResources({ text = '', files = [], usage }) {
   if (files && files.length > 0) {
-    return toMediaBuckets(files);
+    return toMediaBuckets(text, files, usage);
   }
 
   const resources = [];
@@ -77,7 +79,7 @@ async function extractMediaResources({ text = '', files = [] }) {
     resources.push(...downloadResults.filter(Boolean).map(({ data, mediaType }) => new DefaultGeneratedFile({ data, mediaType })));
   }
 
-  return toMediaBuckets(resources);
+  return toMediaBuckets(text, resources, usage);
 }
 
 async function downloadFile(url, timeout = CONSTANTS.DOWNLOAD_TIMEOUT_MS) {

@@ -1127,9 +1127,14 @@ function createApp(deps = {}) {
     throw new Error(`Unsupported call type ${callType}`);
   }
 
-  async function formatAIResponse(result, userCallType, modelCallType, modelCode) {
+  async function formatAIResponse(result, userCallType, modelCode) {
     const created = toEpochSeconds(nowFn());
     const usageTokens = getUsageTokens(result.usage);
+    const usage = {
+      prompt_tokens: usageTokens.input,
+      completion_tokens: usageTokens.output,
+      total_tokens: usageTokens.total,
+    }
     if (userCallType === CALL_TYPES.CHAT) {
       return jsonResponse({
         id: `${CONSTANTS.UUID_PREFIX}${uuidFn()}`,
@@ -1143,51 +1148,28 @@ function createApp(deps = {}) {
             finish_reason: 'stop',
           },
         ],
-        usage: {
-          prompt_tokens: usageTokens.input,
-          completion_tokens: usageTokens.output,
-          total_tokens: usageTokens.total,
-        },
+        usage,
       });
     }
 
     if (userCallType === CALL_TYPES.IMAGE_GEN) {
-      if (modelCallType === CALL_TYPES.MIX) {
-        const media = await extractMediaResources({ text: result.text, files: result.files, });
-        const data = media.images.map((image) => ({ url: image.base64 }));
-        return jsonResponse({ created, data });
-      }
       const data = (result.images || []).map((image) => ({ b64_json: image.base64 }));
-      return jsonResponse({ created, data });
+      return jsonResponse({ created, data, usage });
     }
 
     if (userCallType === CALL_TYPES.VIDEO_GEN) {
-      if (modelCallType === CALL_TYPES.MIX) {
-        const media = await extractMediaResources({ text: result.text, files: result.files, });
-        const data = media.videos.map((video) => ({ url: video.base64 }));
-        return jsonResponse({ created, data });
-      }
       const data = (result.videos || []).map((video) => ({ b64_json: video.base64 }));
-      return jsonResponse({ created, data });
+      return jsonResponse({ created, data, usage });
     }
 
     if (userCallType === CALL_TYPES.AUDIO_GEN) {
-      if (modelCallType === CALL_TYPES.MIX) {
-        const media = await extractMediaResources({ text: result.text, files: result.files, });
-        const data = media.audios.map((audio) => ({ url: audio.uint8Array }));
-        return jsonResponse({ created, data });
-      }
-      if (result.audio) {
-        const headers = new Headers({ [HEADERS.CONTENT_TYPE]: result.audio.mediaType });
-        Object.entries(CORS_HEADERS).forEach(([key, value]) => headers.set(key, value));
-        return new Response(result.audio.uint8Array, { status: HTTP_STATUS.OK, headers });
-      }
-      // todo
-      return;
+      const headers = new Headers({ [HEADERS.CONTENT_TYPE]: result.audio.mediaType });
+      Object.entries(CORS_HEADERS).forEach(([key, value]) => headers.set(key, value));
+      return new Response(result.audio.uint8Array, { status: HTTP_STATUS.OK, headers });
     }
 
     if (userCallType === CALL_TYPES.TRANSCRIBE) {
-      return jsonResponse({ text: result.text || '' });
+      return jsonResponse({ text: result.text || '', usage });
     }
 
     if (userCallType === CALL_TYPES.EMBEDDING) {
@@ -1195,7 +1177,7 @@ function createApp(deps = {}) {
         object: OPENAI_OBJECTS.LIST,
         data: [{ object: OPENAI_OBJECTS.EMBEDDING, embedding: result.embedding || [], index: 0 }],
         model: modelCode,
-        usage: { prompt_tokens: usageTokens.input, total_tokens: usageTokens.total },
+        usage,
       });
     }
 
@@ -1232,6 +1214,69 @@ function createApp(deps = {}) {
     const headers = new Headers({ [HEADERS.CONTENT_TYPE]: SSE_CONTENT_TYPE });
     Object.entries(CORS_HEADERS).forEach(([key, value]) => headers.set(key, value));
     return new Response(stream, { status: HTTP_STATUS.OK, headers });
+  }
+
+  async function writeSuccessLog(requestBody, responseBody, selection, userCallType, latencyMs, env) {
+    const modelInputPricing = selection.model.input_cost;  // 单位 /m, /img, /sec, /req, 支持 `x/M,y/img` 的表达形式
+    const modelOutputPricing = selection.model.output_cost;
+    const usageTokens = getUsageTokens(responseBody.usage);
+    const InputImageCount = 0; // todo, user requestBody images count
+    const InputAudioDuration = 0; // todo, user requestBody audio duration
+    const InputVideoDuration = 0; // todo, user requestBody video duration
+    const OutputImageCount = responseBody.images.lenght;
+    const OutputAudioDuration = getMp3Duration(responseBody.audio.uint8Array);
+    const OutputVideoDuration = getMp4Duration(responseBody.video.uint8Array);
+    // todo, 补全计费业务
+    // 计费优先级, /req > /sec = /img > /m
+    // 保存到 logs 表时, 仅保存使用的价格, 
+    // 比如, modelOutputPricing = 1/M,0.001/img, OutputImageCount = 3, usageTokens.output = 1000
+    // 那么 output_quantity = 3, output_price = 0.001/img, output_cost = 0.003
+    writeLog(
+      {
+        channel_id: selection.channel.id,
+        channel_name: selection.channel.name,
+        model_id: selection.model.id,
+        model_code: selection.model.code,
+        call_type: userCallType,
+        request_model: requestBody?.model || selection.model.code,
+        status: LOG_STATUS.SUCCESS,
+        error_message: '',
+        latency_ms: latencyMs,
+        input_quantity: 0,
+        output_quantity: 0,
+        input_price: "0",
+        output_price: "0",
+        input_cost: 0,
+        output_cost: 0,
+        total_cost: 0,
+      },
+      env,
+    )
+  }
+
+  async function writeFailureLog(requestBody, selection, userCallType, error, latencyMs, env) {
+    console.error(error);
+    writeLog(
+      {
+        channel_id: selection.channel.id,
+        channel_name: selection.channel.name,
+        model_id: selection.model.id,
+        model_code: selection.model.code,
+        call_type: userCallType,
+        request_model: requestBody?.model || selection.model.code,
+        status: LOG_STATUS.ERROR,
+        error_message: error?.message || ERROR_MESSAGES.PROVIDER_ERROR,
+        latency_ms: latencyMs,
+        input_quantity: 0,
+        output_quantity: 0,
+        input_price: "0",
+        output_price: "0",
+        input_cost: 0,
+        output_cost: 0,
+        total_cost: 0,
+      },
+      env,
+    )
   }
 
   async function writeLog(entry, env) {
@@ -1365,16 +1410,19 @@ function createApp(deps = {}) {
 
       const modelMap = new Map(candidates.map((candidate) => [candidate.model.code, candidate]));
 
+      let startTime = nowFn().getTime();
       const fallbackModel = createFallbackModel({
         models,
         onError: async (error, modelId) => {
           const selection = modelMap.get(modelId);
           if (!selection) return;
+          const latencyMs = nowFn().getTime() - startTime;
           waitUntil(recordFailure(selection.model.id, env));
+          waitUntil(writeFailureLog(body, selection, userCallType, error, latencyMs, env));
+          startTime = nowFn().getTime();
         },
       });
 
-      const startTime = nowFn().getTime();
       const result = await ai.streamText({
         ...pruneUndefined({
           model: fallbackModel,
@@ -1396,10 +1444,11 @@ function createApp(deps = {}) {
           const latencyMs = nowFn().getTime() - startTime;
           const selection = modelMap.get(fallbackModel.modelId) || candidates[0];
           waitUntil(recordSuccess(selection.model.id, latencyMs, env));
+          waitUntil(writeSuccessLog(body, event, selection, userCallType, latencyMs, env));
         },
       });
 
-      return createSseResponse(result.textStream, candidates[0].model.code);
+      return createSseResponse(result.textStream, body.model);
     }
 
     let lastError = null;
@@ -1422,14 +1471,18 @@ function createApp(deps = {}) {
           : body.messages;
         const result = await executeAIRequest(aiModel, selection.model.call_type, body);
         const latencyMs = nowFn().getTime() - startTime;
+        const responseBody = selection.model.call_type === CALL_TYPES.MIX
+          ? await extractMediaResources({ text: result.text, files: result.files, usage: result.usage })
+          : result;
         waitUntil(recordSuccess(selection.model.id, latencyMs, env));
+        waitUntil(writeSuccessLog(body, result, selection, userCallType, latencyMs, env));
 
-        return formatAIResponse(result, userCallType, selection.model.call_type, selection.model.code);
+        return formatAIResponse(responseBody, userCallType, body.model);
       } catch (error) {
-        console.error(error);
         const latencyMs = nowFn().getTime() - startTime;
         lastError = error;
         waitUntil(recordFailure(selection.model.id, env));
+        waitUntil(writeFailureLog(body, selection, userCallType, error, latencyMs, env));
       }
     }
 
