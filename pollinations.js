@@ -79,8 +79,14 @@ class PollinationsImageModelV3 {
     const url = buildUrl(this.config.baseURL, POLLINATIONS_ENDPOINTS.IMAGE, prompt, {
       model: this.modelId,
       seed: options?.seed,
+      resolution: options?.resolution,
+      image: options?.image,
       width: size.width,
       height: size.height,
+      enhance: options?.providerOptions?.enhance,
+      negative_prompt: options?.providerOptions?.negative_prompt,
+      quality: options?.providerOptions?.quality,
+      aspect_ratio: options?.aspectRatio,
       nologo: true,
     });
 
@@ -120,11 +126,22 @@ class PollinationsVideoModelV3 {
   }
 
   async doGenerate(options) {
+    const size = parseSize(options?.providerOptions?.size);
     const prompt = options?.prompt || '';
     const requestHeaders = buildHeaders(this.config.headers, this.config.apiKey, options?.headers);
     const url = buildUrl(this.config.baseURL, POLLINATIONS_ENDPOINTS.VIDEO, prompt, {
       model: this.modelId,
       seed: options?.seed,
+      resolution: options?.resolution,
+      duration: options?.duration,
+      fps: options?.fps,
+      image: options?.image,
+      width: size.width,
+      height: size.height,
+      enhance: options?.providerOptions?.enhance,
+      negative_prompt: options?.providerOptions?.negative_prompt,
+      audio: options?.providerOptions?.audio,
+      quality: options?.providerOptions?.quality,
       aspect_ratio: options?.aspectRatio,
     });
 

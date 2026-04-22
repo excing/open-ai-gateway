@@ -1116,6 +1116,13 @@ function createApp(deps = {}) {
         pruneUndefined({
           model: aiModel,
           prompt: body.prompt,
+          size: body.size,
+          aspectRatio: firstValue(body.aspectRatio, body.aspect_ratio),
+          resolution: body.resolution,
+          duration: body.duration,
+          fps: body.fps,
+          seed: body.seed,
+          image: body.image,
           providerOptions,
           maxRetries: firstValue(body.max_retries, 0),
         }),
