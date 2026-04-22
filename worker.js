@@ -591,10 +591,12 @@ async function buildMixAugmentedMessages(userCallType, body) {
     }
   });
 
-  const payloadString = [
-    prompt,
-    JSON.stringify(compactPayload),
-  ].join('\n');
+  const payloadString = isEmptyObject(compactPayload)
+    ? prompt
+    : [
+      prompt,
+      JSON.stringify(compactPayload),
+    ].join('\n');
 
   const content = [{
     type: 'text',
@@ -727,6 +729,8 @@ function firstValue(...values) {
 function pruneUndefined(input) {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
 }
+
+const isEmptyObject = obj => Object.keys(obj).length === 0;
 
 function calculateModelScore(modelRow) {
   const channelWeight = modelRow.ch_weight ?? 1;

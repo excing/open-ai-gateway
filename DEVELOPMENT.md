@@ -198,8 +198,8 @@ CREATE INDEX idx_channel_models_call_type ON channel_models(call_type);
 | `status` | TEXT | NOT NULL | 请求结果状态：`success` 或 `error` |
 | `error_message` | TEXT | DEFAULT '' | 当 status='error' 时的错误信息 |
 | `latency_ms` | INTEGER | NOT NULL, DEFAULT 0 | 请求耗时（毫秒），从发起 AI 请求到收到响应/第一个 chunk 的时间 |
-| `input_quantity` | INTEGER | DEFAULT 0 | 输入计量值。chat/embedding/transcribe/mix 使用输入 tokens；image_gen 使用输入图片数；audio_gen/video_gen 使用输入秒数。 |
-| `output_quantity` | INTEGER | DEFAULT 0 | 输出计量值。chat/mix 使用输出 tokens；image_gen 使用输出图片数；audio_gen/video_gen 使用输出秒数。 |
+| `input_quantity` | INTEGER | DEFAULT 0 | 输入计量值。由 `input_cost` 命中的计费单位决定：命中 `/M` 记录输入 tokens，命中 `/sec` 记录输入音频秒数（转录场景），其余单位记 `0`。失败日志固定为 `0`。 |
+| `output_quantity` | INTEGER | DEFAULT 0 | 输出计量值。由 `output_cost` 命中的计费单位决定：`/req` 记 `1`、`/img` 记输出图片数、`/sec` 记输出音/视频总秒数、`/M` 记输出 tokens。失败日志固定为 `0`。 |
 | `input_price` | TEXT | DEFAULT '0' | 请求发生时模型输入单价快照，格式与 `channel_models.input_cost` 一致（如 `5/M`、`2/req`、`0`） |
 | `output_price` | TEXT | DEFAULT '0' | 请求发生时模型输出单价快照，格式与 `channel_models.output_cost` 一致（如 `10/M`、`0`） |
 | `input_cost` | INTEGER | DEFAULT 0 | 本次请求真实输入成本（整数最小单位，缩放系数 `COST_SCALE_FACTOR=1_000_000_000`）。示例：真实成本 `0.5` 记录为 `500000000` |
@@ -342,7 +342,7 @@ interface RequestLogRow {
     created_at: string;
 }
 
-// input_price/output_price: 请求发生时模型单价快照，避免模型后续调价导致历史日志失真
+// input_price/output_price: 请求发生时模型单价快照。成功日志按计费规则写入；失败日志固定为 '0'
 // input_cost/output_cost/total_cost: 最小成本单位整数，缩放系数固定为 COST_SCALE_FACTOR=1_000_000_000
 
 /** 模型可用性检测结果 */
@@ -1146,7 +1146,63 @@ function formatAIResponse(result: AIRequestResult, callType: CallType, modelCode
 async function writeLog(log: Omit<RequestLogRow, 'id' | 'created_at'>, env: Env): Promise<void>;
 
 /**
- * 构建日志价格快照与成本字段（原子化封装，避免各调用路径重复计算）
+ * 选择计费规则
+ * 规则：按统一优先级匹配单位，不按 call_type 分支
+ * 优先级：/req > /img > /sec > /M
+ * 未匹配时：回退第一条可解析规则；若无可解析规则则回退 { raw: '0', price: 0, unit: null }
+ *
+ * @param pricingRules - parsePricingConfig 的结果
+ * @param preferredUnits - 优先级列表
+ * @returns 命中的计费规则
+ */
+function choosePricingRule(pricingRules: PricingRule[], preferredUnits?: CostUnit[]): PricingRule;
+
+/**
+ * 成功日志写入（按计费规则计算）
+ * - input/output 单价快照来自命中的规则 raw 字段
+ * - input/output 成本按 `price * quantity * COST_SCALE_FACTOR` 四舍五入
+ *
+ * @param requestBody - 原始请求体
+ * @param responseBody - 上游响应体
+ * @param selection - 当前选中的 channel/model
+ * @param userCallType - 用户请求的 callType
+ * @param latencyMs - 请求耗时
+ * @param env - 运行环境
+ */
+async function writeSuccessLog(
+  requestBody: Record<string, any>,
+  responseBody: Record<string, any>,
+  selection: ModelSelection,
+  userCallType: CallType,
+  latencyMs: number,
+  env: Env
+): Promise<void>;
+
+/**
+ * 失败日志写入（固定 0 成本）
+ * - input_price='0'、output_price='0'
+ * - input_cost=0、output_cost=0、total_cost=0
+ * - input_quantity=0、output_quantity=0
+ *
+ * @param requestBody - 原始请求体
+ * @param selection - 当前选中的 channel/model
+ * @param userCallType - 用户请求的 callType
+ * @param error - 上游错误
+ * @param latencyMs - 请求耗时
+ * @param env - 运行环境
+ */
+async function writeFailureLog(
+  requestBody: Record<string, any>,
+  selection: ModelSelection,
+  userCallType: CallType,
+  error: Error,
+  latencyMs: number,
+  env: Env
+): Promise<void>;
+
+/**
+ * （历史设计）构建日志价格快照与成本字段（原子化封装，避免各调用路径重复计算）
+ * 注：当前代码已由 writeSuccessLog/writeFailureLog 直接完成成本字段落库。
  *
  * @param inputPriceConfig - 模型输入单价配置（如 '5/M'、'2/req'、'0'）
  * @param outputPriceConfig - 模型输出单价配置（如 '10/M'、'0'）

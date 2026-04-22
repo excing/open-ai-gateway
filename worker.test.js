@@ -2556,7 +2556,7 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(latestLog.total_cost, 4000000000);
   });
 
-  it('统一日志函数: error 在缺省 usage 时应写入 0 用量和错误成本快照', async () => {
+  it('统一日志函数: error 在缺省 usage 时应写入 0 用量与 0 成本', async () => {
     mockEnv._addChannel({
       id: 'ch-unified-error',
       name: 'Unified Error Channel',
@@ -2618,9 +2618,11 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(latestLog.model_id, 'model-unified-error');
     assert.strictEqual(latestLog.input_quantity, 0);
     assert.strictEqual(latestLog.output_quantity, 0);
-    assert.strictEqual(latestLog.input_cost, 2000000000);
+    assert.strictEqual(latestLog.input_price, '0');
+    assert.strictEqual(latestLog.output_price, '0');
+    assert.strictEqual(latestLog.input_cost, 0);
     assert.strictEqual(latestLog.output_cost, 0);
-    assert.strictEqual(latestLog.total_cost, 2000000000);
+    assert.strictEqual(latestLog.total_cost, 0);
   });
 
   it('请求成功日志应写入 input_cost/output_cost', async () => {
@@ -2826,7 +2828,7 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(latestLog.total_cost, 4000000000);
   });
 
-  it('stream 回退错误日志应按规则计算 input_cost/output_cost', async () => {
+  it('stream 回退错误日志应记录为 0 成本错误日志', async () => {
     mockEnv._addChannel({
       id: 'ch-stream-cost',
       name: 'Stream Cost Channel',
@@ -2901,11 +2903,11 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.ok(mockEnv._logs.length >= 1);
     const errorLog = mockEnv._logs.find((log) => (
       log.model_id === 'model-stream-cost'
-      && log.input_price === '2/req'
-      && log.output_price === '10/M'
-      && log.input_cost === 2000000000
+      && log.input_price === '0'
+      && log.output_price === '0'
+      && log.input_cost === 0
       && log.output_cost === 0
-      && log.total_cost === 2000000000
+      && log.total_cost === 0
     ));
     assert.ok(errorLog);
   });
@@ -3165,7 +3167,7 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(latestLog.output_price, '0.02/img');
   });
 
-  it('计费优先级: audio_gen 在存在 /img 与 /sec 时应优先 /sec（/sec 与 /img 同级时按场景选择）', async () => {
+  it('计费优先级: output 在存在 /img 与 /sec 时按统一优先级选择 /img', async () => {
     mockEnv._addChannel({
       id: 'ch-audio-priority',
       name: 'Audio Priority Channel',
@@ -3220,7 +3222,7 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     const response = await app.handleRequest(request, mockEnv);
     assert.strictEqual(response.status, HTTP_STATUS.OK);
     const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
-    assert.strictEqual(latestLog.output_price, '0.5/sec');
+    assert.strictEqual(latestLog.output_price, '0.02/img');
   });
 });
 
