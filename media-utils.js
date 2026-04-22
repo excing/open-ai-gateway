@@ -144,24 +144,56 @@ function getMp3Duration(uint8) {
 }
 
 function getMp4Duration(uint8) {
-  const data = uint8;
-  const view = new DataView(data.buffer);
+  const view = new DataView(uint8.buffer, uint8.byteOffset, uint8.byteLength);
 
-  let offset = 0;
+  const moov = findBox(uint8, 0, uint8.length, "moov");
+  if (!moov) return null;
 
-  while (offset < data.length) {
+  // 优先解析 video track mdhd
+  const traks = findBoxes(uint8, moov.start, moov.end, "trak");
+
+  for (const trak of traks) {
+    const mdia = findBox(uint8, trak.start, trak.end, "mdia");
+    if (!mdia) continue;
+
+    const mdhd = findBox(uint8, mdia.start, mdia.end, "mdhd");
+    if (!mdhd) continue;
+
+    const duration = parseMdhd(uint8, view, mdhd.start);
+    if (duration) return duration;
+  }
+
+  // fallback mvhd
+  const mvhd = findBox(uint8, moov.start, moov.end, "mvhd");
+  if (mvhd) {
+    return parseMvhd(uint8, view, mvhd.start);
+  }
+
+  return null;
+}
+
+function findBox(data, start, end, type) {
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
+
+  let offset = start;
+
+  while (offset < end) {
     const size = view.getUint32(offset);
-    const type =
-      String.fromCharCode(
-        data[offset + 4],
-        data[offset + 5],
-        data[offset + 6],
-        data[offset + 7]
-      );
+    const name = String.fromCharCode(
+      data[offset + 4],
+      data[offset + 5],
+      data[offset + 6],
+      data[offset + 7]
+    );
 
-    if (type === "moov") {
-      return parseMoov(data.subarray(offset + 8, offset + size));
+    if (name === type) {
+      return {
+        start: offset + 8,
+        end: offset + size
+      };
     }
+
+    if (size <= 0) break;
 
     offset += size;
   }
@@ -169,39 +201,63 @@ function getMp4Duration(uint8) {
   return null;
 }
 
-function parseMoov(data) {
-  const view = new DataView(data.buffer);
+function findBoxes(data, start, end, type) {
+  const view = new DataView(data.buffer, data.byteOffset, data.byteLength);
 
-  let offset = 0;
+  const result = [];
+  let offset = start;
 
-  while (offset < data.length) {
+  while (offset < end) {
     const size = view.getUint32(offset);
-    const type =
-      String.fromCharCode(
-        data[offset + 4],
-        data[offset + 5],
-        data[offset + 6],
-        data[offset + 7]
-      );
 
-    if (type === "mvhd") {
-      const version = data[offset + 8];
+    const name = String.fromCharCode(
+      data[offset + 4],
+      data[offset + 5],
+      data[offset + 6],
+      data[offset + 7]
+    );
 
-      if (version === 1) {
-        const timescale = view.getUint32(offset + 28);
-        const duration = Number(view.getBigUint64(offset + 32));
-        return duration / timescale;
-      } else {
-        const timescale = view.getUint32(offset + 20);
-        const duration = view.getUint32(offset + 24);
-        return duration / timescale;
-      }
+    if (name === type) {
+      result.push({
+        start: offset + 8,
+        end: offset + size
+      });
     }
+
+    if (size <= 0) break;
 
     offset += size;
   }
 
-  return null;
+  return result;
+}
+
+function parseMdhd(data, view, offset) {
+  const version = data[offset];
+
+  if (version === 1) {
+    const timescale = view.getUint32(offset + 20);
+    const duration = Number(view.getBigUint64(offset + 24));
+    return duration / timescale;
+  } else {
+    const timescale = view.getUint32(offset + 12);
+    const duration = view.getUint32(offset + 16);
+    return duration / timescale;
+  }
+}
+
+function parseMvhd(data, view, offset) {
+  const version = data[offset];
+
+  if (version === 1) {
+    const timescale = view.getUint32(offset + 20);
+    const duration = Number(view.getBigUint64(offset + 24));
+    return duration / timescale;
+  } else {
+    const timescale = view.getUint32(offset + 12);
+    const duration = view.getUint32(offset + 16);
+    return duration / timescale;
+  }
 }
 
 export { extractMediaResources, downloadFile, getMp3Duration, getMp4Duration };

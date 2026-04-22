@@ -2685,3 +2685,34 @@ function buildMixAugmentedMessages(body: Record<string, any>): Array<Record<stri
 - 兼容性：
   - chat 非 mix 模型不受影响，继续使用原有 `messages/prompt` 映射。
   - mix 的响应转换规则（14.4）不变。
+
+### 14.7 media-utils 单元测试补充（2026-04-22 更新）
+
+- 新增测试目标：`getMp4Duration(uint8: Uint8Array): number | null`
+- 测试文件：`worker.test.js`
+- 测试场景：使用真实 MP4 文件验证函数能正确解析时长
+- 输入文件：`/Users/exc/Downloads/123.mp4`
+
+函数签名与边界：
+
+```ts
+function getMp4Duration(uint8: Uint8Array): number | null;
+```
+
+- 输入含义：
+  - `uint8`：完整 MP4 文件二进制数据，必须是可读取到 `moov/mvhd` box 的数据。
+- 返回含义：
+  - 成功返回 `number`（单位：秒，允许浮点）。
+  - 失败返回 `null`（未找到合法时长信息时）。
+- 边界：
+  - 实际文件测试中断言返回值类型为 `number` 且 `> 0`，避免不同视频元数据导致的固定值脆弱断言。
+
+伪代码：
+
+```ts
+buffer = readFile("/Users/exc/Downloads/123.mp4")
+uint8 = new Uint8Array(buffer)
+duration = getMp4Duration(uint8)
+assert(typeof duration === "number")
+assert(duration > 0)
+```

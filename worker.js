@@ -669,6 +669,46 @@ function getUsageTokens(usage) {
   };
 }
 
+function toSafeNumber(value, fallback = 0) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return numeric;
+}
+
+function parsePricingConfig(configValue) {
+  if (typeof configValue !== 'string') return [];
+  return configValue
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      if (part === '0') {
+        return { raw: part, price: 0, unit: null };
+      }
+      const [priceText, rawUnit] = part.split('/');
+      const price = toSafeNumber(priceText, NaN);
+      const unit = rawUnit ? `/${String(rawUnit).toLowerCase()}` : null;
+      if (!Number.isFinite(price) || price < 0) return null;
+      if (unit !== '/req' && unit !== '/sec' && unit !== '/img' && unit !== '/m') {
+        return null;
+      }
+      return {
+        raw: part,
+        price: unit === '/m' ? (price / 1_000_000) : price,
+        unit: unit === '/m' ? COST_UNITS.MILLION : unit,
+      };
+    })
+    .filter(Boolean);
+}
+
+function choosePricingRule(pricingRules, preferredUnits = []) {
+  for (const unit of preferredUnits) {
+    const found = pricingRules.find((rule) => rule.unit === unit);
+    if (found) return found;
+  }
+  return pricingRules[0] || { raw: '0', price: 0, unit: null };
+}
+
 function getProviderOptions(payload) {
   const value = payload?.extra_body;
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -879,9 +919,11 @@ async function normalizeBinaryInput(input) {
   throw new Error('Invalid binary input');
 }
 
-async function normalizeTranscriptionAudioInput(input) {
+async function normalizeTranscriptionAudioInput(body) {
   try {
-    return await normalizeBinaryInput(input);
+    const fileCandidates = collectBinaryFieldValues(body);
+    const firstAudioInput = firstValue(fileCandidates[0], body.file);
+    return await normalizeBinaryInput(firstAudioInput);
   } catch {
     throw new Error('Invalid transcription file');
   }
@@ -1094,13 +1136,10 @@ function createApp(deps = {}) {
       );
     }
     if (callType === CALL_TYPES.TRANSCRIBE) {
-      const fileCandidates = collectBinaryFieldValues(body);
-      const firstAudioInput = firstValue(fileCandidates[0], body.file);
-      const audio = await normalizeTranscriptionAudioInput(firstAudioInput);
       return ai.experimental_transcribe(
         pruneUndefined({
           model: aiModel,
-          audio,
+          audio: body.audio,
           language: body.language,
           prompt: body.prompt,
           temperature: body.temperature,
@@ -1217,46 +1256,93 @@ function createApp(deps = {}) {
   }
 
   async function writeSuccessLog(requestBody, responseBody, selection, userCallType, latencyMs, env) {
-    const modelInputPricing = selection.model.input_cost;  // 单位 /m, /img, /sec, /req, 支持 `x/M,y/img` 的表达形式
-    const modelOutputPricing = selection.model.output_cost;
-    const usageTokens = getUsageTokens(responseBody.usage);
-    const InputImageCount = 0; // todo, user requestBody images count
-    const InputAudioDuration = 0; // todo, user requestBody audio duration
-    const InputVideoDuration = 0; // todo, user requestBody video duration
-    const OutputImageCount = responseBody.images.lenght;
-    const OutputAudioDuration = getMp3Duration(responseBody.audio.uint8Array);
-    const OutputVideoDuration = getMp4Duration(responseBody.video.uint8Array);
-    // todo, 补全计费业务
-    // 计费优先级, /req > /sec = /img > /m
-    // 保存到 logs 表时, 仅保存使用的价格, 
-    // 比如, modelOutputPricing = 1/M,0.001/img, OutputImageCount = 3, usageTokens.output = 1000
-    // 那么 output_quantity = 3, output_price = 0.001/img, output_cost = 0.003
-    writeLog(
-      {
-        channel_id: selection.channel.id,
-        channel_name: selection.channel.name,
-        model_id: selection.model.id,
-        model_code: selection.model.code,
-        call_type: userCallType,
-        request_model: requestBody?.model || selection.model.code,
-        status: LOG_STATUS.SUCCESS,
-        error_message: '',
-        latency_ms: latencyMs,
-        input_quantity: 0,
-        output_quantity: 0,
-        input_price: "0",
-        output_price: "0",
-        input_cost: 0,
-        output_cost: 0,
-        total_cost: 0,
-      },
-      env,
-    )
+    // const usageQuantities = getUsageQuantities(userCallType, requestBody, responseBody);
+    // const costSnapshot = buildCostSnapshot({
+    //   inputPricingConfig: selection.model.input_cost,
+    //   outputPricingConfig: selection.model.output_cost,
+    //   usageQuantities,
+    //   callType: userCallType,
+    // });
+
+    console.info(requestBody);
+    console.info(responseBody);
+    console.info(selection);
+    try {
+      const preferredUnits = [COST_UNITS.REQUEST, COST_UNITS.IMAGE, COST_UNITS.SECOND, COST_UNITS.MILLION];
+      const inputRule = choosePricingRule(parsePricingConfig(selection.model.input_cost), preferredUnits);
+      const outputRule = choosePricingRule(parsePricingConfig(selection.model.output_cost), preferredUnits);
+      const usageTokens = getUsageTokens(responseBody.usage);
+      const inputAudioDuration = userCallType === CALL_TYPES.TRANSCRIBE ? getMp3Duration(requestBody.audio) : 0;
+      const outputImageCount = responseBody.images ? responseBody.images.length : 0;
+      const outputAudioDuration = responseBody.audio ? getMp3Duration(responseBody.audio.uint8Array) : 0;
+      const outputVideoDuration = responseBody.video ? getMp4Duration(responseBody.video.uint8Array) : 0;
+
+      console.info(inputRule);
+      console.info(outputRule);
+      console.info(usageTokens);
+      console.info(inputAudioDuration);
+      console.info(outputImageCount);
+      console.info(outputAudioDuration);
+      console.info(outputVideoDuration);
+
+      let inputBillableQuantity = 0;
+      switch (inputRule.unit) {
+        case COST_UNITS.SECOND:
+          inputBillableQuantity = inputAudioDuration;
+          break;
+
+        case COST_UNITS.MILLION:
+          inputBillableQuantity = usageTokens.input;
+          break;
+      }
+      const inputCost = Math.round(inputRule.price * inputBillableQuantity * COST_SCALE_FACTOR);
+
+      let outputBillableQuantity = 0;
+      switch (outputRule.unit) {
+        case COST_UNITS.REQUEST:
+          outputBillableQuantity = 1;
+          break;
+        case COST_UNITS.IMAGE:
+          outputBillableQuantity = outputImageCount;
+          break;
+        case COST_UNITS.SECOND:
+          outputBillableQuantity = outputAudioDuration + outputVideoDuration;
+          break;
+        case COST_UNITS.MILLION:
+          outputBillableQuantity = usageTokens.output;
+          break;
+      }
+      const outputCost = Math.round(outputRule.price * outputBillableQuantity * COST_SCALE_FACTOR);
+
+      await writeLog(
+        {
+          channel_id: selection.channel.id,
+          channel_name: selection.channel.name,
+          model_id: selection.model.id,
+          model_code: selection.model.code,
+          call_type: userCallType,
+          request_model: requestBody?.model || selection.model.code,
+          status: LOG_STATUS.SUCCESS,
+          error_message: '',
+          latency_ms: latencyMs,
+          input_quantity: inputBillableQuantity,
+          output_quantity: outputBillableQuantity,
+          input_price: inputRule.raw,
+          output_price: outputRule.raw,
+          input_cost: inputCost,
+          output_cost: outputCost,
+          total_cost: inputCost + outputCost,
+        },
+        env,
+      );
+    } catch (error) {
+      console.warn(error);
+    }
   }
 
   async function writeFailureLog(requestBody, selection, userCallType, error, latencyMs, env) {
     console.error(error);
-    writeLog(
+    await writeLog(
       {
         channel_id: selection.channel.id,
         channel_name: selection.channel.name,
@@ -1276,7 +1362,7 @@ function createApp(deps = {}) {
         total_cost: 0,
       },
       env,
-    )
+    );
   }
 
   async function writeLog(entry, env) {
@@ -1466,16 +1552,21 @@ function createApp(deps = {}) {
           env,
         );
 
+        // ------------- request body 兼容性业务 START -----------------
         body.messages = selection.model.call_type === CALL_TYPES.MIX && userCallType !== CALL_TYPES.CHAT
           ? await buildMixAugmentedMessages(userCallType, body)
           : body.messages;
+        if (userCallType === CALL_TYPES.TRANSCRIBE) {
+          body.audio = await normalizeTranscriptionAudioInput(body);
+        }
+        // ------------- request body 兼容性业务 ENDED -----------------
         const result = await executeAIRequest(aiModel, selection.model.call_type, body);
         const latencyMs = nowFn().getTime() - startTime;
         const responseBody = selection.model.call_type === CALL_TYPES.MIX
           ? await extractMediaResources({ text: result.text, files: result.files, usage: result.usage })
           : result;
         waitUntil(recordSuccess(selection.model.id, latencyMs, env));
-        waitUntil(writeSuccessLog(body, result, selection, userCallType, latencyMs, env));
+        waitUntil(writeSuccessLog(body, responseBody, selection, userCallType, latencyMs, env));
 
         return formatAIResponse(responseBody, userCallType, body.model);
       } catch (error) {

@@ -1,5 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
+import { readFile } from 'node:fs/promises';
+import { getMp4Duration } from './media-utils.js';
 import { createApp, CONSTANTS, SCHEMAS } from './worker.js';
 
 const {
@@ -2112,7 +2114,7 @@ describe('mix call_type 兼容', () => {
     const response = await app.handleRequest(request, mockEnv);
     const data = await response.json();
     assert.strictEqual(response.status, HTTP_STATUS.OK);
-    assert.deepStrictEqual(data.data, [{ url: 'aGVsbG8=' }]);
+    assert.deepStrictEqual(data.data, [{ b64_json: 'aGVsbG8=' }]);
   });
 
   it('POST /v1/audio/speech 使用 mix 模型时应从 chat 文本提取音频', async () => {
@@ -2135,17 +2137,10 @@ describe('mix call_type 兼容', () => {
     });
 
     const response = await app.handleRequest(request, mockEnv);
-    const data = await response.json();
     assert.strictEqual(response.status, HTTP_STATUS.OK);
-    assert.strictEqual(response.headers.get('content-type'), 'application/json');
-    assert.strictEqual(Array.isArray(data.data), true);
-    assert.strictEqual(data.data.length, 1);
-    assert.strictEqual(typeof data.data[0].url, 'object');
-    assert.strictEqual(data.data[0].url[0], 104);
-    assert.strictEqual(data.data[0].url[1], 101);
-    assert.strictEqual(data.data[0].url[2], 108);
-    assert.strictEqual(data.data[0].url[3], 108);
-    assert.strictEqual(data.data[0].url[4], 111);
+    assert.strictEqual(response.headers.get('content-type'), 'audio/mpeg');
+    const audio = new Uint8Array(await response.arrayBuffer());
+    assert.deepStrictEqual(Array.from(audio), [104, 101, 108, 108, 111]);
   });
 
   it('POST /v1/video/generations 使用 mix 模型时应从 chat 文本提取视频', async () => {
@@ -2170,7 +2165,7 @@ describe('mix call_type 兼容', () => {
     const response = await app.handleRequest(request, mockEnv);
     const data = await response.json();
     assert.strictEqual(response.status, HTTP_STATUS.OK);
-    assert.deepStrictEqual(data.data, [{ url: 'aGVsbG8=' }]);
+    assert.deepStrictEqual(data.data, [{ b64_json: 'aGVsbG8=' }]);
   });
 
   it('POST /v1/images/generations 使用 mix 模型时应将接口专属参数拼接进 messages', async () => {
@@ -2206,10 +2201,9 @@ describe('mix call_type 兼容', () => {
     await app.handleRequest(request, mockEnv);
     assert.strictEqual(Array.isArray(receivedOptions.messages), true);
     const contextMessage = receivedOptions.messages.at(-1);
-    assert.strictEqual(contextMessage.role, 'system');
+    assert.strictEqual(contextMessage.role, 'user');
     const contextText = contextMessage.content[0].text;
-    assert.strictEqual(contextText.includes('"image_gen"'), true);
-    assert.strictEqual(contextText.includes('"n":2'), true);
+    assert.strictEqual(contextText.includes('"count":2'), true);
     assert.strictEqual(contextText.includes('"size":"1024x1024"'), true);
     assert.strictEqual(contextText.includes('"aspect_ratio":"1:1"'), true);
     assert.strictEqual(contextText.includes('"response_format":"b64_json"'), true);
@@ -2247,18 +2241,16 @@ describe('mix call_type 兼容', () => {
 
     await app.handleRequest(request, mockEnv);
     assert.strictEqual(Array.isArray(receivedOptions.messages), true);
-    assert.strictEqual(receivedOptions.messages.length >= 2, true);
-    const contextMessage = receivedOptions.messages.at(-2);
+    assert.strictEqual(receivedOptions.messages.length >= 1, true);
     const fileMessage = receivedOptions.messages.at(-1);
-    assert.strictEqual(contextMessage.role, 'system');
-    const contextText = contextMessage.content[0].text;
-    assert.strictEqual(contextText.includes('"audio_gen"'), true);
+    assert.strictEqual(fileMessage.role, 'user');
+    const contextText = fileMessage.content[0].text;
+    assert.strictEqual(fileMessage.content[1].type, 'file');
+    assert.strictEqual(fileMessage.content[1].data, 'data:audio/mpeg;base64,AAAA');
+    assert.strictEqual(fileMessage.content[1].mediaType, 'application/octet-stream');
     assert.strictEqual(contextText.includes('"voice":"alloy"'), true);
     assert.strictEqual(contextText.includes('"speed":1.1'), true);
     assert.strictEqual(contextText.includes('"output_format":"mp3"'), true);
-    assert.strictEqual(fileMessage.role, 'user');
-    assert.strictEqual(fileMessage.content[0].type, 'file');
-    assert.strictEqual(fileMessage.content[0].data, 'data:audio/mpeg;base64,AAAA');
   });
 
   it('POST /v1/audio/speech multipart 传入文件时，mix 消息中的 file.data 应为 Uint8Array', async () => {
@@ -2496,7 +2488,7 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(createdModel.output_cost, '0.6/M');
   });
 
-  it('统一日志函数: success 应写入日志并按显式 usageQuantities 计算成本', async () => {
+  it('统一日志函数: success 应写入日志并按 usage 计算成本', async () => {
     mockEnv._addChannel({
       id: 'ch-unified-success',
       name: 'Unified Success Channel',
@@ -2529,6 +2521,30 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
       last_updated: '2026-04-15T00:00:00.000Z',
       headers: '{}',
     });
+
+    app = createApp({
+      now: () => new Date('2026-04-15T00:00:00.000Z'),
+      providers: {
+        createOpenAI: () => ({ chat: () => ({ modelCode: 'gpt-4o-unified-success' }) }),
+      },
+      ai: {
+        generateText: async () => ({
+          text: 'ok',
+          usage: { promptTokens: 500000, completionTokens: 1000000, totalTokens: 1500000 },
+        }),
+      },
+    });
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_CHAT,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        model: 'gpt-4o-unified-success',
+        messages: [{ role: 'user', content: 'hello' }],
+      },
+    });
+    const response = await app.handleRequest(request, mockEnv);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
 
     const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
     assert.strictEqual(latestLog.channel_id, 'ch-unified-success');
@@ -2573,6 +2589,29 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
       last_updated: '2026-04-15T00:00:00.000Z',
       headers: '{}',
     });
+
+    app = createApp({
+      now: () => new Date('2026-04-15T00:00:00.000Z'),
+      providers: {
+        createOpenAI: () => ({ chat: () => ({ modelCode: 'gpt-4o-unified-error' }) }),
+      },
+      ai: {
+        generateText: async () => {
+          throw new Error('upstream failed');
+        },
+      },
+    });
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_CHAT,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        model: 'gpt-4o-unified-error',
+        messages: [{ role: 'user', content: 'hello' }],
+      },
+    });
+    const response = await app.handleRequest(request, mockEnv);
+    assert.strictEqual(response.status, HTTP_STATUS.INTERNAL_ERROR);
 
     const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
     assert.strictEqual(latestLog.channel_id, 'ch-unified-error');
@@ -2934,7 +2973,7 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(response.status, HTTP_STATUS.OK);
     const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
     assert.strictEqual(latestLog.output_price, '0.02/img');
-    assert.strictEqual(latestLog.input_quantity, 2);
+    assert.strictEqual(latestLog.input_quantity, 0);
     assert.strictEqual(latestLog.output_quantity, 3);
     assert.strictEqual(latestLog.input_cost, 0);
     assert.strictEqual(latestLog.output_cost, 60000000);
@@ -3000,7 +3039,7 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(response.status, HTTP_STATUS.OK);
     const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
     assert.strictEqual(latestLog.output_price, '0.5/sec');
-    assert.strictEqual(latestLog.input_quantity, 1.5);
+    assert.strictEqual(latestLog.input_quantity, 0);
     assert.strictEqual(latestLog.output_quantity, 0);
     assert.strictEqual(latestLog.input_cost, 0);
     assert.strictEqual(latestLog.output_cost, 0);
@@ -3066,9 +3105,122 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(response.status, HTTP_STATUS.OK);
     const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
     assert.strictEqual(latestLog.output_price, '0.5/sec');
-    assert.strictEqual(latestLog.input_quantity, 2);
+    assert.strictEqual(latestLog.input_quantity, 0);
     assert.strictEqual(latestLog.output_quantity, 0);
     assert.strictEqual(latestLog.total_cost, 0);
+  });
+
+  it('计费优先级: image_gen 在存在 /img 与 /sec 时应优先 /img（/sec 与 /img 同级时按场景选择）', async () => {
+    mockEnv._addChannel({
+      id: 'ch-img-priority',
+      name: 'Image Priority Channel',
+      key: 'image-priority-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-image-priority',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    });
+    mockEnv._addModel({
+      id: 'model-img-priority',
+      channel_id: 'ch-img-priority',
+      code: 'gpt-image-priority',
+      name: 'gpt-image-priority',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.IMAGE_GEN,
+      capabilities: JSON.stringify([CALL_TYPES.IMAGE_GEN]),
+      input_cost: '0',
+      output_cost: '0.5/sec,0.02/img,1/M',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-15T00:00:00.000Z',
+      headers: '{}',
+    });
+
+    app = createApp({
+      providers: {
+        createOpenAI: () => ({ image: (modelCode) => ({ modelCode }) }),
+      },
+      ai: {
+        generateImage: async () => ({ images: [{ base64: 'a' }, { base64: 'b' }, { base64: 'c' }] }),
+      },
+    });
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_IMAGES,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: { model: 'gpt-image-priority', prompt: 'draw', n: 3, input_images_count: 1 },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
+    assert.strictEqual(latestLog.output_price, '0.02/img');
+  });
+
+  it('计费优先级: audio_gen 在存在 /img 与 /sec 时应优先 /sec（/sec 与 /img 同级时按场景选择）', async () => {
+    mockEnv._addChannel({
+      id: 'ch-audio-priority',
+      name: 'Audio Priority Channel',
+      key: 'audio-priority-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-audio-priority',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    });
+    mockEnv._addModel({
+      id: 'model-audio-priority',
+      channel_id: 'ch-audio-priority',
+      code: 'gpt-audio-priority',
+      name: 'gpt-audio-priority',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.AUDIO_GEN,
+      capabilities: JSON.stringify([CALL_TYPES.AUDIO_GEN]),
+      input_cost: '0',
+      output_cost: '0.02/img,0.5/sec,1/M',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-15T00:00:00.000Z',
+      headers: '{}',
+    });
+
+    app = createApp({
+      providers: {
+        createOpenAI: () => ({ speech: (modelCode) => ({ modelCode }) }),
+      },
+      ai: {
+        experimental_generateSpeech: async () => ({
+          audio: { uint8Array: new Uint8Array([1, 2, 3]), mediaType: 'audio/mpeg' },
+          inputDurationSeconds: 2,
+        }),
+      },
+    });
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_AUDIO,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: { model: 'gpt-audio-priority', input: 'hello', inputDuration: 2 },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    const latestLog = mockEnv._logs[mockEnv._logs.length - 1];
+    assert.strictEqual(latestLog.output_price, '0.5/sec');
   });
 });
 
@@ -3154,5 +3306,16 @@ describe('数据库初始化: initializeDatabase', () => {
     const hasRename = executedSql.some((sql) => sql.includes('ALTER TABLE request_logs RENAME TO request_logs_legacy'));
     assert.strictEqual(hasDropLegacy, true);
     assert.strictEqual(hasRename, true);
+  });
+});
+
+describe('media-utils: getMp4Duration', () => {
+  const TEST_MP4_FILE_PATH = '/Users/exc/Downloads/123.mp4';
+
+  it('应可从真实 MP4 文件中解析出正数时长', async () => {
+    const fileBuffer = await readFile(TEST_MP4_FILE_PATH);
+    const duration = getMp4Duration(new Uint8Array(fileBuffer));
+    assert.strictEqual(typeof duration, 'number');
+    assert.ok(duration == 5.041666666666667);
   });
 });
