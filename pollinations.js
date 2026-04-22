@@ -52,7 +52,6 @@ function buildHeaders(sharedHeaders, apiKey, callHeaders) {
 }
 
 async function fetchAsBase64({ fetchFn, url, headers, fallbackMediaType, abortSignal }) {
-  console.info(url);
   const response = await fetchFn(url, { method: 'GET', headers, signal: abortSignal });
   if (!response.ok) {
     throw new Error(`Pollinations upstream returned ${response.status}`);

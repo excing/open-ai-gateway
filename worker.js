@@ -1256,17 +1256,6 @@ function createApp(deps = {}) {
   }
 
   async function writeSuccessLog(requestBody, responseBody, selection, userCallType, latencyMs, env) {
-    // const usageQuantities = getUsageQuantities(userCallType, requestBody, responseBody);
-    // const costSnapshot = buildCostSnapshot({
-    //   inputPricingConfig: selection.model.input_cost,
-    //   outputPricingConfig: selection.model.output_cost,
-    //   usageQuantities,
-    //   callType: userCallType,
-    // });
-
-    console.info(requestBody);
-    console.info(responseBody);
-    console.info(selection);
     try {
       const preferredUnits = [COST_UNITS.REQUEST, COST_UNITS.IMAGE, COST_UNITS.SECOND, COST_UNITS.MILLION];
       const inputRule = choosePricingRule(parsePricingConfig(selection.model.input_cost), preferredUnits);
@@ -1276,14 +1265,6 @@ function createApp(deps = {}) {
       const outputImageCount = responseBody.images ? responseBody.images.length : 0;
       const outputAudioDuration = responseBody.audio ? getMp3Duration(responseBody.audio.uint8Array) : 0;
       const outputVideoDuration = responseBody.video ? getMp4Duration(responseBody.video.uint8Array) : 0;
-
-      console.info(inputRule);
-      console.info(outputRule);
-      console.info(usageTokens);
-      console.info(inputAudioDuration);
-      console.info(outputImageCount);
-      console.info(outputAudioDuration);
-      console.info(outputVideoDuration);
 
       let inputBillableQuantity = 0;
       switch (inputRule.unit) {
