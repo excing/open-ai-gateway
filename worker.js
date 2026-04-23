@@ -1080,7 +1080,46 @@ function createApp(deps = {}) {
       completion_tokens: usageTokens.output,
       total_tokens: usageTokens.total,
     }
+
+    const toToolCalls = (rawToolCalls) => {
+      if (!Array.isArray(rawToolCalls) || rawToolCalls.length === 0) return [];
+      return rawToolCalls.map((toolCall, index) => {
+        const functionName = firstValue(
+          toolCall?.function?.name,
+          toolCall?.toolName,
+          toolCall?.name,
+          '',
+        );
+        const rawArguments = firstValue(
+          toolCall?.function?.arguments,
+          toolCall?.args,
+          toolCall?.arguments,
+          '',
+        );
+        const functionArguments = typeof rawArguments === 'string'
+          ? rawArguments
+          : JSON.stringify(rawArguments ?? {});
+        return {
+          id: firstValue(toolCall?.id, toolCall?.toolCallId, `call_${index + 1}`),
+          type: firstValue(toolCall?.type, toolCall?.toolCallType, 'function'),
+          function: { name: functionName, arguments: functionArguments },
+        };
+      });
+    };
+
     if (userCallType === CALL_TYPES.CHAT) {
+      const reasoning = result.reasoningText;
+      const toolCalls = toToolCalls(firstValue(result.toolCalls, result.tool_calls, []));
+      const message = {
+        role: 'assistant',
+        content: result.text || '',
+      };
+      if (reasoning) {
+        message.reasoning = reasoning;
+      }
+      if (toolCalls.length > 0) {
+        message.tool_calls = toolCalls;
+      }
       return jsonResponse({
         id: `${CONSTANTS.UUID_PREFIX}${uuidFn()}`,
         object: OPENAI_OBJECTS.CHAT_COMPLETION,
@@ -1089,8 +1128,8 @@ function createApp(deps = {}) {
         choices: [
           {
             index: 0,
-            message: { role: 'assistant', content: result.text || '' },
-            finish_reason: 'stop',
+            message,
+            finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
           },
         ],
         usage,
@@ -1114,7 +1153,12 @@ function createApp(deps = {}) {
     }
 
     if (userCallType === CALL_TYPES.TRANSCRIBE) {
-      return jsonResponse({ text: result.text || '' });
+      const segments = result.segments && result.segments.length > 0 
+                      ? result.segments 
+                      : result.responses[0]?.body?.words;
+      const duration = result.durationInSeconds || result.responses[0]?.body?.duration;
+      const language = result.language || result.responses[0]?.body?.language;
+      return jsonResponse({ text: result.text || '', segments, duration, language, model: modelCode });
     }
 
     if (userCallType === CALL_TYPES.EMBEDDING) {
@@ -1167,7 +1211,9 @@ function createApp(deps = {}) {
       const inputRule = choosePricingRule(parsePricingConfig(selection.model.input_cost), preferredUnits);
       const outputRule = choosePricingRule(parsePricingConfig(selection.model.output_cost), preferredUnits);
       const usageTokens = getUsageTokens(responseBody.usage);
-      const inputAudioDuration = userCallType === CALL_TYPES.TRANSCRIBE ? getMp3Duration(requestBody.audio) : 0;
+      const inputAudioDuration = userCallType === CALL_TYPES.TRANSCRIBE
+        ? (responseBody.durationInSeconds || getMp3Duration(requestBody.audio))
+        : 0;
       const outputImageCount = responseBody.images ? responseBody.images.length : 0;
       const outputAudioDuration = responseBody.audio ? getMp3Duration(responseBody.audio.uint8Array) : 0;
       const outputVideoDuration = responseBody.video ? getMp4Duration(responseBody.video.uint8Array) : 0;

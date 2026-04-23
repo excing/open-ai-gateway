@@ -3249,6 +3249,45 @@ describe('请求链路: handleRequest', () => {
   });
 });
 
+describe('formatAIResponse(chat)', () => {
+  it('应返回 chat 模型的 reasoning 与 tool_calls', async () => {
+    const app = createApp({
+      now: () => new Date('2026-04-23T00:00:00.000Z'),
+      uuid: () => 'mock-uuid-1',
+    });
+
+    const response = await app.formatAIResponse(
+      {
+        text: 'final answer',
+        reasoning: 'internal reasoning summary',
+        toolCalls: [
+          {
+            id: 'call_1',
+            type: 'function',
+            function: { name: 'get_weather', arguments: '{"city":"Shanghai"}' },
+          },
+        ],
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+      },
+      CALL_TYPES.CHAT,
+      'gpt-4o',
+    );
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    const data = await response.json();
+    assert.strictEqual(data.object, 'chat.completion');
+    assert.strictEqual(data.choices[0].message.content, 'final answer');
+    assert.strictEqual(data.choices[0].message.reasoning, 'internal reasoning summary');
+    assert.deepStrictEqual(data.choices[0].message.tool_calls, [
+      {
+        id: 'call_1',
+        type: 'function',
+        function: { name: 'get_weather', arguments: '{"city":"Shanghai"}' },
+      },
+    ]);
+  });
+});
+
 describe('media-utils: getMp4Duration', () => {
   const TEST_MP4_FILE_PATH = '/Users/exc/Downloads/123.mp4';
 

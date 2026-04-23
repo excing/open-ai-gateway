@@ -1350,12 +1350,30 @@ function buildPaginatedResponse<T>(data: T[], total: number, pagination: Paginat
     "model": "gpt-4o",
     "choices": [{
         "index": 0,
-        "message": { "role": "assistant", "content": "Hello! How can I help you?" },
+        "message": {
+            "role": "assistant",
+            "content": "Hello! How can I help you?",
+            "reasoning": "模型思考摘要（可选，可能不存在）",
+            "tool_calls": [
+                {
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": "{\"city\":\"Shanghai\"}"
+                    }
+                }
+            ]
+        },
         "finish_reason": "stop"
     }],
     "usage": { "prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30 }
 }
 ```
+
+字段边界说明：
+- `choices[0].message.reasoning`：仅当上游返回思考文本时存在（例如 `result.reasoning` 或 `result.reasoningText`），否则不返回该字段。
+- `choices[0].message.tool_calls`：仅当上游返回函数调用数组时存在（例如 `result.toolCalls` 或 `result.tool_calls`），否则不返回该字段。
 
 **流式响应** (stream=true)：SSE 格式，每个 chunk：
 ```
