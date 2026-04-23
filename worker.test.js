@@ -3226,88 +3226,26 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
   });
 });
 
-describe('数据库初始化: initializeDatabase', () => {
-  it('应执行最终表结构与索引DDL', async () => {
-    const executedSql = [];
-    const env = {
-      DB: {
-        prepare: (sql) => ({
-          bind: function (...args) {
-            this._bindings = args;
-            return this;
-          },
-          run: async function () {
-            executedSql.push(sql);
-            return { success: true };
-          },
+describe('请求链路: handleRequest', () => {
+  it('请求处理阶段不应依赖 initializeDatabase 函数', async () => {
+    const app = createApp({
+      providers: {
+        createOpenAI: () => ({ languageModel: (modelCode) => ({ modelCode }) }),
+      },
+      ai: {
+        generateText: async () => ({
+          text: 'ok',
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
         }),
       },
-    };
+    });
+    const request = createMockRequest({ method: 'GET', pathname: ROUTES.STATUS });
+    const env = createMockEnv();
 
-    await createApp().initializeDatabase(env);
+    const response = await app.handleRequest(request, env);
 
-    assert.ok(executedSql.some((sql) => String(sql).includes('CREATE TABLE IF NOT EXISTS channels')));
-    assert.ok(executedSql.some((sql) => String(sql).includes('CREATE TABLE IF NOT EXISTS channel_models')));
-    assert.ok(executedSql.some((sql) => String(sql).includes('CREATE TABLE IF NOT EXISTS request_logs')));
-    assert.ok(executedSql.some((sql) => String(sql).includes('CREATE INDEX IF NOT EXISTS idx_channel_models_channel_id')));
-    assert.ok(executedSql.some((sql) => String(sql).includes('CREATE INDEX IF NOT EXISTS idx_request_logs_created_at')));
-    assert.strictEqual(env.__dbInitialized, true);
-  });
-
-  it('应在已初始化后跳过重复DDL执行', async () => {
-    const executedSql = [];
-    const env = {
-      DB: {
-        prepare: (sql) => ({
-          run: async function () {
-            executedSql.push(sql);
-            return { success: true };
-          },
-        }),
-      },
-    };
-
-    const app = createApp();
-    await app.initializeDatabase(env);
-    const firstRunCount = executedSql.length;
-
-    await app.initializeDatabase(env);
-    assert.strictEqual(executedSql.length, firstRunCount);
-  });
-
-  it('迁移前存在 request_logs_legacy 时应先清理再迁移', async () => {
-    const executedSql = [];
-    const env = {
-      DB: {
-        prepare: (sql) => ({
-          all: async function () {
-            if (String(sql).includes('PRAGMA table_info(request_logs)')) {
-              return {
-                results: [
-                  { name: 'id', type: 'TEXT' },
-                  { name: 'input_tokens', type: 'INTEGER' },
-                  { name: 'output_tokens', type: 'INTEGER' },
-                  { name: 'input_cost', type: 'TEXT' },
-                  { name: 'output_cost', type: 'TEXT' },
-                ],
-              };
-            }
-            return { results: [] };
-          },
-          run: async function () {
-            executedSql.push(String(sql));
-            return { success: true };
-          },
-        }),
-      },
-    };
-
-    await createApp().initializeDatabase(env);
-
-    const hasDropLegacy = executedSql.some((sql) => sql.includes('DROP TABLE IF EXISTS request_logs_legacy'));
-    const hasRename = executedSql.some((sql) => sql.includes('ALTER TABLE request_logs RENAME TO request_logs_legacy'));
-    assert.strictEqual(hasDropLegacy, true);
-    assert.strictEqual(hasRename, true);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(typeof app.initializeDatabase, 'undefined');
   });
 });
 

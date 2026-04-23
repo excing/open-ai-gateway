@@ -12,8 +12,8 @@ run_worker_first = ["/api/*", "/v1/*", "/healthz"]
 
 [[d1_databases]]
 binding = "DB" # Worker 中使用的名称
-database_name = "my-open-ai-geteway"
-database_id = "open-ai-geteway-local-db-id"
+database_name = "my-open-ai-gateway"
+database_id = "e4e92880-c1df-4d86-91d2-18926d77669e"
 
 [observability]
 enabled = false

@@ -2070,12 +2070,33 @@ async function handleRequest(request, env) {
         if (request.method === 'OPTIONS') {
             return handleCorsPreflightRequest();
         }
+        // D1 表结构初始化由 wrangler migrations 负责，不在请求链路执行 DDL
         return await routeRequest(request, env);
     } catch (error) {
         console.error('Unhandled error:', error);
         return errorResponse(ERROR_MESSAGES.INTERNAL_ERROR, HTTP_STATUS.INTERNAL_ERROR);
     }
 }
+```
+
+### 11.1.1 D1 Migration 执行规范（请求链路外）
+
+```ts
+/**
+ * 语义: D1 表结构/索引变更必须通过 SQL migration 在部署前执行，
+ *      禁止在 handleRequest 请求路径执行 CREATE/ALTER/DROP 等 DDL。
+ *
+ * 本地开发:
+ * - wrangler d1 migrations apply <devDatabaseName> --local
+ *
+ * 线上环境:
+ * - wrangler d1 migrations apply <prodDatabaseName> --env production
+ *
+ * 边界:
+ * - 新增字段/索引/表: 必须新增 migration 文件
+ * - 旧数据修复: 通过 migration 脚本执行，不写入请求时逻辑
+ */
+function applyD1MigrationsOutsideRequestPath(): void;
 ```
 
 ### 11.2 handleV1Proxy 核心代理（含 Failover）

@@ -752,111 +752,6 @@ function getCooldownDuration(failures) {
   return 0;
 }
 
-async function initializeDatabase(env) {
-  if (!env?.DB) {
-    throw new Error('Database is not configured');
-  }
-  if (env.__dbInitialized) {
-    return;
-  }
-
-  const ddl = SQL.DDL;
-  const statements = [
-    ddl.CREATE_CHANNELS_TABLE,
-    ddl.CREATE_CHANNEL_MODELS_TABLE,
-    ddl.CREATE_REQUEST_LOGS_TABLE,
-    ddl.CREATE_INDEX_CHANNEL_MODELS_CHANNEL_ID,
-    ddl.CREATE_INDEX_CHANNEL_MODELS_CODE,
-    ddl.CREATE_INDEX_CHANNEL_MODELS_STATUS,
-    ddl.CREATE_INDEX_CHANNEL_MODELS_CALL_TYPE,
-    ddl.CREATE_INDEX_REQUEST_LOGS_CREATED_AT,
-    ddl.CREATE_INDEX_REQUEST_LOGS_CHANNEL_ID,
-    ddl.CREATE_INDEX_REQUEST_LOGS_MODEL_ID,
-    ddl.CREATE_INDEX_REQUEST_LOGS_STATUS,
-  ];
-
-  for (const statement of statements) {
-    await env.DB.prepare(statement).run();
-  }
-  await migrateRequestLogsCostColumnsToInteger(env);
-
-  env.__dbInitialized = true;
-}
-
-async function migrateRequestLogsCostColumnsToInteger(env) {
-  if (!env?.DB?.prepare) return;
-  const pragmaQuery = env.DB.prepare(`PRAGMA table_info(request_logs)`);
-  if (!pragmaQuery || typeof pragmaQuery.all !== 'function') return;
-  const pragmaResult = await pragmaQuery.all();
-  const columns = pragmaResult?.results || [];
-  if (!Array.isArray(columns) || columns.length === 0) return;
-
-  const inputCostType = String(columns.find((column) => column.name === 'input_cost')?.type || '').toUpperCase();
-  const outputCostType = String(columns.find((column) => column.name === 'output_cost')?.type || '').toUpperCase();
-  const hasInputPrice = columns.some((column) => column.name === 'input_price');
-  const hasOutputPrice = columns.some((column) => column.name === 'output_price');
-  const hasTotalCost = columns.some((column) => column.name === 'total_cost');
-  const hasInputQuantity = columns.some((column) => column.name === 'input_quantity');
-  const hasOutputQuantity = columns.some((column) => column.name === 'output_quantity');
-  const hasInputTokens = columns.some((column) => column.name === 'input_tokens');
-  const hasOutputTokens = columns.some((column) => column.name === 'output_tokens');
-  const shouldKeepSchema =
-    inputCostType === 'INTEGER'
-    && outputCostType === 'INTEGER'
-    && hasInputPrice
-    && hasOutputPrice
-    && hasTotalCost
-    && hasInputQuantity
-    && hasOutputQuantity;
-  if (shouldKeepSchema) return;
-
-  const buildCostMigrateExpression = (columnName, columnType) => {
-    if (columnType === 'INTEGER') {
-      return `COALESCE(CAST(${columnName} AS INTEGER), 0)`;
-    }
-    return `CAST(ROUND(COALESCE(CAST(${columnName} AS REAL), 0) * ${COST_SCALE_FACTOR}) AS INTEGER)`;
-  };
-  const inputCostExpression = buildCostMigrateExpression('input_cost', inputCostType);
-  const outputCostExpression = buildCostMigrateExpression('output_cost', outputCostType);
-  const inputPriceExpression = hasInputPrice ? `COALESCE(input_price, '0')` : `'0'`;
-  const outputPriceExpression = hasOutputPrice ? `COALESCE(output_price, '0')` : `'0'`;
-  const inputQuantityExpression = hasInputQuantity
-    ? `COALESCE(CAST(input_quantity AS INTEGER), 0)`
-    : (hasInputTokens ? `COALESCE(CAST(input_tokens AS INTEGER), 0)` : `0`);
-  const outputQuantityExpression = hasOutputQuantity
-    ? `COALESCE(CAST(output_quantity AS INTEGER), 0)`
-    : (hasOutputTokens ? `COALESCE(CAST(output_tokens AS INTEGER), 0)` : `0`);
-  const totalCostExpression = hasTotalCost
-    ? buildCostMigrateExpression('total_cost', String(columns.find((column) => column.name === 'total_cost')?.type || '').toUpperCase())
-    : `${inputCostExpression} + ${outputCostExpression}`;
-
-  // 幂等迁移: 上次迁移中断时可能遗留 request_logs_legacy，重试前先清理
-  await env.DB.prepare(`DROP TABLE IF EXISTS request_logs_legacy`).run();
-  await env.DB.prepare(`ALTER TABLE request_logs RENAME TO request_logs_legacy`).run();
-  await env.DB.prepare(SQL.DDL.CREATE_REQUEST_LOGS_TABLE).run();
-  await env.DB.prepare(
-    `INSERT INTO request_logs (
-      id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message,
-      latency_ms, input_quantity, output_quantity, input_price, output_price, input_cost, output_cost, total_cost, created_at
-    )
-    SELECT
-      id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message,
-      latency_ms, ${inputQuantityExpression}, ${outputQuantityExpression},
-      ${inputPriceExpression},
-      ${outputPriceExpression},
-      ${inputCostExpression},
-      ${outputCostExpression},
-      ${totalCostExpression},
-      created_at
-    FROM request_logs_legacy`,
-  ).run();
-  await env.DB.prepare(`DROP TABLE request_logs_legacy`).run();
-  await env.DB.prepare(SQL.DDL.CREATE_INDEX_REQUEST_LOGS_CREATED_AT).run();
-  await env.DB.prepare(SQL.DDL.CREATE_INDEX_REQUEST_LOGS_CHANNEL_ID).run();
-  await env.DB.prepare(SQL.DDL.CREATE_INDEX_REQUEST_LOGS_MODEL_ID).run();
-  await env.DB.prepare(SQL.DDL.CREATE_INDEX_REQUEST_LOGS_STATUS).run();
-}
-
 // 自定义封装 fetch, 支持请求日志打印
 const depsFetch = async function (input, init) {
   const url = typeof input === 'string' ? input : input.url;
@@ -968,8 +863,8 @@ function createApp(deps = {}) {
     return authenticate(request, env);
   }
 
-  function getWaitUntil(env) {
-    return env?.ctx?.waitUntil ? env.ctx.waitUntil.bind(env.ctx) : (promise) => promise;
+  function getWaitUntil(ctx) {
+    return ctx?.waitUntil ? ctx.waitUntil.bind(ctx) : (promise) => promise;
   }
 
   function instantiateLanguageModel(channelName, baseURL, apiKey, headers, provider, callType, modelCode, env) {
@@ -1284,6 +1179,7 @@ function createApp(deps = {}) {
           break;
 
         case COST_UNITS.MILLION:
+        default:
           inputBillableQuantity = usageTokens.input;
           break;
       }
@@ -1301,6 +1197,7 @@ function createApp(deps = {}) {
           outputBillableQuantity = outputAudioDuration + outputVideoDuration;
           break;
         case COST_UNITS.MILLION:
+        default:
           outputBillableQuantity = usageTokens.output;
           break;
       }
@@ -1453,7 +1350,7 @@ function createApp(deps = {}) {
       .sort((a, b) => b.score - a.score);
   }
 
-  async function handleV1Proxy(request, env, userCallType) {
+  async function handleV1Proxy(request, env, ctx, userCallType) {
     const parsedRequestBody = await parseRequestBody(request);
     if (!parsedRequestBody.success) {
       return invalidRequestBodyResponse(parsedRequestBody.error);
@@ -1470,7 +1367,7 @@ function createApp(deps = {}) {
       return errorResponse(ERROR_MESSAGES.NO_MODEL_AVAILABLE, HTTP_STATUS.SERVICE_UNAVAILABLE);
     }
 
-    const waitUntil = getWaitUntil(env);
+    const waitUntil = getWaitUntil(ctx);
 
     if (isStream) {
       const models = candidates.map((candidate) =>
@@ -2284,7 +2181,7 @@ function createApp(deps = {}) {
     return errorResponse(ERROR_MESSAGES.NOT_FOUND, HTTP_STATUS.NOT_FOUND);
   }
 
-  async function routeRequest(request, env) {
+  async function routeRequest(request, env, ctx) {
     const url = new URL(request.url);
     const { pathname } = url;
 
@@ -2299,7 +2196,7 @@ function createApp(deps = {}) {
 
     if (PATH_TO_CALL_TYPE[pathname] && request.method === METHODS.POST) {
       if (!authenticate(request, env)) return errorResponse(ERROR_MESSAGES.UNAUTHORIZED, HTTP_STATUS.UNAUTHORIZED);
-      return handleV1Proxy(request, env, PATH_TO_CALL_TYPE[pathname]);
+      return handleV1Proxy(request, env, ctx, PATH_TO_CALL_TYPE[pathname]);
     }
 
     if (pathname.startsWith(ROUTES.API_PREFIX)) {
@@ -2309,13 +2206,12 @@ function createApp(deps = {}) {
     return errorResponse(ERROR_MESSAGES.NOT_FOUND, HTTP_STATUS.NOT_FOUND);
   }
 
-  async function handleRequest(request, env) {
+  async function handleRequest(request, env, ctx) {
     try {
       if (request.method === METHODS.OPTIONS) {
         return handleCorsPreflightRequest();
       }
-      await initializeDatabase(env);
-      const response = await routeRequest(request, env);
+      const response = await routeRequest(request, env, ctx);
       return applyCors(response);
     } catch (error) {
       console.error(error)
@@ -2329,7 +2225,6 @@ function createApp(deps = {}) {
     routeRequest,
     authenticate,
     isAdmin,
-    initializeDatabase,
     instantiateLanguageModel,
     executeAIRequest,
     formatAIResponse,
@@ -2362,4 +2257,4 @@ function createApp(deps = {}) {
 const worker = createApp({ fetch: depsFetch });
 
 export default worker;
-export { CONSTANTS, SCHEMAS, CALL_TYPE_TO_PATH, PATH_TO_CALL_TYPE, createApp, initializeDatabase };
+export { CONSTANTS, SCHEMAS, CALL_TYPE_TO_PATH, PATH_TO_CALL_TYPE, createApp };
