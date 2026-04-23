@@ -1099,12 +1099,12 @@ function createApp(deps = {}) {
 
     if (userCallType === CALL_TYPES.IMAGE_GEN) {
       const data = (result.images || []).map((image) => ({ b64_json: image.base64 }));
-      return jsonResponse({ created, data, usage });
+      return jsonResponse({ created, data });
     }
 
     if (userCallType === CALL_TYPES.VIDEO_GEN) {
       const data = (result.videos || []).map((video) => ({ b64_json: video.base64 }));
-      return jsonResponse({ created, data, usage });
+      return jsonResponse({ created, data });
     }
 
     if (userCallType === CALL_TYPES.AUDIO_GEN) {
@@ -1114,7 +1114,7 @@ function createApp(deps = {}) {
     }
 
     if (userCallType === CALL_TYPES.TRANSCRIBE) {
-      return jsonResponse({ text: result.text || '', usage });
+      return jsonResponse({ text: result.text || '' });
     }
 
     if (userCallType === CALL_TYPES.EMBEDDING) {

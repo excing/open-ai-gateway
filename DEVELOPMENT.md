@@ -2793,3 +2793,34 @@ duration = getMp4Duration(uint8)
 assert(typeof duration === "number")
 assert(duration > 0)
 ```
+
+### 14.8 media-utils 单元测试补充（2026-04-23 更新）
+
+- 新增测试目标：`getMp3Duration(uint8: Uint8Array): number | null`
+- 测试文件：`worker.test.js`
+- 测试场景：使用真实 MP3 文件验证函数能正确解析时长
+- 输入文件：`public/hellowhatareyoudoing.mp3`
+
+函数签名与边界：
+
+```ts
+function getMp3Duration(uint8: Uint8Array): number | null;
+```
+
+- 输入含义：
+  - `uint8`：完整 MP3 文件二进制数据，函数内部支持跳过 ID3 头并从 MPEG 帧头估算时长。
+- 返回含义：
+  - 成功返回 `number`（单位：秒，允许浮点）。
+  - 失败返回 `null`（未找到有效帧头或码率信息时）。
+- 边界：
+  - 实际文件测试中断言返回值类型为 `number` 且 `> 0`，避免不同编码参数导致固定值断言不稳定。
+
+伪代码：
+
+```ts
+buffer = readFile("public/hellowhatareyoudoing.mp3")
+uint8 = new Uint8Array(buffer)
+duration = getMp3Duration(uint8)
+assert(typeof duration === "number")
+assert(duration > 0)
+```

@@ -98,49 +98,122 @@ async function downloadFile(url, timeout = CONSTANTS.DOWNLOAD_TIMEOUT_MS) {
   }
 }
 
-function getMp3Duration(uint8) {
-  const now = new Date();
-  const data = uint8;
-  const len = data.length;
+function getMp3Duration(data) {
+  let offset = skipID3(data)
+  let duration = 0
 
-  let i = 0;
+  while (offset + 4 < data.length) {
+    if (data[offset] === 0xff && (data[offset + 1] & 0xe0) === 0xe0) {
 
-  // 跳过 ID3
-  if (
-    data[0] === 0x49 && // I
-    data[1] === 0x44 && // D
-    data[2] === 0x33
-  ) {
-    const size =
-      ((data[6] & 0x7f) << 21) |
-      ((data[7] & 0x7f) << 14) |
-      ((data[8] & 0x7f) << 7) |
-      (data[9] & 0x7f);
+      const header = parseFrameHeader(data, offset)
 
-    i = 10 + size;
-  }
+      if (header.frameSize && header.samples) {
+        offset += header.frameSize
+        duration += header.samples / header.sampleRate
+      } else {
+        offset++
+      }
 
-  for (; i < len - 4; i++) {
-    if (data[i] === 0xff && (data[i + 1] & 0xe0) === 0xe0) {
-      const bitrateIndex = (data[i + 2] >> 4) & 0x0f;
-
-      const bitrateTable = [
-        0, 32, 40, 48, 56, 64, 80, 96,
-        112, 128, 160, 192, 224, 256, 320, 0
-      ];
-
-      const bitrate = bitrateTable[bitrateIndex];
-
-      if (!bitrate) continue;
-
-      const duration = (len * 8) / (bitrate * 1000);
-
-      console.info('timeMs', new Date() - now);
-      return duration;
+    } else if (
+      data[offset] === 0x54 &&
+      data[offset + 1] === 0x41 &&
+      data[offset + 2] === 0x47
+    ) {
+      offset += 128
+    } else {
+      offset++
     }
+
   }
 
-  return null;
+  return Math.round(duration * 1000) / 1000
+}
+
+function skipID3(data) {
+
+  if (data[0] === 0x49 && data[1] === 0x44 && data[2] === 0x33) {
+
+    const flags = data[5]
+    const footer = (flags & 0x10) ? 10 : 0
+
+    const z0 = data[6]
+    const z1 = data[7]
+    const z2 = data[8]
+    const z3 = data[9]
+
+    const size =
+      ((z0 & 0x7f) << 21) |
+      ((z1 & 0x7f) << 14) |
+      ((z2 & 0x7f) << 7) |
+      (z3 & 0x7f)
+
+    return 10 + size + footer
+  }
+
+  return 0
+}
+
+function parseFrameHeader(data, offset) {
+
+  const b1 = data[offset + 1]
+  const b2 = data[offset + 2]
+
+  const versionBits = (b1 & 0x18) >> 3
+  const layerBits = (b1 & 0x06) >> 1
+
+  const versions = ['2.5','x','2','1']
+  const layers = ['x','3','2','1']
+
+  const version = versions[versionBits]
+  const simpleVersion = version === '2.5' ? 2 : version
+  const layer = layers[layerBits]
+
+  const bitRates = {
+    V1L1:[0,32,64,96,128,160,192,224,256,288,320,352,384,416,448],
+    V1L2:[0,32,48,56,64,80,96,112,128,160,192,224,256,320,384],
+    V1L3:[0,32,40,48,56,64,80,96,112,128,160,192,224,256,320],
+    V2L1:[0,32,48,56,64,80,96,112,128,144,160,176,192,224,256],
+    V2L2:[0,8,16,24,32,40,48,56,64,80,96,112,128,144,160],
+    V2L3:[0,8,16,24,32,40,48,56,64,80,96,112,128,144,160]
+  }
+
+  const sampleRates = {
+    '1':[44100,48000,32000],
+    '2':[22050,24000,16000],
+    '2.5':[11025,12000,8000]
+  }
+
+  const samples = {
+    '1':{1:384,2:1152,3:1152},
+    '2':{1:384,2:1152,3:576}
+  }
+
+  const key = 'V' + simpleVersion + 'L' + layer
+  const bitrateIndex = (b2 & 0xf0) >> 4
+  const sampleRateIndex = (b2 & 0x0c) >> 2
+  const padding = (b2 & 0x02) >> 1
+
+  const bitRate = bitRates[key]?.[bitrateIndex] || 0
+  const sampleRate = sampleRates[version]?.[sampleRateIndex] || 0
+  const sample = samples[simpleVersion]?.[layer] || 0
+
+  if (!bitRate || !sampleRate || !sample) {
+    return {}
+  }
+
+  let frameSize
+
+  if (layer === '1') {
+    frameSize = ((sample * bitRate * 125 / sampleRate) + padding * 4) | 0
+  } else {
+    frameSize = ((sample * bitRate * 125 / sampleRate) + padding) | 0
+  }
+
+  return {
+    frameSize,
+    samples: sample,
+    sampleRate
+  }
 }
 
 function getMp4Duration(uint8) {

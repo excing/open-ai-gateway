@@ -1,7 +1,7 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
 import { readFile } from 'node:fs/promises';
-import { getMp4Duration } from './media-utils.js';
+import { getMp3Duration, getMp4Duration } from './media-utils.js';
 import { createApp, CONSTANTS, SCHEMAS } from './worker.js';
 
 const {
@@ -3257,5 +3257,17 @@ describe('media-utils: getMp4Duration', () => {
     const duration = getMp4Duration(new Uint8Array(fileBuffer));
     assert.strictEqual(typeof duration, 'number');
     assert.ok(duration == 5.041666666666667);
+  });
+});
+
+describe('media-utils: getMp3Duration', () => {
+  const TEST_MP3_FILE_PATH = '/Users/exc/Downloads/tts.mp3';
+
+  it('应可从真实 MP3 文件中解析出正数时长', async () => {
+    const fileBuffer = await readFile(TEST_MP3_FILE_PATH);
+    const duration = getMp3Duration(new Uint8Array(fileBuffer));
+    console.log('mp3 duration:', duration)
+    assert.strictEqual(typeof duration, 'number');
+    assert.ok(duration > 0);
   });
 });
