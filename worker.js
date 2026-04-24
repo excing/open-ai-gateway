@@ -7,11 +7,14 @@ import {
   experimental_generateSpeech,
   experimental_transcribe,
   embed,
+  jsonSchema,
+  tool,
 } from 'ai';
 import { createFallback } from 'ai-fallback';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
+import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createPollinations } from './pollinations.js';
 import { createExacg } from './exacg.js';
@@ -640,7 +643,6 @@ function buildPaginatedResponse(data, total, pagination) {
 function normalizeProvider(provider) {
   if (provider === PROVIDERS.GEMINI) return PROVIDERS.GOOGLE;
   if (provider === PROVIDERS.CLAUDE) return PROVIDERS.ANTHROPIC;
-  if (provider === PROVIDERS.OPENAI_COMPATIBLE) return PROVIDERS.OPENAI;
   return provider;
 }
 
@@ -731,6 +733,49 @@ function pruneUndefined(input) {
 }
 
 const isEmptyObject = obj => Object.keys(obj).length === 0;
+
+function toAiSdkTools(rawTools) {
+  if (!Array.isArray(rawTools)) return rawTools;
+  const functionTools = rawTools
+    .map((item) => ({
+      type: item?.type,
+      functionName: item?.function?.name,
+      description: item?.function?.description,
+      parameters: item?.function?.parameters,
+    }))
+    .filter((item) => item.type === 'function' && typeof item.functionName === 'string' && item.functionName.length > 0);
+
+  if (functionTools.length === 0) return rawTools;
+
+  return Object.fromEntries(
+    functionTools.map((item) => {
+      const toolInputSchema = (item.parameters && typeof item.parameters === 'object' && !Array.isArray(item.parameters))
+        ? item.parameters
+        : { type: 'object', properties: {} };
+      return [
+        item.functionName,
+        tool({
+          description: item.description,
+          inputSchema: jsonSchema(toolInputSchema),
+        }),
+      ];
+    }),
+  );
+}
+
+function toAiSdkToolChoice(rawToolChoice) {
+  if (!rawToolChoice || typeof rawToolChoice !== 'object') return rawToolChoice;
+  if (rawToolChoice.type !== 'function') return rawToolChoice;
+  const toolName = rawToolChoice?.function?.name;
+  if (!toolName || typeof toolName !== 'string') return rawToolChoice;
+  return { type: 'tool', toolName };
+}
+
+function buildChatToolConfig(body) {
+  const tools = toAiSdkTools(body.tools);
+  const toolChoice = toAiSdkToolChoice(firstValue(body.toolChoice, body.tool_choice));
+  return { tools, toolChoice };
+}
 
 function calculateModelScore(modelRow) {
   const channelWeight = modelRow.ch_weight ?? 1;
@@ -831,6 +876,7 @@ async function normalizeTranscriptionAudioInput(body) {
 function createApp(deps = {}) {
   const providers = {
     createOpenAI: deps.providers?.createOpenAI || createOpenAI,
+    createOpenAICompatible: deps.providers?.createOpenAICompatible || createOpenAICompatible,
     createGoogleGenerativeAI: deps.providers?.createGoogleGenerativeAI || createGoogleGenerativeAI,
     createAnthropic: deps.providers?.createAnthropic || createAnthropic,
     createOpenRouter: deps.providers?.createOpenRouter || createOpenRouter,
@@ -965,12 +1011,31 @@ function createApp(deps = {}) {
             return unsupportedCallType();
         }
       }
+      case PROVIDERS.OPENAI_COMPATIBLE: {
+        const providerInstance = providers.createOpenAICompatible({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
+        switch (callType) {
+          case CALL_TYPES.IMAGE_GEN:
+            return providerInstance.imageModel(modelCode);
+          case CALL_TYPES.AUDIO_GEN:
+            return providerInstance.speechModel(modelCode);
+          case CALL_TYPES.MIX:
+          case CALL_TYPES.CHAT:
+            return providerInstance.chatModel(modelCode);
+          case CALL_TYPES.EMBEDDING:
+            return providerInstance.embeddingModel(modelCode);
+          case CALL_TYPES.TRANSCRIBE:
+            return providerInstance.transcriptionModel(modelCode);
+          default:
+            return unsupportedCallType();
+        }
+      }
     }
   }
 
   async function executeAIRequest(aiModel, callType, body) {
     const providerOptions = firstValue(body.extra_body, body.providerOptions);
     if (callType === CALL_TYPES.CHAT || callType === CALL_TYPES.MIX) {
+      const chatToolConfig = buildChatToolConfig(body);
       const messages = body.messages;
       const prompt = messages ? undefined : body.prompt;
       return ai.generateText(
@@ -985,8 +1050,8 @@ function createApp(deps = {}) {
           presencePenalty: firstValue(body.presencePenalty, body.presence_penalty),
           stopSequences: firstValue(body.stopSequences, body.stop),
           seed: body.seed,
-          tools: body.tools,
-          toolChoice: firstValue(body.toolChoice, body.tool_choice),
+          tools: chatToolConfig.tools,
+          toolChoice: chatToolConfig.toolChoice,
           responseFormat: firstValue(body.responseFormat, body.response_format),
           maxRetries: firstValue(body.max_retries, 0),
           headers: body.request_headers,
@@ -1094,14 +1159,16 @@ function createApp(deps = {}) {
           toolCall?.function?.arguments,
           toolCall?.args,
           toolCall?.arguments,
-          '',
+          toolCall?.input,
+          {},
         );
         const functionArguments = typeof rawArguments === 'string'
           ? rawArguments
           : JSON.stringify(rawArguments ?? {});
+        const normalizedType = firstValue(toolCall?.type, toolCall?.toolCallType, 'function');
         return {
           id: firstValue(toolCall?.id, toolCall?.toolCallId, `call_${index + 1}`),
-          type: firstValue(toolCall?.type, toolCall?.toolCallType, 'function'),
+          type: normalizedType === 'tool-call' ? 'function' : normalizedType,
           function: { name: functionName, arguments: functionArguments },
         };
       });
@@ -1416,6 +1483,7 @@ function createApp(deps = {}) {
     const waitUntil = getWaitUntil(ctx);
 
     if (isStream) {
+      const chatToolConfig = buildChatToolConfig(body);
       const models = candidates.map((candidate) =>
         instantiateLanguageModel(
           candidate.channel.name,
@@ -1456,8 +1524,8 @@ function createApp(deps = {}) {
           presencePenalty: firstValue(body.presencePenalty, body.presence_penalty),
           stopSequences: firstValue(body.stopSequences, body.stop),
           seed: body.seed,
-          tools: body.tools,
-          toolChoice: firstValue(body.toolChoice, body.tool_choice),
+          tools: chatToolConfig.tools,
+          toolChoice: chatToolConfig.toolChoice,
           responseFormat: firstValue(body.responseFormat, body.response_format),
           providerOptions: firstValue(body.extra_body, body.providerOptions),
         }),

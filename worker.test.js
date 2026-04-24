@@ -1854,9 +1854,51 @@ describe('V1 参数完整透传', () => {
     assert.strictEqual(receivedOptions.presencePenalty, 0.1);
     assert.deepStrictEqual(receivedOptions.stopSequences, ['DONE']);
     assert.strictEqual(receivedOptions.seed, 42);
-    assert.deepStrictEqual(receivedOptions.tools, [{ type: 'function', function: { name: 'get_weather' } }]);
+    assert.deepStrictEqual(Object.keys(receivedOptions.tools || {}), ['get_weather']);
     assert.strictEqual(receivedOptions.toolChoice, 'auto');
     assert.deepStrictEqual(receivedOptions.responseFormat, { type: 'json_object' });
+  });
+
+  it('executeAIRequest(chat) 应将 OpenAI tool_choice.function 映射为 AI SDK tool 选择', async () => {
+    let receivedOptions;
+    const app = createApp({
+      ai: {
+        generateText: async (options) => {
+          receivedOptions = options;
+          return { text: 'ok', usage: {} };
+        },
+      },
+    });
+    await app.executeAIRequest(
+      { modelId: 'chat-model' },
+      CALL_TYPES.CHAT,
+      {
+        messages: [{ role: 'user', content: 'hello' }],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'get_current_weather',
+              description: 'Get the current weather in a given location',
+              parameters: {
+                type: 'object',
+                properties: {
+                  location: { type: 'string' },
+                },
+                required: ['location'],
+              },
+            },
+          },
+        ],
+        tool_choice: {
+          type: 'function',
+          function: { name: 'get_current_weather' },
+        },
+      },
+    );
+
+    assert.deepStrictEqual(Object.keys(receivedOptions.tools || {}), ['get_current_weather']);
+    assert.deepStrictEqual(receivedOptions.toolChoice, { type: 'tool', toolName: 'get_current_weather' });
   });
 
   it('streamText 应透传完整聊天参数', async () => {
@@ -2349,6 +2391,45 @@ describe('mix call_type 兼容', () => {
     assert.deepStrictEqual(Array.from(fileContents[2].data), [3]);
     assert.deepStrictEqual(Array.from(fileContents[3].data), [4]);
     assert.deepStrictEqual(Array.from(fileContents[4].data), [5]);
+  });
+});
+
+describe('openai-compatible provider', () => {
+  it('应使用 createOpenAICompatible 实例化 chat 模型', () => {
+    let openAICalled = false;
+    let compatibleCalled = false;
+    let capturedConfig;
+    const app = createApp({
+      providers: {
+        createOpenAI: () => {
+          openAICalled = true;
+          return { chat: () => ({ source: 'openai' }) };
+        },
+        createOpenAICompatible: (config) => {
+          compatibleCalled = true;
+          capturedConfig = config;
+          return { chat: () => ({ source: 'openai-compatible' }) };
+        },
+      },
+    });
+
+    const model = app.instantiateLanguageModel(
+      'Compatible Channel',
+      'https://compatible.example.com/v1',
+      'sk-compatible',
+      { 'x-custom': '1' },
+      PROVIDERS.OPENAI_COMPATIBLE,
+      CALL_TYPES.CHAT,
+      'gpt-4o-mini',
+      createMockEnv(),
+    );
+
+    assert.strictEqual(openAICalled, false);
+    assert.strictEqual(compatibleCalled, true);
+    assert.strictEqual(model.source, 'openai-compatible');
+    assert.strictEqual(capturedConfig.baseURL, 'https://compatible.example.com/v1');
+    assert.strictEqual(capturedConfig.apiKey, 'sk-compatible');
+    assert.deepStrictEqual(capturedConfig.headers, { 'x-custom': '1' });
   });
 });
 
@@ -3283,6 +3364,40 @@ describe('formatAIResponse(chat)', () => {
         id: 'call_1',
         type: 'function',
         function: { name: 'get_weather', arguments: '{"city":"Shanghai"}' },
+      },
+    ]);
+  });
+
+  it('应兼容 tool-call + input 参数并输出为 OpenAI function tool_calls', async () => {
+    const app = createApp({
+      now: () => new Date('2026-04-23T00:00:00.000Z'),
+      uuid: () => 'mock-uuid-2',
+    });
+
+    const response = await app.formatAIResponse(
+      {
+        text: '',
+        toolCalls: [
+          {
+            id: 'call_57d8f975d8354bd598c05a97cf4224ec',
+            type: 'tool-call',
+            toolName: 'name_of_color',
+            input: { city: '大理', unit: 'celsius' },
+          },
+        ],
+        usage: { inputTokens: 82, outputTokens: 77, totalTokens: 159 },
+      },
+      CALL_TYPES.CHAT,
+      'gemini-flash-latest',
+    );
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    const data = await response.json();
+    assert.deepStrictEqual(data.choices[0].message.tool_calls, [
+      {
+        id: 'call_57d8f975d8354bd598c05a97cf4224ec',
+        type: 'function',
+        function: { name: 'name_of_color', arguments: '{"city":"大理","unit":"celsius"}' },
       },
     ]);
   });

@@ -1033,7 +1033,8 @@ async function recordFailure(modelId: string, env: Env): Promise<void>;
  * 所有 provider 创建时统一传参：{ apiKey, baseURL, headers, name: channelName }
  *
  * Provider 别名等价关系：
- * - openai / openai-compatible / default → createOpenAI
+ * - openai / default → createOpenAI
+ * - openai-compatible → createOpenAICompatible
  * - google / gemini → createGoogleGenerativeAI
  * - anthropic / claude → createAnthropic
  * - openrouter → createOpenRouter
