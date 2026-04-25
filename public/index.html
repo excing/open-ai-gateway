@@ -636,11 +636,10 @@
               <div class="toolbar justify-between">
                 <div>
                   <h2 class="section-title font-semibold text-[var(--text)]">渠道管理</h2>
-                  <p class="mt-2 text-sm text-[var(--text-soft)]">列表主视图，抽屉编辑。</p>
                 </div>
                 <div class="toolbar">
-                  <button @click="actions.loadChannels" class="btn btn-secondary">刷新渠道</button>
                   <button @click="actions.openCreateChannel" class="btn btn-primary">新建渠道</button>
+                  <button @click="actions.loadChannels" class="btn btn-secondary">刷新渠道</button>
                 </div>
               </div>
 
@@ -672,8 +671,8 @@
                     <span v-if="channel.models.length > 3" class="chip">+{{ channel.models.length - 3 }}</span>
                   </div>
                   <div class="mt-4 flex gap-2">
-                    <button @click="actions.editChannel(channel)" class="btn btn-inline btn-primary flex-1 text-sm">编辑</button>
-                    <button @click="actions.deleteChannel(channel.id)" class="btn btn-inline btn-ghost px-4 text-sm text-[var(--danger)]">删除</button>
+                    <button @click="actions.editChannel(channel)" class="btn btn-primary flex-1 text-sm">编辑</button>
+                    <button @click="actions.deleteChannel(channel.id)" class="btn btn-ghost px-4 text-sm text-[var(--danger)]">删除</button>
                   </div>
                 </article>
               </div>
@@ -684,7 +683,7 @@
                 <div>
                   <h2 class="section-title font-semibold text-[var(--text)]">模型管理 ({{ actions.getVisibleModelGroups().length }})</h2>
                 </div>
-                <button @click="actions.loadChannels" class="btn btn-secondary">刷新渠道与模型</button>
+                <button @click="actions.loadChannels" class="btn btn-secondary">刷新模型</button>
               </div>
 
               <div v-if="state.aliasFilter" class="mt-4 panel-quiet p-3 text-sm text-[var(--text-soft)]">
@@ -739,7 +738,7 @@
                     <div class="flex">
                       <button
                         @click.stop="actions.editModelGroup(group)"
-                        class="btn btn-inline btn-primary text-sm"
+                        class="btn btn-primary text-sm"
                       >
                         编辑
                       </button>
