@@ -702,6 +702,86 @@ function getUsageTokens(usage) {
   };
 }
 
+function calculateBillableQuantities(inputUnit, outputUnit, context) {
+  const { usageTokens, inputAudioDuration, outputImageCount, outputAudioDuration, outputVideoDuration } = context;
+
+  let inputBillableQuantity = 0;
+  switch (inputUnit) {
+    case COST_UNITS.SECOND:
+      inputBillableQuantity = inputAudioDuration;
+      break;
+    case COST_UNITS.MILLION:
+    default:
+      inputBillableQuantity = usageTokens.input;
+      break;
+  }
+
+  let outputBillableQuantity = 0;
+  switch (outputUnit) {
+    case COST_UNITS.REQUEST:
+      outputBillableQuantity = 1;
+      break;
+    case COST_UNITS.IMAGE:
+      outputBillableQuantity = outputImageCount;
+      break;
+    case COST_UNITS.SECOND:
+      outputBillableQuantity = outputAudioDuration + outputVideoDuration;
+      break;
+    case COST_UNITS.MILLION:
+    default:
+      outputBillableQuantity = usageTokens.output;
+      break;
+  }
+
+  return {
+    input: inputBillableQuantity,
+    output: outputBillableQuantity,
+  };
+}
+
+function buildBillingContext(requestBody, responseBody, userCallType) {
+  return {
+    usageTokens: getUsageTokens(responseBody.usage),
+    inputAudioDuration: userCallType === CALL_TYPES.TRANSCRIBE
+      ? (responseBody.durationInSeconds || getMp3Duration(requestBody.audio))
+      : 0,
+    outputImageCount: responseBody.images ? responseBody.images.length : 0,
+    outputAudioDuration: responseBody.audio ? getMp3Duration(responseBody.audio.uint8Array) : 0,
+    outputVideoDuration: responseBody.video ? getMp4Duration(responseBody.video.uint8Array) : 0,
+  };
+}
+
+function buildSuccessLogEntry(requestBody, responseBody, selection, userCallType, latencyMs) {
+  const preferredUnits = [COST_UNITS.REQUEST, COST_UNITS.IMAGE, COST_UNITS.SECOND, COST_UNITS.MILLION];
+  const inputRule = choosePricingRule(parsePricingConfig(selection.model.input_cost), preferredUnits);
+  const outputRule = choosePricingRule(parsePricingConfig(selection.model.output_cost), preferredUnits);
+  const billingContext = buildBillingContext(requestBody, responseBody, userCallType);
+  const billableQuantities = calculateBillableQuantities(inputRule.unit, outputRule.unit, billingContext);
+  const inputBillableQuantity = billableQuantities.input;
+  const outputBillableQuantity = billableQuantities.output;
+  const inputCost = Math.round(inputRule.price * inputBillableQuantity * COST_SCALE_FACTOR);
+  const outputCost = Math.round(outputRule.price * outputBillableQuantity * COST_SCALE_FACTOR);
+
+  return {
+    channel_id: selection.channel.id,
+    channel_name: selection.channel.name,
+    model_id: selection.model.id,
+    model_code: selection.model.code,
+    call_type: userCallType,
+    request_model: requestBody?.model || selection.model.code,
+    status: LOG_STATUS.SUCCESS,
+    error_message: '',
+    latency_ms: latencyMs,
+    input_quantity: inputBillableQuantity,
+    output_quantity: outputBillableQuantity,
+    input_price: inputRule.raw,
+    output_price: outputRule.raw,
+    input_cost: inputCost,
+    output_cost: outputCost,
+    total_cost: inputCost + outputCost,
+  };
+}
+
 function toSafeNumber(value, fallback = 0) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
@@ -1301,71 +1381,9 @@ function createApp(deps = {}) {
     return new Response(stream, { status: HTTP_STATUS.OK, headers });
   }
 
-  async function writeSuccessLog(requestBody, responseBody, selection, userCallType, latencyMs, env) {
+  async function writeSuccessLog(successLogEntry, env) {
     try {
-      const preferredUnits = [COST_UNITS.REQUEST, COST_UNITS.IMAGE, COST_UNITS.SECOND, COST_UNITS.MILLION];
-      const inputRule = choosePricingRule(parsePricingConfig(selection.model.input_cost), preferredUnits);
-      const outputRule = choosePricingRule(parsePricingConfig(selection.model.output_cost), preferredUnits);
-      const usageTokens = getUsageTokens(responseBody.usage);
-      const inputAudioDuration = userCallType === CALL_TYPES.TRANSCRIBE
-        ? (responseBody.durationInSeconds || getMp3Duration(requestBody.audio))
-        : 0;
-      const outputImageCount = responseBody.images ? responseBody.images.length : 0;
-      const outputAudioDuration = responseBody.audio ? getMp3Duration(responseBody.audio.uint8Array) : 0;
-      const outputVideoDuration = responseBody.video ? getMp4Duration(responseBody.video.uint8Array) : 0;
-
-      let inputBillableQuantity = 0;
-      switch (inputRule.unit) {
-        case COST_UNITS.SECOND:
-          inputBillableQuantity = inputAudioDuration;
-          break;
-
-        case COST_UNITS.MILLION:
-        default:
-          inputBillableQuantity = usageTokens.input;
-          break;
-      }
-      const inputCost = Math.round(inputRule.price * inputBillableQuantity * COST_SCALE_FACTOR);
-
-      let outputBillableQuantity = 0;
-      switch (outputRule.unit) {
-        case COST_UNITS.REQUEST:
-          outputBillableQuantity = 1;
-          break;
-        case COST_UNITS.IMAGE:
-          outputBillableQuantity = outputImageCount;
-          break;
-        case COST_UNITS.SECOND:
-          outputBillableQuantity = outputAudioDuration + outputVideoDuration;
-          break;
-        case COST_UNITS.MILLION:
-        default:
-          outputBillableQuantity = usageTokens.output;
-          break;
-      }
-      const outputCost = Math.round(outputRule.price * outputBillableQuantity * COST_SCALE_FACTOR);
-
-      await writeLog(
-        {
-          channel_id: selection.channel.id,
-          channel_name: selection.channel.name,
-          model_id: selection.model.id,
-          model_code: selection.model.code,
-          call_type: userCallType,
-          request_model: requestBody?.model || selection.model.code,
-          status: LOG_STATUS.SUCCESS,
-          error_message: '',
-          latency_ms: latencyMs,
-          input_quantity: inputBillableQuantity,
-          output_quantity: outputBillableQuantity,
-          input_price: inputRule.raw,
-          output_price: outputRule.raw,
-          input_cost: inputCost,
-          output_cost: outputCost,
-          total_cost: inputCost + outputCost,
-        },
-        env,
-      );
+      await writeLog(successLogEntry, env);
     } catch (error) {
       console.warn(error);
     }
@@ -1424,7 +1442,9 @@ function createApp(deps = {}) {
       .run();
   }
 
-  async function recordSuccess(modelId, latencyMs, env) {
+  async function recordSuccess(successLogEntry, env) {
+    const modelId = successLogEntry.model_id;
+    const latencyMs = successLogEntry.latency_ms;
     const model = await env.DB.prepare(SQL.SELECT_MODEL_FOR_STATS).bind(modelId).first();
     if (!model) return;
 
@@ -1563,8 +1583,9 @@ function createApp(deps = {}) {
         onFinish: async (event) => {
           const latencyMs = nowFn().getTime() - startTime;
           const selection = modelMap.get(fallbackModel.modelId) || candidates[0];
-          waitUntil(recordSuccess(selection.model.id, latencyMs, env));
-          waitUntil(writeSuccessLog(body, event, selection, userCallType, latencyMs, env));
+          const successLogEntry = buildSuccessLogEntry(body, event, selection, userCallType, latencyMs);
+          waitUntil(recordSuccess(successLogEntry, env));
+          waitUntil(writeSuccessLog(successLogEntry, env));
         },
       });
 
@@ -1599,8 +1620,9 @@ function createApp(deps = {}) {
         const responseBody = selection.model.call_type === CALL_TYPES.MIX
           ? await extractMediaResources({ text: result.text, files: result.files, usage: result.usage })
           : result;
-        waitUntil(recordSuccess(selection.model.id, latencyMs, env));
-        waitUntil(writeSuccessLog(body, responseBody, selection, userCallType, latencyMs, env));
+        const successLogEntry = buildSuccessLogEntry(body, responseBody, selection, userCallType, latencyMs);
+        waitUntil(recordSuccess(successLogEntry, env));
+        waitUntil(writeSuccessLog(successLogEntry, env));
 
         return formatAIResponse(responseBody, userCallType, body.model);
       } catch (error) {
