@@ -816,13 +816,13 @@
                 <button @click="actions.loadLogs" class="btn btn-secondary">刷新日志</button>
               </div>
               <div class="mt-5 grid gap-3 lg:grid-cols-4">
-                <input v-model="state.logFilters.channel_id" type="text" class="field" placeholder="渠道 ID" />
-                <input v-model="state.logFilters.model_id" type="text" class="field" placeholder="模型 ID" />
+                <input v-model="state.logFilters.channel_key" type="text" class="field" placeholder="渠道 Key" />
+                <input v-model="state.logFilters.model_code" type="text" class="field" placeholder="模型 Code" />
                 <select v-model="state.logFilters.status" class="field-select">
                   <option value="">全部状态</option>
                   <option v-for="s in constants.LOG_STATUS_LIST" :key="s" :value="s">{{ s }}</option>
                 </select>
-                <button @click="actions.loadLogs" class="btn btn-primary">查询</button>
+                <button @click="actions.searchLogs" class="btn btn-primary">查询</button>
               </div>
               <div class="mt-5 log-table-wrap">
                 <div class="log-table-scroll">
@@ -877,6 +877,18 @@
                       </template>
                     </tbody>
                   </table>
+                </div>
+              </div>
+              <div class="mt-4 flex flex-wrap items-center justify-between gap-3">
+                <p class="text-sm text-[var(--text-soft)]">
+                  共 {{ state.logPagination.total }} 条，第 {{ state.logPagination.page }} / {{ state.logPagination.totalPages }} 页
+                </p>
+                <div class="flex gap-3">
+                  <select v-model.number="state.logPagination.limit" @change="actions.updateLogPageSize" class="field-select field-mini">
+                    <option v-for="size in constants.LOG_PAGE_SIZE_OPTIONS" :key="`log-page-size-${size}`" :value="size">{{ size }} 条</option>
+                  </select>
+                  <button @click="actions.prevLogPage" :disabled="state.logPagination.page <= 1" class="btn btn-secondary btn-inline whitespace-nowrap">上一页</button>
+                  <button @click="actions.nextLogPage" :disabled="state.logPagination.page >= state.logPagination.totalPages" class="btn btn-secondary btn-inline whitespace-nowrap">下一页</button>
                 </div>
               </div>
             </section>
@@ -1148,7 +1160,7 @@
     </div>
 
     <script>
-      const { createApp, reactive, onMounted } = Vue;
+      const { createApp, reactive, onMounted, watch } = Vue;
 
       const constants = {
         STORAGE_KEY: 'open-ai-gateway-token',
@@ -1187,6 +1199,13 @@
         PROVIDERS: ['openai-compatible', 'openai', 'google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations', 'exacg', 'microsoft-tts'],
         MODEL_STATUS: ['active', 'open', 'disable'],
         LOG_STATUS_LIST: ['success', 'error'],
+        LOG_QUERY_DEBOUNCE_MS: 300,
+        LOG_PAGE_SIZE_OPTIONS: [20, 50, 100],
+        LOG_FILTER_QUERY_KEYS: {
+          channel_key: 'channel_key',
+          model_code: 'model_code',
+          status: 'status',
+        },
         CALL_TYPE_LABELS: {
           chat: '对话',
           image_gen: '图像生成',
@@ -1346,11 +1365,27 @@
             channelForm: createEmptyChannelForm(),
             modelForm: createEmptyModelForm(),
             logFilters: {
-              channel_id: '',
-              model_id: '',
+              channel_key: '',
+              model_code: '',
               status: '',
             },
+            logPagination: {
+              page: 1,
+              limit: Number(constants.DEFAULT_LIMIT),
+              total: 0,
+              totalPages: 1,
+            },
           });
+
+          const createDebouncedTask = (task, delayMs) => {
+            let timerId = null;
+            return (...args) => {
+              if (timerId) window.clearTimeout(timerId);
+              timerId = window.setTimeout(() => {
+                task(...args);
+              }, delayMs);
+            };
+          };
 
           const syncChannelModelsRaw = () => {
             state.channelForm.modelsRaw = JSON.stringify(
@@ -2116,16 +2151,49 @@
               await actions.deleteModel(state.modelForm.id, syncScope, scopeChannelId);
               state.modelDrawerOpen = false;
             },
-            loadLogs: async () => {
-              const params = new URLSearchParams({ page: constants.DEFAULT_PAGE, limit: constants.DEFAULT_LIMIT });
-              if (state.logFilters.channel_id) params.set('channel_id', state.logFilters.channel_id);
-              if (state.logFilters.model_id) params.set('model_id', state.logFilters.model_id);
-              if (state.logFilters.status) params.set('status', state.logFilters.status);
+            loadLogs: async (options = {}) => {
+              const nextPage = Number(options.page ?? state.logPagination.page);
+              const nextLimit = Number(options.limit ?? state.logPagination.limit);
+              const page = Number.isFinite(nextPage) && nextPage > 0 ? nextPage : Number(constants.DEFAULT_PAGE);
+              const limit = Number.isFinite(nextLimit) && nextLimit > 0 ? nextLimit : Number(constants.DEFAULT_LIMIT);
+              const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+              Object.entries(constants.LOG_FILTER_QUERY_KEYS).forEach(([filterKey, queryKey]) => {
+                const value = String(state.logFilters[filterKey] || '').trim();
+                if (value) params.set(queryKey, value);
+              });
               const res = await apiRequest(`${constants.API.LOG}?${params.toString()}`);
               state.logs = res.data?.data || [];
+              state.logPagination.page = Number(res.data?.page || page);
+              state.logPagination.limit = Number(res.data?.limit || limit);
+              state.logPagination.total = Number(res.data?.total || 0);
+              state.logPagination.totalPages = Number(res.data?.total_pages || 1);
               state.expandedLogId = '';
             },
+            searchLogs: async () => {
+              await actions.loadLogs({ page: 1 });
+            },
+            prevLogPage: async () => {
+              if (state.logPagination.page <= 1) return;
+              await actions.loadLogs({ page: state.logPagination.page - 1 });
+            },
+            nextLogPage: async () => {
+              if (state.logPagination.page >= state.logPagination.totalPages) return;
+              await actions.loadLogs({ page: state.logPagination.page + 1 });
+            },
+            updateLogPageSize: async () => {
+              await actions.loadLogs({ page: 1 });
+            },
           };
+
+          const triggerRealtimeLogSearch = createDebouncedTask(() => actions.loadLogs({ page: 1 }), constants.LOG_QUERY_DEBOUNCE_MS);
+
+          watch(
+            () => [state.logFilters.channel_key, state.logFilters.model_code, state.logFilters.status, state.view, state.ready],
+            () => {
+              if (!state.ready || state.view !== constants.VIEWS.LOGS) return;
+              triggerRealtimeLogSearch();
+            },
+          );
 
           onMounted(async () => {
             if (state.token) {

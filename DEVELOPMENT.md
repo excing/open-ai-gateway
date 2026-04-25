@@ -573,8 +573,8 @@ const PaginationSchema = z.object({
 
 /** 日志查询参数校验 */
 const LogQuerySchema = PaginationSchema.extend({
-    channel_id: z.string().optional(),    // 按渠道过滤
-    model_id: z.string().optional(),      // 按模型过滤
+    channel_key: z.string().optional(),   // 按渠道 key 过滤
+    model_code: z.string().optional(),    // 按模型 code 过滤
     status: z.enum(['success', 'error']).optional(), // 按状态过滤
     start_date: z.string().optional(),    // 起始日期，ISO 8601
     end_date: z.string().optional(),      // 结束日期，ISO 8601
@@ -1648,7 +1648,7 @@ data: [DONE]
 4. 展示语言：中文；内部字段值（如 `code`、`provider`、`callType`）可保留原值，但标签标题与状态文案必须中文。
 5. 标题数量展示：模型管理页主标题必须展示当前可见一级模型分组数量，格式固定为 `模型管理 (n)`；其中 `n` 取 `actions.getVisibleModelGroups().length`，并随筛选条件实时变化。
 
-#### GET /api/log?page=1&limit=20&status=error&channel_id=xxx
+#### GET /api/log?page=1&limit=20&status=error&channel_key=openai-main&model_code=gpt-4o
 
 **响应** (200)：
 ```json
@@ -1686,7 +1686,9 @@ data: [DONE]
 #### 管理台日志页（`public/index.html`）展示规范
 
 1. 列表呈现方式：必须使用按行可展开的数据表格（Table + Expandable Row），默认收起详情。
-2. 主表字段（从左到右）：
+2. 分页交互：必须支持上一页/下一页、当前页与总页数展示、总记录数展示、每页条数切换（20/50/100）。
+3. 查询联动：筛选条件（渠道 key、模型 code、状态）变化后应自动触发实时查询，并重置到第 1 页。
+4. 主表字段（从左到右）：
    - `status`：请求状态，标签化显示（`success`→`成功`，`error`→`错误`）。
    - `call_type`：请求类型，标签化中文显示。
    - `channel_name`：渠道名称。

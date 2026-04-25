@@ -385,8 +385,8 @@ const SCHEMAS = (() => {
   });
 
   const LogQuerySchema = PaginationSchema.extend({
-    channel_id: z.string().optional(),
-    model_id: z.string().optional(),
+    channel_key: z.string().optional(),
+    model_code: z.string().optional(),
     status: z.enum([LOG_STATUS.SUCCESS, LOG_STATUS.ERROR]).optional(),
     start_date: z.string().optional(),
     end_date: z.string().optional(),
@@ -1915,7 +1915,7 @@ function createApp(deps = {}) {
       return invalidRequestBodyResponse(formatValidationError(error));
     }
 
-    const { page, limit, channel_id, model_id, status, start_date, end_date } = parsed;
+    const { page, limit, channel_key, model_code, status, start_date, end_date } = parsed;
     const filters = [];
     const values = [];
     const pushFilter = (expression, value) => {
@@ -1923,8 +1923,8 @@ function createApp(deps = {}) {
       values.push(value);
     };
 
-    if (channel_id) pushFilter('channel_id = ?' + (values.length + 1), channel_id);
-    if (model_id) pushFilter('model_id = ?' + (values.length + 1), model_id);
+    if (channel_key) pushFilter('channel_id IN (SELECT id FROM channels WHERE key = ?' + (values.length + 1) + ')', channel_key);
+    if (model_code) pushFilter('model_code = ?' + (values.length + 1), model_code);
     if (status) pushFilter('status = ?' + (values.length + 1), status);
     if (start_date) pushFilter('created_at >= ?' + (values.length + 1), start_date);
     if (end_date) pushFilter('created_at <= ?' + (values.length + 1), end_date);
