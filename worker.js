@@ -174,7 +174,7 @@ const CONSTANTS = {
   UUID_PREFIX: 'uuid-',
   SQL: {
     INSERT_CHANNEL: `INSERT INTO channels (id, name, key, provider, api_key, base_url, weight, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
-    INSERT_MODEL: `INSERT INTO channel_models (id, channel_id, code, name, desc, aliases, call_type, capabilities, input_cost, output_cost, status, weight, avg_latency_ms, success_rate, error_rate, consecutive_failures, cooldown_until, last_updated, headers) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)`,
+    INSERT_MODEL: `INSERT INTO channel_models (id, channel_id, code, name, desc, aliases, call_type, capabilities, input_cost, output_cost, status, weight, avg_latency_ms, success_rate, error_rate, consecutive_failures, cooldown_until, request_count, last_updated, headers) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)`,
     SELECT_CHANNEL_BY_ID: `SELECT * FROM channels WHERE id = ?1`,
     SELECT_CHANNEL_BY_KEY: `SELECT * FROM channels WHERE key = ?1`,
     SELECT_MODELS_BY_CHANNEL_ID: `SELECT * FROM channel_models WHERE channel_id = ?1`,
@@ -225,6 +225,7 @@ const CONSTANTS = {
         error_rate REAL NOT NULL DEFAULT 0.0,
         consecutive_failures INTEGER NOT NULL DEFAULT 0,
         cooldown_until TEXT DEFAULT NULL,
+        request_count INTEGER NOT NULL DEFAULT 0,
         last_updated TEXT NOT NULL DEFAULT (datetime('now')),
         headers TEXT DEFAULT '{}',
         FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
@@ -1430,14 +1431,15 @@ function createApp(deps = {}) {
     const newAvg = model.avg_latency_ms * (1 - EMA_ALPHA) + latencyMs * EMA_ALPHA;
     const newSuccess = model.success_rate * (1 - EMA_ALPHA) + 1 * EMA_ALPHA;
     const newError = 1 - newSuccess;
+    const newRequestCount = toSafeNumber(model.request_count, 0) + 1;
     const updatedAt = nowIso(nowFn);
 
-    const setClause = `avg_latency_ms = ?1, success_rate = ?2, error_rate = ?3, consecutive_failures = ?4, cooldown_until = ?5, status = ?6, last_updated = ?7`;
-    const sql = `${SQL.UPDATE_MODEL_STATS_BASE}${setClause} WHERE id = ?8`;
+    const setClause = `avg_latency_ms = ?1, success_rate = ?2, error_rate = ?3, consecutive_failures = ?4, cooldown_until = ?5, status = ?6, request_count = ?7, last_updated = ?8`;
+    const sql = `${SQL.UPDATE_MODEL_STATS_BASE}${setClause} WHERE id = ?9`;
 
     await env.DB
       .prepare(sql)
-      .bind(newAvg, newSuccess, newError, 0, null, MODEL_STATUS.ACTIVE, updatedAt, modelId)
+      .bind(newAvg, newSuccess, newError, 0, null, MODEL_STATUS.ACTIVE, newRequestCount, updatedAt, modelId)
       .run();
   }
 
@@ -1451,14 +1453,15 @@ function createApp(deps = {}) {
     const cooldownMs = getCooldownDuration(newFailures);
     const cooldownUntil = cooldownMs > 0 ? new Date(nowFn().getTime() + cooldownMs).toISOString() : null;
     const newStatus = cooldownMs > 0 ? MODEL_STATUS.OPEN : model.status;
+    const newRequestCount = toSafeNumber(model.request_count, 0) + 1;
     const updatedAt = nowIso(nowFn);
 
-    const setClause = `consecutive_failures = ?1, success_rate = ?2, error_rate = ?3, cooldown_until = ?4, status = ?5, last_updated = ?6`;
-    const sql = `${SQL.UPDATE_MODEL_STATS_BASE}${setClause} WHERE id = ?7`;
+    const setClause = `consecutive_failures = ?1, success_rate = ?2, error_rate = ?3, cooldown_until = ?4, status = ?5, request_count = ?6, last_updated = ?7`;
+    const sql = `${SQL.UPDATE_MODEL_STATS_BASE}${setClause} WHERE id = ?8`;
 
     await env.DB
       .prepare(sql)
-      .bind(newFailures, newSuccess, newError, cooldownUntil, newStatus, updatedAt, modelId)
+      .bind(newFailures, newSuccess, newError, cooldownUntil, newStatus, newRequestCount, updatedAt, modelId)
       .run();
   }
 
@@ -1681,6 +1684,7 @@ function createApp(deps = {}) {
           0,
           0,
           null,
+          0,
           timestamp,
           JSON.stringify(model.headers || {}),
         )
@@ -1761,6 +1765,7 @@ function createApp(deps = {}) {
             0,
             0,
             null,
+            0,
             timestamp,
             JSON.stringify(model.headers || {}),
           )
@@ -1956,6 +1961,7 @@ function createApp(deps = {}) {
       success_rate: row.success_rate,
       avg_latency_ms: row.avg_latency_ms,
       consecutive_failures: row.consecutive_failures,
+      request_count: row.request_count,
     }));
     return jsonResponse({ models }, HTTP_STATUS.OK);
   }

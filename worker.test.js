@@ -55,11 +55,32 @@ function createMockEnv() {
             
             // INSERT model
             if (normalizedSql.includes('insert into channel_models')) {
-              const [id, channelId, code, name, desc, aliases, callType, capabilities, inputCost, outputCost, status, weight] = bindings;
+              const [
+                id,
+                channelId,
+                code,
+                name,
+                desc,
+                aliases,
+                callType,
+                capabilities,
+                inputCost,
+                outputCost,
+                status,
+                weight,
+                avgLatencyMs = 0,
+                successRate = 1,
+                errorRate = 0,
+                consecutiveFailures = 0,
+                cooldownUntil = null,
+                requestCount = 0,
+                lastUpdated = new Date().toISOString(),
+                headers = '{}',
+              ] = bindings;
               models.set(id, { 
                 id, channel_id: channelId, code, name, desc, aliases, call_type: callType, 
-                capabilities, input_cost: inputCost, output_cost: outputCost, status, weight, avg_latency_ms: 0, success_rate: 1, error_rate: 0,
-                consecutive_failures: 0, cooldown_until: null, last_updated: new Date().toISOString(), headers: '{}'
+                capabilities, input_cost: inputCost, output_cost: outputCost, status, weight, avg_latency_ms: avgLatencyMs, success_rate: successRate, error_rate: errorRate,
+                consecutive_failures: consecutiveFailures, cooldown_until: cooldownUntil, request_count: requestCount, last_updated: lastUpdated, headers
               });
               return { success: true };
             }
@@ -681,6 +702,7 @@ describe('API: GET /status - 返回状态列表', () => {
       error_rate: 0.001,
       consecutive_failures: 0,
       cooldown_until: null,
+      request_count: 42,
       last_updated: '2026-04-12T00:00:00Z',
       headers: '{}',
     });
@@ -698,6 +720,7 @@ describe('API: GET /status - 返回状态列表', () => {
     assert.strictEqual(data.models.length, 1);
     assert.strictEqual(data.models[0].provider, PROVIDERS.OPENAI);
     assert.strictEqual(data.models[0].call_type, CALL_TYPES.CHAT);
+    assert.strictEqual(data.models[0].request_count, 42);
   });
 });
 
@@ -2869,6 +2892,7 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(latestLog.input_cost, 1000000000);
     assert.strictEqual(latestLog.output_cost, 3000000000);
     assert.strictEqual(latestLog.total_cost, 4000000000);
+    assert.strictEqual(mockEnv._models.get('model-unified-success').request_count, 1);
   });
 
   it('统一日志函数: error 在缺省 usage 时应写入 0 用量与 0 成本', async () => {
@@ -2938,6 +2962,7 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(latestLog.input_cost, 0);
     assert.strictEqual(latestLog.output_cost, 0);
     assert.strictEqual(latestLog.total_cost, 0);
+    assert.strictEqual(mockEnv._models.get('model-unified-error').request_count, 1);
   });
 
   it('请求成功日志应写入 input_cost/output_cost', async () => {

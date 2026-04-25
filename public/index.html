@@ -279,6 +279,15 @@
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 0.75rem;
       }
+      .metric-inline-4 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      @media (min-width: 640px) {
+        .metric-inline-4 {
+          grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+      }
 
       .metric-inline > div {
         border-radius: 18px;
@@ -616,7 +625,7 @@
                       {{ model.status }}
                     </span>
                   </div>
-                  <div class="mt-4 metric-inline">
+                  <div class="mt-4 metric-inline metric-inline-4">
                     <div>
                       <p class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">成功率</p>
                       <p class="mt-2 text-lg font-semibold text-[var(--text)]">{{ actions.formatFixedDecimal((Number(model.success_rate || 0)) * 100) }}%</p>
@@ -628,6 +637,10 @@
                     <div>
                       <p class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">连续失败</p>
                       <p class="mt-2 text-lg font-semibold text-[var(--text)]">{{ model.consecutive_failures }}</p>
+                    </div>
+                    <div>
+                      <p class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">请求次数</p>
+                      <p class="mt-2 text-lg font-semibold text-[var(--text)]">{{ actions.formatQuantityDisplay(model.request_count) }}</p>
                     </div>
                   </div>
                 </article>
@@ -735,7 +748,7 @@
                           </svg>
                         </button>
                       </div>
-                      <p class="mt-1 text-sm text-[var(--text-soft)]">关联渠道：{{ group.visibleCount }}/{{ group.count }}，平均成功率：{{ (group.avgSuccessRate * 100).toFixed(2) }}%，平均耗时：{{ Math.round(group.avgLatency) }}ms</p>
+                      <p class="mt-1 text-sm text-[var(--text-soft)]">关联渠道：{{ group.visibleCount }}/{{ group.count }}，请求总数：{{ actions.formatQuantityDisplay(group.totalRequestCount) }}，平均成功率：{{ (group.avgSuccessRate * 100).toFixed(2) }}%，平均耗时：{{ Math.round(group.avgLatency) }}ms</p>
                     </div>
                     <div class="flex">
                       <button
@@ -752,17 +765,18 @@
                         <thead>
                           <tr>
                             <th>模型名</th>
-                            <th>模型CallType</th>
-                            <th>模型别名</th>
-                            <th>模型状态</th>
+                            <th>CallType</th>
+                            <th>别名</th>
+                            <th>状态</th>
                             <th>渠道名</th>
                             <th>Provider</th>
                             <th>渠道权重</th>
                             <th>模型权重</th>
-                            <th>模型输入价格</th>
-                            <th>模型输出价格</th>
-                            <th>模型成功率</th>
-                            <th>模型平均耗时</th>
+                            <th>输入价格</th>
+                            <th>输出价格</th>
+                            <th>请求次数</th>
+                            <th>成功率</th>
+                            <th>平均耗时</th>
                             <th>操作</th>
                           </tr>
                         </thead>
@@ -791,6 +805,7 @@
                             <td class="text-sm text-[var(--text-soft)]">{{ model.weight ?? 1 }}</td>
                             <td class="text-sm text-[var(--text-soft)]">{{ model.input_cost || '0' }}</td>
                             <td class="text-sm text-[var(--text-soft)]">{{ model.output_cost || '0' }}</td>
+                            <td class="text-sm text-[var(--text-soft)]">{{ actions.formatQuantityDisplay(model.request_count) }}</td>
                             <td class="text-sm text-[var(--text-soft)]">{{ ((Number(model.success_rate || 0)) * 100).toFixed(2) }}%</td>
                             <td class="text-sm text-[var(--text-soft)]">{{ Math.round(Number(model.avg_latency_ms || 0)) }}ms</td>
                             <td>
@@ -1675,9 +1690,14 @@
               const output = Array.from(groups.values()).map((group) => {
                 const successRates = group.channels.map((item) => Number(item.success_rate ?? 0)).filter((value) => Number.isFinite(value));
                 const latencies = group.channels.map((item) => Number(item.avg_latency_ms ?? 0)).filter((value) => Number.isFinite(value));
+                const totalRequestCount = group.channels.reduce((sum, item) => {
+                  const value = Number(item.request_count ?? 0);
+                  if (!Number.isFinite(value) || value <= 0) return sum;
+                  return sum + Math.round(value);
+                }, 0);
                 const avgSuccessRate = successRates.length ? successRates.reduce((a, b) => a + b, 0) / successRates.length : 0;
                 const avgLatency = latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : 0;
-                return { ...group, count: group.channels.length, avgSuccessRate, avgLatency };
+                return { ...group, count: group.channels.length, avgSuccessRate, avgLatency, totalRequestCount };
               });
               return output.sort((a, b) => a.code.localeCompare(b.code));
             },

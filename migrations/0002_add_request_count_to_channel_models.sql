@@ -1,0 +1,1 @@
+ALTER TABLE channel_models ADD COLUMN request_count INTEGER NOT NULL DEFAULT 0;

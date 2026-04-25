@@ -148,6 +148,7 @@ CREATE TABLE channels (
 | `error_rate` | REAL | NOT NULL, DEFAULT 0.0 | 请求失败率，范围 `[0.0, 1.0]`，`= 1.0 - success_rate`，冗余字段用于快速查询 |
 | `consecutive_failures` | INTEGER | NOT NULL, DEFAULT 0 | 最近连续失败次数。任何一次成功请求会将此值重置为 0。当 `>= 2` 时触发熔断器，进入冷却期 |
 | `cooldown_until` | TEXT | DEFAULT NULL | 冷却期结束时间，ISO 8601 格式。当 `status === 'open'` 时此值必不为空。仅当 `consecutive_failures >= 2` 时设置。为 NULL 或早于当前时间表示不在冷却期。可直接在 SQL 中用 `cooldown_until IS NULL OR cooldown_until < datetime('now')` 过滤 |
+| `request_count` | INTEGER | NOT NULL, DEFAULT 0 | 模型累计请求次数（包含成功与失败），每次路由到该模型发起请求后都会 +1，用于观测模型负载与使用热度 |
 | `last_updated` | TEXT | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 模型统计数据最后更新时间 |
 | `headers` | TEXT | DEFAULT '{}' | JSON 对象字符串，请求该模型时附加的额外 HTTP 头，如 `{"x-custom":"value"}` |
 
@@ -170,6 +171,7 @@ CREATE TABLE channel_models (
     error_rate REAL NOT NULL DEFAULT 0.0,
     consecutive_failures INTEGER NOT NULL DEFAULT 0,
     cooldown_until TEXT DEFAULT NULL,
+    request_count INTEGER NOT NULL DEFAULT 0,
     last_updated TEXT NOT NULL DEFAULT (datetime('now')),
     headers TEXT DEFAULT '{}',
     FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE
