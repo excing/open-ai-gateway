@@ -904,9 +904,9 @@
             <select v-model="state.channelForm.provider" class="field-select">
               <option v-for="p in constants.PROVIDERS" :key="p" :value="p">{{ p }}</option>
             </select>
-            <input v-model="state.channelForm.apiKey" type="text" class="field" placeholder="API Key" />
             <input v-model.number="state.channelForm.weight" type="number" step="0.1" min="0" max="100" class="field" placeholder="渠道权重" />
             <input v-model="state.channelForm.baseURL" type="text" class="field sm:col-span-2" placeholder="Base URL" />
+            <input v-model="state.channelForm.apiKey" type="text" class="field  sm:col-span-2" placeholder="API Key" />
           </div>
 
           <div class="mt-6 panel-quiet p-4 sm:p-5">
@@ -1280,6 +1280,8 @@
             }
           };
 
+          const normalizeModelCode = (codeValue) => String(codeValue || '').trim().toLowerCase();
+
           const createEmptyChannelModel = () => ({
             localId: crypto.randomUUID(),
             code: '',
@@ -1417,6 +1419,31 @@
               detectStatus: constants.DETECT_STATUS.IDLE,
               detectMessage: '',
             }));
+          };
+
+          const mergeChannelModelsByCode = (existingModels, discoveredModels) => {
+            const baseModels = Array.isArray(existingModels) ? [...existingModels] : [];
+            const discoveredList = Array.isArray(discoveredModels) ? discoveredModels : [];
+            const codeSet = new Set(baseModels.map((model) => normalizeModelCode(model.code)).filter(Boolean));
+            let appendedCount = 0;
+            let skippedCount = 0;
+
+            for (const model of discoveredList) {
+              const codeKey = normalizeModelCode(model?.code);
+              if (!codeKey || codeSet.has(codeKey)) {
+                skippedCount += 1;
+                continue;
+              }
+              baseModels.push(model);
+              codeSet.add(codeKey);
+              appendedCount += 1;
+            }
+
+            return {
+              models: baseModels.length > 0 ? baseModels : [createEmptyChannelModel()],
+              appendedCount,
+              skippedCount,
+            };
           };
 
           const parseJsonInput = (rawValue, fallbackValue, errorLabel) => {
@@ -1796,7 +1823,7 @@
               state.modelForm = createEmptyModelForm();
             },
             addChannelModel: () => {
-              state.channelForm.models.push(createEmptyChannelModel());
+              state.channelForm.models.unshift(createEmptyChannelModel());
               syncChannelModelsRaw();
             },
             setChannelModelDetectState: (index, status, message = '') => {
@@ -1850,9 +1877,10 @@
                     name: formatModelNameFromCode(item.id),
                     desc: '',
                   }));
-                  state.channelForm.models = discoveredModels;
+                  const mergedResult = mergeChannelModelsByCode(state.channelForm.models, discoveredModels);
+                  state.channelForm.models = mergedResult.models;
                   syncChannelModelsRaw();
-                  actions.setNotice(`已获取 ${discoveredModels.length} 个模型。`);
+                  actions.setNotice(`已获取 ${discoveredModels.length} 个模型，新增 ${mergedResult.appendedCount} 个，跳过 ${mergedResult.skippedCount} 个。`);
                 } else {
                   throw new Error(res.data?.error || '获取模型失败');
                 }
