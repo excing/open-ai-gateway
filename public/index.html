@@ -803,8 +803,8 @@
                             <td><span class="pill text-xs text-[var(--text-soft)]">{{ actions.getProviderLabel(model.provider) }}</span></td>
                             <td class="text-sm text-[var(--text-soft)]">{{ model.channel_weight ?? 1 }}</td>
                             <td class="text-sm text-[var(--text-soft)]">{{ model.weight ?? 1 }}</td>
-                            <td class="text-sm text-[var(--text-soft)]">{{ model.input_cost || '0' }}</td>
-                            <td class="text-sm text-[var(--text-soft)]">{{ model.output_cost || '0' }}</td>
+                            <td class="text-sm text-[var(--text-soft)]">{{ model.input_price || '0' }}</td>
+                            <td class="text-sm text-[var(--text-soft)]">{{ model.output_price || '0' }}</td>
                             <td class="text-sm text-[var(--text-soft)]">{{ actions.formatQuantityDisplay(model.request_count) }}</td>
                             <td class="text-sm text-[var(--text-soft)]">{{ ((Number(model.success_rate || 0)) * 100).toFixed(2) }}%</td>
                             <td class="text-sm text-[var(--text-soft)]">{{ Math.round(Number(model.avg_latency_ms || 0)) }}ms</td>
@@ -998,8 +998,8 @@
                   <select v-model="model.callType" class="field-select">
                     <option v-for="callType in constants.CALL_TYPES" :key="callType" :value="callType">{{ callType }}</option>
                   </select>
-                  <input v-model="model.inputCost" type="text" class="field" placeholder="输入成本，例如 0、2.5/M、0.02/img、0.5/sec" />
-                  <input v-model="model.outputCost" type="text" class="field" placeholder="输出成本，例如 0、10/M、0.02/img、0.5/sec" />
+                  <input v-model="model.inputPrice" type="text" class="field" placeholder="输入价格，例如 0、2.5/M、0.02/img、0.5/sec" />
+                  <input v-model="model.outputPrice" type="text" class="field" placeholder="输出价格，例如 0、10/M、0.02/img、0.5/sec" />
                 </div>
 
                 <div class="mt-4 flex justify-end">
@@ -1102,8 +1102,8 @@
             <select v-model="state.modelForm.callType" class="field-select">
               <option v-for="callType in constants.CALL_TYPES" :key="callType" :value="callType">{{ callType }}</option>
             </select>
-            <input v-model="state.modelForm.inputCost" type="text" class="field" placeholder="输入成本，例如 0、2.5/M、0.02/img、0.5/sec" />
-            <input v-model="state.modelForm.outputCost" type="text" class="field" placeholder="输出成本，例如 0、10/M、0.02/img、0.5/sec" />
+            <input v-model="state.modelForm.inputPrice" type="text" class="field" placeholder="输入价格，例如 0、2.5/M、0.02/img、0.5/sec" />
+            <input v-model="state.modelForm.outputPrice" type="text" class="field" placeholder="输出价格，例如 0、10/M、0.02/img、0.5/sec" />
           </div>
 
           <div class="model-form-stack">
@@ -1313,8 +1313,8 @@
             callType: constants.CALL_TYPES[0],
             capabilities: [],
             capabilityInput: '',
-            inputCost: '0',
-            outputCost: '0',
+            inputPrice: '0',
+            outputPrice: '0',
             weight: 1,
             headersRaw: constants.EMPTY_OBJECT_JSON,
             detectStatus: constants.DETECT_STATUS.IDLE,
@@ -1343,8 +1343,8 @@
             weight: 1,
             status: constants.MODEL_STATUS[0],
             callType: constants.CALL_TYPES[0],
-            inputCost: '0',
-            outputCost: '0',
+            inputPrice: '0',
+            outputPrice: '0',
             aliases: [],
             aliasInput: '',
             capabilities: [],
@@ -1412,8 +1412,8 @@
                 aliases: createUniqueList(model.aliases),
                 callType: model.callType,
                 capabilities: createUniqueList(model.capabilities),
-                inputCost: model.inputCost ?? '0',
-                outputCost: model.outputCost ?? '0',
+                inputPrice: model.inputPrice ?? '0',
+                outputPrice: model.outputPrice ?? '0',
                 weight: Number(model.weight || 0),
                 headers: JSON.parse(model.headersRaw || constants.EMPTY_OBJECT_JSON),
               })),
@@ -1444,8 +1444,8 @@
               callType: model.callType || constants.CALL_TYPES[0],
               capabilities: createUniqueList(model.capabilities || []),
               capabilityInput: '',
-              inputCost: model.inputCost ?? model.input_cost ?? '0',
-              outputCost: model.outputCost ?? model.output_cost ?? '0',
+              inputPrice: model.inputPrice ?? model.input_price ?? '0',
+              outputPrice: model.outputPrice ?? model.output_price ?? '0',
               weight: model.weight ?? 1,
               headersRaw: JSON.stringify(model.headers || {}, null, 2),
               detectStatus: constants.DETECT_STATUS.IDLE,
@@ -2048,8 +2048,8 @@
                   aliases: parseStoredJsonArray(model.aliases),
                   callType: model.call_type,
                   capabilities: parseStoredJsonArray(model.capabilities),
-                  inputCost: model.input_cost ?? '0',
-                  outputCost: model.output_cost ?? '0',
+                  inputPrice: model.input_price ?? '0',
+                  outputPrice: model.output_price ?? '0',
                   weight: model.weight,
                   headers: JSON.parse(model.headers || constants.EMPTY_OBJECT_JSON),
                 })),
@@ -2089,8 +2089,8 @@
                 weight: model.weight ?? 1,
                 status: model.status || constants.MODEL_STATUS[0],
                 callType: model.call_type || constants.CALL_TYPES[0],
-                inputCost: model.input_cost ?? '0',
-                outputCost: model.output_cost ?? '0',
+                inputPrice: model.input_price ?? '0',
+                outputPrice: model.output_price ?? '0',
                 aliases: parseStoredJsonArray(model.aliases),
                 aliasInput: '',
                 capabilities: parseStoredJsonArray(model.capabilities),
@@ -2142,8 +2142,8 @@
                     weight: state.modelForm.weight,
                     status: state.modelForm.status,
                     callType: state.modelForm.callType,
-                    inputCost: state.modelForm.inputCost,
-                    outputCost: state.modelForm.outputCost,
+                    inputPrice: state.modelForm.inputPrice,
+                    outputPrice: state.modelForm.outputPrice,
                     aliases,
                     capabilities,
                     headers,

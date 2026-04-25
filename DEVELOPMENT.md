@@ -139,8 +139,8 @@ CREATE TABLE channels (
 | `aliases` | TEXT | DEFAULT '[]' | JSON 数组字符串，模型别名列表，如 `["gpt4o","gpt-4-omni"]`。用户请求中的 model 字段若匹配任一别名，等同于请求该模型 |
 | `call_type` | TEXT | NOT NULL, DEFAULT 'chat' | 请求该模型时需要调用的接口类型。取值范围见 `CALL_TYPES` 常量。决定使用 AI SDK 的哪个函数（generateText/streamText/generateImage 等） |
 | `capabilities` | TEXT | DEFAULT '["chat"]' | JSON 数组字符串，该模型支持的能力列表。取值范围见 `MODEL_CAPABILITIES` 常量。用于模型列表展示和能力过滤 |
-| `input_cost` | TEXT | DEFAULT '0' | 模型输入成本。格式为 `数值+单位`（如 `0.5/M`），值为 `'0'` 表示输入免费 |
-| `output_cost` | TEXT | DEFAULT '0' | 模型输出成本。格式为 `数值+单位`（如 `2.0/M`），值为 `'0'` 表示输出免费 |
+| `input_price` | TEXT | DEFAULT '0' | 模型输入价格。格式为 `数值+单位`（如 `0.5/M`），值为 `'0'` 表示输入免费 |
+| `output_price` | TEXT | DEFAULT '0' | 模型输出价格。格式为 `数值+单位`（如 `2.0/M`），值为 `'0'` 表示输出免费 |
 | `status` | TEXT | NOT NULL, DEFAULT 'active' | 模型状态。`active`=正常参与调度；`open`=熔断器开启，冷却期中不参与调度；`disable`=管理员手动禁用，不参与调度 |
 | `weight` | REAL | NOT NULL, DEFAULT 1.0 | 路由权重，值越大被选中概率越高。取值范围 `[0.0, 100.0]`，默认 1.0。设为 0 等效于禁用 |
 | `avg_latency_ms` | REAL | NOT NULL, DEFAULT 0.0 | 近期平均响应时间（毫秒），由系统自动计算更新。值越大被选中概率越小。初始为 0 表示无历史数据 |
@@ -162,8 +162,8 @@ CREATE TABLE channel_models (
     aliases TEXT DEFAULT '[]',
     call_type TEXT NOT NULL DEFAULT 'chat',
     capabilities TEXT DEFAULT '["chat"]',
-    input_cost TEXT DEFAULT '0',
-    output_cost TEXT DEFAULT '0',
+    input_price TEXT DEFAULT '0',
+    output_price TEXT DEFAULT '0',
     status TEXT NOT NULL DEFAULT 'active',
     weight REAL NOT NULL DEFAULT 1.0,
     avg_latency_ms REAL NOT NULL DEFAULT 0.0,
@@ -200,10 +200,10 @@ CREATE INDEX idx_channel_models_call_type ON channel_models(call_type);
 | `status` | TEXT | NOT NULL | 请求结果状态：`success` 或 `error` |
 | `error_message` | TEXT | DEFAULT '' | 当 status='error' 时的错误信息 |
 | `latency_ms` | INTEGER | NOT NULL, DEFAULT 0 | 请求耗时（毫秒），从发起 AI 请求到收到响应/第一个 chunk 的时间 |
-| `input_quantity` | INTEGER | DEFAULT 0 | 输入计量值。由 `input_cost` 命中的计费单位决定：命中 `/M` 记录输入 tokens，命中 `/sec` 记录输入音频秒数（转录场景），其余单位记 `0`。失败日志固定为 `0`。 |
-| `output_quantity` | INTEGER | DEFAULT 0 | 输出计量值。由 `output_cost` 命中的计费单位决定：`/req` 记 `1`、`/img` 记输出图片数、`/sec` 记输出音/视频总秒数、`/M` 记输出 tokens。失败日志固定为 `0`。 |
-| `input_price` | TEXT | DEFAULT '0' | 请求发生时模型输入单价快照，格式与 `channel_models.input_cost` 一致（如 `5/M`、`2/req`、`0`） |
-| `output_price` | TEXT | DEFAULT '0' | 请求发生时模型输出单价快照，格式与 `channel_models.output_cost` 一致（如 `10/M`、`0`） |
+| `input_quantity` | INTEGER | DEFAULT 0 | 输入计量值。由 `input_price` 命中的计费单位决定：命中 `/M` 记录输入 tokens，命中 `/sec` 记录输入音频秒数（转录场景），其余单位记 `0`。失败日志固定为 `0`。 |
+| `output_quantity` | INTEGER | DEFAULT 0 | 输出计量值。由 `output_price` 命中的计费单位决定：`/req` 记 `1`、`/img` 记输出图片数、`/sec` 记输出音/视频总秒数、`/M` 记输出 tokens。失败日志固定为 `0`。 |
+| `input_price` | TEXT | DEFAULT '0' | 请求发生时模型输入单价快照，格式与 `channel_models.input_price` 一致（如 `5/M`、`2/req`、`0`） |
+| `output_price` | TEXT | DEFAULT '0' | 请求发生时模型输出单价快照，格式与 `channel_models.output_price` 一致（如 `10/M`、`0`） |
 | `input_cost` | INTEGER | DEFAULT 0 | 本次请求真实输入成本（整数最小单位，缩放系数 `COST_SCALE_FACTOR=1_000_000_000`）。示例：真实成本 `0.5` 记录为 `500000000` |
 | `output_cost` | INTEGER | DEFAULT 0 | 本次请求真实输出成本（整数最小单位，缩放系数 `COST_SCALE_FACTOR=1_000_000_000`）。示例：真实成本 `0.0000084` 记录为 `8400` |
 | `total_cost` | INTEGER | DEFAULT 0 | 本次请求总花费，等于 `input_cost + output_cost`，同样使用最小成本单位整数 |
@@ -309,8 +309,8 @@ interface ChannelModelRow {
     aliases: string;          // JSON 字符串，运行时解析为 string[]
     call_type: CallType;
     capabilities: string;     // JSON 字符串，运行时解析为 ModelCapability[]
-    input_cost: string;
-    output_cost: string;
+    input_price: string;
+    output_price: string;
     status: ModelStatus;
     weight: number;
     avg_latency_ms: number;
@@ -542,8 +542,8 @@ const CreateChannelSchema = z.object({
         aliases: z.array(z.string()).default([]),          // 模型别名列表
         callType: z.enum(['chat', 'image_gen', 'audio_gen', 'video_gen', 'transcribe', 'embedding']).default('chat'),
         capabilities: z.array(z.string()).default(['chat']),
-        inputCost: z.string().default('0'),
-        outputCost: z.string().default('0'),
+        inputPrice: z.string().default('0'),
+        outputPrice: z.string().default('0'),
         weight: z.number().min(0).max(100).default(1.0),
         headers: z.record(z.string()).default({}),
     })).default([]),
@@ -560,8 +560,8 @@ const UpdateModelSchema = z.object({
     aliases: z.array(z.string()).optional(),
     callType: z.enum(['chat', 'image_gen', 'audio_gen', 'video_gen', 'transcribe', 'embedding']).optional(),
     capabilities: z.array(z.string()).optional(),
-    inputCost: z.string().optional(),
-    outputCost: z.string().optional(),
+    inputPrice: z.string().optional(),
+    outputPrice: z.string().optional(),
     status: z.enum(['active', 'open', 'disable']).optional(),
     weight: z.number().min(0).max(100).optional(),
     headers: z.record(z.string()).optional(),
@@ -1510,8 +1510,8 @@ data: [DONE]
             "aliases": ["gpt4o", "gpt-4-omni"],
             "callType": "chat",
             "capabilities": ["chat", "image_in"],
-            "inputCost": "0",
-            "outputCost": "2.5/M",
+            "inputPrice": "0",
+            "outputPrice": "2.5/M",
             "weight": 1.0,
             "headers": {}
         }

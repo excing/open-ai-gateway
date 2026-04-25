@@ -174,7 +174,7 @@ const CONSTANTS = {
   UUID_PREFIX: 'uuid-',
   SQL: {
     INSERT_CHANNEL: `INSERT INTO channels (id, name, key, provider, api_key, base_url, weight, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`,
-    INSERT_MODEL: `INSERT INTO channel_models (id, channel_id, code, name, desc, aliases, call_type, capabilities, input_cost, output_cost, status, weight, avg_latency_ms, success_rate, error_rate, consecutive_failures, cooldown_until, request_count, last_updated, headers) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)`,
+    INSERT_MODEL: `INSERT INTO channel_models (id, channel_id, code, name, desc, aliases, call_type, capabilities, input_price, output_price, status, weight, avg_latency_ms, success_rate, error_rate, consecutive_failures, cooldown_until, request_count, last_updated, headers) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)`,
     SELECT_CHANNEL_BY_ID: `SELECT * FROM channels WHERE id = ?1`,
     SELECT_CHANNEL_BY_KEY: `SELECT * FROM channels WHERE key = ?1`,
     SELECT_MODELS_BY_CHANNEL_ID: `SELECT * FROM channel_models WHERE channel_id = ?1`,
@@ -216,8 +216,8 @@ const CONSTANTS = {
         aliases TEXT DEFAULT '[]',
         call_type TEXT NOT NULL DEFAULT 'chat',
         capabilities TEXT DEFAULT '["chat"]',
-        input_cost TEXT DEFAULT '0',
-        output_cost TEXT DEFAULT '0',
+        input_price TEXT DEFAULT '0',
+        output_price TEXT DEFAULT '0',
         status TEXT NOT NULL DEFAULT 'active',
         weight REAL NOT NULL DEFAULT 1.0,
         avg_latency_ms REAL NOT NULL DEFAULT 0.0,
@@ -347,8 +347,8 @@ const SCHEMAS = (() => {
           aliases: z.array(z.string()).default([]),
           callType: CallTypeEnum.default(CALL_TYPES.CHAT),
           capabilities: z.array(z.string()).default([CALL_TYPES.CHAT]),
-          inputCost: z.string().default('0'),
-          outputCost: z.string().default('0'),
+          inputPrice: z.string().default('0'),
+          outputPrice: z.string().default('0'),
           weight: z.number().min(0).max(100).default(1.0),
           headers: z.record(z.string()).default({}),
         }),
@@ -366,8 +366,8 @@ const SCHEMAS = (() => {
       aliases: z.array(z.string()).optional(),
       callType: CallTypeEnum.optional(),
       capabilities: z.array(z.string()).optional(),
-      inputCost: z.string().optional(),
-      outputCost: z.string().optional(),
+      inputPrice: z.string().optional(),
+      outputPrice: z.string().optional(),
       status: z.enum([MODEL_STATUS.ACTIVE, MODEL_STATUS.OPEN, MODEL_STATUS.DISABLE]).optional(),
       weight: z.number().min(0).max(100).optional(),
       headers: z.record(z.string()).optional(),
@@ -753,14 +753,14 @@ function buildBillingContext(requestBody, responseBody, userCallType) {
 
 function buildSuccessLogEntry(requestBody, responseBody, selection, userCallType, latencyMs) {
   const preferredUnits = [COST_UNITS.REQUEST, COST_UNITS.IMAGE, COST_UNITS.SECOND, COST_UNITS.MILLION];
-  const inputRule = choosePricingRule(parsePricingConfig(selection.model.input_cost), preferredUnits);
-  const outputRule = choosePricingRule(parsePricingConfig(selection.model.output_cost), preferredUnits);
+  const inputRule = choosePricingRule(parsePricingConfig(selection.model.input_price), preferredUnits);
+  const outputRule = choosePricingRule(parsePricingConfig(selection.model.output_price), preferredUnits);
   const billingContext = buildBillingContext(requestBody, responseBody, userCallType);
   const billableQuantities = calculateBillableQuantities(inputRule.unit, outputRule.unit, billingContext);
   const inputBillableQuantity = billableQuantities.input;
   const outputBillableQuantity = billableQuantities.output;
-  const inputCost = Math.round(inputRule.price * inputBillableQuantity * COST_SCALE_FACTOR);
-  const outputCost = Math.round(outputRule.price * outputBillableQuantity * COST_SCALE_FACTOR);
+  const inputPrice = Math.round(inputRule.price * inputBillableQuantity * COST_SCALE_FACTOR);
+  const outputPrice = Math.round(outputRule.price * outputBillableQuantity * COST_SCALE_FACTOR);
 
   return {
     channel_id: selection.channel.id,
@@ -776,9 +776,9 @@ function buildSuccessLogEntry(requestBody, responseBody, selection, userCallType
     output_quantity: outputBillableQuantity,
     input_price: inputRule.raw,
     output_price: outputRule.raw,
-    input_cost: inputCost,
-    output_cost: outputCost,
-    total_cost: inputCost + outputCost,
+    input_cost: inputPrice,
+    output_cost: outputPrice,
+    total_cost: inputPrice + outputPrice,
   };
 }
 
@@ -1697,8 +1697,8 @@ function createApp(deps = {}) {
           JSON.stringify(model.aliases || []),
           model.callType,
           JSON.stringify(model.capabilities || []),
-          model.inputCost,
-          model.outputCost,
+          model.inputPrice,
+          model.outputPrice,
           MODEL_STATUS.ACTIVE,
           model.weight,
           0,
@@ -1778,8 +1778,8 @@ function createApp(deps = {}) {
             JSON.stringify(model.aliases || []),
             model.callType || CALL_TYPES.CHAT,
             JSON.stringify(model.capabilities || []),
-            model.inputCost ?? '0',
-            model.outputCost ?? '0',
+            model.inputPrice ?? '0',
+            model.outputPrice ?? '0',
             MODEL_STATUS.ACTIVE,
             model.weight ?? 1,
             0,
@@ -1876,8 +1876,8 @@ function createApp(deps = {}) {
     if (parsed.aliases) pushUpdate('aliases', JSON.stringify(parsed.aliases));
     if (parsed.callType) pushUpdate('call_type', parsed.callType);
     if (parsed.capabilities) pushUpdate('capabilities', JSON.stringify(parsed.capabilities));
-    if (parsed.inputCost !== undefined) pushUpdate('input_cost', parsed.inputCost);
-    if (parsed.outputCost !== undefined) pushUpdate('output_cost', parsed.outputCost);
+    if (parsed.inputPrice !== undefined) pushUpdate('input_price', parsed.inputPrice);
+    if (parsed.outputPrice !== undefined) pushUpdate('output_price', parsed.outputPrice);
     if (parsed.status) pushUpdate('status', parsed.status);
     if (parsed.weight !== undefined) pushUpdate('weight', parsed.weight);
     if (parsed.headers) pushUpdate('headers', JSON.stringify(parsed.headers));
