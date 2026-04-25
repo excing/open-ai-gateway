@@ -235,10 +235,10 @@ function createMockEnv() {
             }
 
             // SELECT status base (join)
-            if (normalizedSql.includes('select cm.*, c.name as channel_name from channel_models cm join channels c')) {
+            if (normalizedSql.includes('from channel_models cm join channels c on cm.channel_id = c.id')) {
               const results = Array.from(models.values()).map(m => {
                 const ch = channels.get(m.channel_id);
-                return { ...m, channel_name: ch?.name || 'unknown' };
+                return { ...m, channel_name: ch?.name || 'unknown', provider: ch?.provider || '' };
               });
               return { results };
             }
@@ -631,6 +631,73 @@ describe('API: GET /api/channel/:id/models - 获取指定渠道上游的模型�
     
     assert.ok(capturedUrl.includes('custom-api.example.com'));
     assert.ok(capturedUrl.includes('/v1/models'));
+  });
+});
+
+describe('API: GET /status - 返回状态列表', () => {
+  let app;
+  let mockEnv;
+
+  beforeEach(() => {
+    mockEnv = createMockEnv();
+    app = createApp({
+      now: () => new Date('2026-04-12T00:00:00Z'),
+      uuid: () => 'test-uuid-status',
+    });
+  });
+
+  afterEach(() => {
+    mockEnv._clear();
+  });
+
+  it('应返回 provider 和 call_type 字段', async () => {
+    const channelId = 'status-ch-1';
+    mockEnv._addChannel({
+      id: channelId,
+      name: 'Status Channel',
+      key: 'status-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-status',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-12T00:00:00Z',
+      updated_at: '2026-04-12T00:00:00Z',
+    });
+    mockEnv._addModel({
+      id: 'status-model-1',
+      channel_id: channelId,
+      code: 'gpt-4o-mini',
+      name: 'GPT-4o Mini',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: '["chat"]',
+      input_cost: '0',
+      output_cost: '0',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 52.1,
+      success_rate: 0.999,
+      error_rate: 0.001,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-12T00:00:00Z',
+      headers: '{}',
+    });
+
+    const request = createMockRequest({
+      method: 'GET',
+      pathname: ROUTES.STATUS,
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.ok(Array.isArray(data.models));
+    assert.strictEqual(data.models.length, 1);
+    assert.strictEqual(data.models[0].provider, PROVIDERS.OPENAI);
+    assert.strictEqual(data.models[0].call_type, CALL_TYPES.CHAT);
   });
 });
 
