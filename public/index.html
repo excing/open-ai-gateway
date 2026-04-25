@@ -656,25 +656,30 @@
         <div class="mt-6 grid gap-6">
           <main class="min-w-0 space-y-6">
             <section v-if="state.view === constants.VIEWS.STATUS" class="panel hero-mesh overflow-hidden">
-              <div class="grid gap-6 px-5 py-5 sm:px-6 lg:grid-cols-[1.3fr_0.7fr] lg:px-8 lg:py-6">
+              <div class="grid gap-6 px-5 py-5 sm:px-6 lg:grid-cols-[0.90fr_1.0fr] lg:px-8 lg:py-6">
                 <div class="fade-up">
                   <h1 class="text-[clamp(1.7rem,3.2vw,3rem)] font-semibold leading-[0.98] tracking-[-0.04em] text-[var(--text)]">
                     Open AI Gateway
-                    <span class="block text-[var(--accent-strong)]">状态概览</span>
+                    <span class="mt-3 block text-[var(--accent-strong)]">状态概览</span>
                   </h1>
                 </div>
-                <div class="fade-up-delay grid gap-3 grid-cols-3">
+                <div class="fade-up-delay grid gap-3 grid-cols-2 sm:grid-cols-3">
                   <div class="stat-block">
                     <p class="text-xs uppercase tracking-[0.24em] text-[var(--text-soft)]">Channels</p>
                     <p class="mt-2 text-2xl font-semibold">{{ state.channels.length }}</p>
+                    <span>{{ state.statusModels.length }} models</span>
                   </div>
                   <div class="stat-block">
-                    <p class="text-xs uppercase tracking-[0.24em] text-[var(--text-soft)]">Models</p>
-                    <p class="mt-2 text-2xl font-semibold">{{ state.statusModels.length }}</p>
+                    <p class="text-xs uppercase tracking-[0.24em] text-[var(--text-soft)]">Usage</p>
+                      <p class="mt-2 text-2xl font-semibold">{{ actions.formatQuantityDisplay(state.statusOverview.totalUsage) }}</p>
+                      <span>{{ actions.formatQuantityDisplay(state.statusOverview.totalInputUsage) }}</span>
+                      /
+                      <span>{{ actions.formatQuantityDisplay(state.statusOverview.totalOutputUsage) }}</span>
                   </div>
                   <div class="stat-block">
-                    <p class="text-xs uppercase tracking-[0.24em] text-[var(--text-soft)]">Logs</p>
-                    <p class="mt-2 text-2xl font-semibold">{{ state.logs.length }}</p>
+                    <p class="text-xs uppercase tracking-[0.24em] text-[var(--text-soft)]">Cost</p>
+                    <p class="mt-2 text-2xl font-semibold">${{ actions.formatCostDisplay(state.statusOverview.totalCost) }}</p>
+                    <span>{{ actions.formatQuantityDisplay(state.statusOverview.totalRequestCount) }} reqs</span>
                   </div>
                 </div>
               </div>
@@ -715,7 +720,7 @@
                           <p class="status-sub-value">{{ actions.formatQuantityDisplay(model.request_count) }}</p>
                         </div>
                         <div class="status-sub-item">
-                          <p class="status-sub-label">延迟</p>
+                          <p class="status-sub-label">响应时间</p>
                           <p class="status-sub-value" :class="actions.getLatencyLevelClass(model.avg_latency_ms)">{{ actions.formatFixedDecimal(model.avg_latency_ms, 0) }}ms</p>
                         </div>
                         <div class="status-sub-item">
@@ -1467,6 +1472,13 @@
             view: constants.VIEWS.STATUS,
             channels: [],
             statusModels: [],
+            statusOverview: {
+              totalRequestCount: 0,
+              totalCost: 0,
+              totalInputUsage: 0,
+              totalOutputUsage: 0,
+              totalUsage: 0,
+            },
             logs: [],
             expandedLogId: '',
             modelGroups: [],
@@ -1609,7 +1621,7 @@
             formatQuantityDisplay: (rawValue) => {
               const numericValue = Number(rawValue ?? 0);
               if (!Number.isFinite(numericValue) || numericValue <= 0) return '0';
-              return String(Math.round(numericValue));
+              return new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 }).format(Math.round(numericValue));
             },
             formatPriceDisplay: (rawValue) => {
               const normalized = String(rawValue ?? '').trim();
@@ -2094,6 +2106,29 @@
             loadStatus: async () => {
               const res = await apiRequest(constants.API.STATUS, { auth: false });
               state.statusModels = res.data?.models || [];
+              state.statusOverview = state.statusModels.reduce(
+                (acc, model) => {
+                  const requestCount = Number(model?.request_count ?? 0);
+                  const totalCost = Number(model?.total_cost ?? 0);
+                  const inputUsage = Number(model?.input_usage ?? 0);
+                  const outputUsage = Number(model?.outpu_usage ?? 0);
+                  if (Number.isFinite(requestCount) && requestCount > 0) {
+                    acc.totalRequestCount += Math.round(requestCount);
+                  }
+                  if (Number.isFinite(totalCost) && totalCost > 0) {
+                    acc.totalCost += Math.round(totalCost);
+                  }
+                  if (Number.isFinite(inputUsage) && inputUsage > 0) {
+                    acc.totalInputUsage += Math.round(inputUsage);
+                  }
+                  if (Number.isFinite(outputUsage) && outputUsage > 0) {
+                    acc.totalOutputUsage += Math.round(outputUsage);
+                  }
+                  acc.totalUsage = acc.totalInputUsage + acc.totalOutputUsage;
+                  return acc;
+                },
+                { totalRequestCount: 0, totalCost: 0, totalInputUsage: 0, totalOutputUsage: 0, totalUsage: 0 },
+              );
             },
             loadChannels: async () => {
               const res = await apiRequest(`${constants.API.CHANNELS}?page=${constants.DEFAULT_PAGE}&limit=${constants.DEFAULT_LIMIT}`);
