@@ -74,13 +74,16 @@ function createMockEnv() {
                 consecutiveFailures = 0,
                 cooldownUntil = null,
                 requestCount = 0,
+                inputUsage = 0,
+                outpuUsage = 0,
+                totalCost = 0,
                 lastUpdated = new Date().toISOString(),
                 headers = '{}',
               ] = bindings;
               models.set(id, { 
                 id, channel_id: channelId, code, name, desc, aliases, call_type: callType, 
                 capabilities, input_price: inputPrice, output_price: outputPrice, status, weight, avg_latency_ms: avgLatencyMs, success_rate: successRate, error_rate: errorRate,
-                consecutive_failures: consecutiveFailures, cooldown_until: cooldownUntil, request_count: requestCount, last_updated: lastUpdated, headers
+                consecutive_failures: consecutiveFailures, cooldown_until: cooldownUntil, request_count: requestCount, input_usage: inputUsage, outpu_usage: outpuUsage, total_cost: totalCost, last_updated: lastUpdated, headers
               });
               return { success: true };
             }
@@ -703,6 +706,9 @@ describe('API: GET /status - 返回状态列表', () => {
       consecutive_failures: 0,
       cooldown_until: null,
       request_count: 42,
+      input_usage: 123,
+      outpu_usage: 456,
+      total_cost: 7890,
       last_updated: '2026-04-12T00:00:00Z',
       headers: '{}',
     });
@@ -721,6 +727,9 @@ describe('API: GET /status - 返回状态列表', () => {
     assert.strictEqual(data.models[0].provider, PROVIDERS.OPENAI);
     assert.strictEqual(data.models[0].call_type, CALL_TYPES.CHAT);
     assert.strictEqual(data.models[0].request_count, 42);
+    assert.strictEqual(data.models[0].input_usage, 123);
+    assert.strictEqual(data.models[0].outpu_usage, 456);
+    assert.strictEqual(data.models[0].total_cost, 7890);
   });
 });
 
@@ -2760,6 +2769,9 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
       consecutive_failures: 0,
       cooldown_until: null,
       last_updated: '2026-04-15T00:00:00.000Z',
+      input_usage: 0,
+      outpu_usage: 0,
+      total_cost: 0,
       headers: '{}',
     });
     mockEnv._addModel({
@@ -2893,6 +2905,9 @@ describe('数据库字段升级: channels.weight + 双向成本字段', () => {
     assert.strictEqual(latestLog.output_cost, 3000000000);
     assert.strictEqual(latestLog.total_cost, 4000000000);
     assert.strictEqual(mockEnv._models.get('model-unified-success').request_count, 1);
+    assert.strictEqual(mockEnv._models.get('model-unified-success').input_usage, 500000);
+    assert.strictEqual(mockEnv._models.get('model-unified-success').outpu_usage, 1000000);
+    assert.strictEqual(mockEnv._models.get('model-unified-success').total_cost, 4000000000);
   });
 
   it('统一日志函数: error 在缺省 usage 时应写入 0 用量与 0 成本', async () => {

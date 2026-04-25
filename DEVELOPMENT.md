@@ -149,6 +149,9 @@ CREATE TABLE channels (
 | `consecutive_failures` | INTEGER | NOT NULL, DEFAULT 0 | 最近连续失败次数。任何一次成功请求会将此值重置为 0。当 `>= 2` 时触发熔断器，进入冷却期 |
 | `cooldown_until` | TEXT | DEFAULT NULL | 冷却期结束时间，ISO 8601 格式。当 `status === 'open'` 时此值必不为空。仅当 `consecutive_failures >= 2` 时设置。为 NULL 或早于当前时间表示不在冷却期。可直接在 SQL 中用 `cooldown_until IS NULL OR cooldown_until < datetime('now')` 过滤 |
 | `request_count` | INTEGER | NOT NULL, DEFAULT 0 | 模型累计请求次数（包含成功与失败），每次路由到该模型发起请求后都会 +1，用于观测模型负载与使用热度 |
+| `input_usage` | INTEGER | NOT NULL, DEFAULT 0 | 模型累计输入消耗，按 `buildSuccessLogEntry.input_quantity` 累加（仅成功请求累加，失败请求不累加） |
+| `outpu_usage` | INTEGER | NOT NULL, DEFAULT 0 | 模型累计输出消耗，按 `buildSuccessLogEntry.output_quantity` 累加（字段名按当前实现固定为 `outpu_usage`） |
+| `total_cost` | INTEGER | NOT NULL, DEFAULT 0 | 模型累计总成本，按 `buildSuccessLogEntry.total_cost` 累加（最小成本单位整数，缩放系数 `COST_SCALE_FACTOR`） |
 | `last_updated` | TEXT | NOT NULL, DEFAULT CURRENT_TIMESTAMP | 模型统计数据最后更新时间 |
 | `headers` | TEXT | DEFAULT '{}' | JSON 对象字符串，请求该模型时附加的额外 HTTP 头，如 `{"x-custom":"value"}` |
 
@@ -172,6 +175,9 @@ CREATE TABLE channel_models (
     consecutive_failures INTEGER NOT NULL DEFAULT 0,
     cooldown_until TEXT DEFAULT NULL,
     request_count INTEGER NOT NULL DEFAULT 0,
+    input_usage INTEGER NOT NULL DEFAULT 0,
+    outpu_usage INTEGER NOT NULL DEFAULT 0,
+    total_cost INTEGER NOT NULL DEFAULT 0,
     last_updated TEXT NOT NULL DEFAULT (datetime('now')),
     headers TEXT DEFAULT '{}',
     FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE

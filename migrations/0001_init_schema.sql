@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS channel_models (
   consecutive_failures INTEGER NOT NULL DEFAULT 0,
   cooldown_until TEXT DEFAULT NULL,
   request_count INTEGER NOT NULL DEFAULT 0,
+  input_usage INTEGER NOT NULL DEFAULT 0,
+  outpu_usage INTEGER NOT NULL DEFAULT 0,
+  total_cost INTEGER NOT NULL DEFAULT 0,
   last_updated TEXT NOT NULL DEFAULT (datetime('now')),
   headers TEXT DEFAULT '{}',
   FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE

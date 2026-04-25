@@ -295,6 +295,84 @@
         padding: 0.75rem 0.85rem;
       }
 
+      .status-cluster-grid {
+        display: grid;
+        gap: 0.75rem;
+      }
+
+      @media (min-width: 640px) {
+        .status-cluster-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+
+      .status-cluster {
+        border-radius: 18px;
+        border: 1px solid rgba(185, 150, 117, 0.2);
+        background: rgba(255, 255, 255, 0.78);
+        padding: 0.85rem;
+      }
+
+      .status-primary {
+        border-radius: 14px;
+        background: rgba(255, 248, 238, 0.86);
+        padding: 0.7rem 0.75rem;
+      }
+
+      .status-primary-label {
+        font-size: 0.72rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-soft);
+      }
+
+      .status-primary-value {
+        margin-top: 0.35rem;
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: var(--text);
+        line-height: 1.1;
+      }
+
+      .status-sub-grid {
+        margin-top: 0.6rem;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.5rem;
+      }
+
+      .status-sub-item {
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.86);
+        padding: 0.55rem 0.6rem;
+      }
+
+      .status-sub-label {
+        font-size: 0.68rem;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--text-soft);
+      }
+
+      .status-sub-value {
+        margin-top: 0.25rem;
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--text);
+      }
+
+      .status-grade-good {
+        color: var(--success);
+      }
+
+      .status-grade-warn {
+        color: var(--accent-strong);
+      }
+
+      .status-grade-bad {
+        color: var(--danger);
+      }
+
       .model-table th,
       .model-table td {
         white-space: nowrap;
@@ -625,23 +703,48 @@
                       {{ model.status }}
                     </span>
                   </div>
-                  <div class="mt-4 metric-inline metric-inline-4">
-                    <div>
-                      <p class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">成功率</p>
-                      <p class="mt-2 text-lg font-semibold text-[var(--text)]">{{ actions.formatFixedDecimal((Number(model.success_rate || 0)) * 100) }}%</p>
-                    </div>
-                    <div>
-                      <p class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">延迟</p>
-                      <p class="mt-2 text-lg font-semibold text-[var(--text)]">{{ actions.formatFixedDecimal(model.avg_latency_ms) }} ms</p>
-                    </div>
-                    <div>
-                      <p class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">连续失败</p>
-                      <p class="mt-2 text-lg font-semibold text-[var(--text)]">{{ model.consecutive_failures }}</p>
-                    </div>
-                    <div>
-                      <p class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">请求次数</p>
-                      <p class="mt-2 text-lg font-semibold text-[var(--text)]">{{ actions.formatQuantityDisplay(model.request_count) }}</p>
-                    </div>
+                  <div class="mt-4 status-cluster-grid">
+                    <section class="status-cluster">
+                      <div class="status-primary">
+                        <p class="status-primary-label">成功率</p>
+                        <p class="status-primary-value" :class="actions.getSuccessRateLevelClass(model.success_rate)">{{ actions.formatFixedDecimal((Number(model.success_rate || 0)) * 100) }}%</p>
+                      </div>
+                      <div class="status-sub-grid">
+                        <div class="status-sub-item">
+                          <p class="status-sub-label">请求次数</p>
+                          <p class="status-sub-value">{{ actions.formatQuantityDisplay(model.request_count) }}</p>
+                        </div>
+                        <div class="status-sub-item">
+                          <p class="status-sub-label">延迟</p>
+                          <p class="status-sub-value" :class="actions.getLatencyLevelClass(model.avg_latency_ms)">{{ actions.formatFixedDecimal(model.avg_latency_ms, 0) }}ms</p>
+                        </div>
+                        <div class="status-sub-item">
+                          <p class="status-sub-label">连续失败</p>
+                          <p class="status-sub-value">{{ actions.formatQuantityDisplay(model.consecutive_failures) }}</p>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section class="status-cluster">
+                      <div class="status-primary">
+                        <p class="status-primary-label">累计成本</p>
+                        <p class="status-primary-value">${{ actions.formatCostDisplay(model.total_cost) }}</p>
+                      </div>
+                      <div class="status-sub-grid">
+                        <div class="status-sub-item">
+                          <p class="status-sub-label">输入消耗</p>
+                          <p class="status-sub-value">{{ actions.formatQuantityDisplay(model.input_usage) }}</p>
+                        </div>
+                        <div class="status-sub-item">
+                          <p class="status-sub-label">输出消耗</p>
+                          <p class="status-sub-value">{{ actions.formatQuantityDisplay(model.outpu_usage) }}</p>
+                        </div>
+                        <div class="status-sub-item">
+                          <p class="status-sub-label">请求次数</p>
+                          <p class="status-sub-value">{{ actions.formatQuantityDisplay(model.request_count) }}</p>
+                        </div>
+                      </div>
+                    </section>
                   </div>
                 </article>
               </div>
@@ -1535,7 +1638,22 @@
             formatFixedDecimal: (rawValue, digits = 2) => {
               const value = Number(rawValue ?? 0);
               if (!Number.isFinite(value)) return '-';
+              if (0 == rawValue) return 0;
               return value.toFixed(digits).replace(/\.?0+$/, '');
+            },
+            getSuccessRateLevelClass: (rawValue) => {
+              const ratePercent = Number(rawValue ?? 0) * 100;
+              if (!Number.isFinite(ratePercent)) return 'status-grade-bad';
+              if (ratePercent >= 99) return 'status-grade-good';
+              if (ratePercent >= 95) return 'status-grade-warn';
+              return 'status-grade-bad';
+            },
+            getLatencyLevelClass: (rawValue) => {
+              const latencyMs = Number(rawValue ?? 0);
+              if (!Number.isFinite(latencyMs) || latencyMs < 0) return 'status-grade-bad';
+              if (latencyMs <= 800) return 'status-grade-good';
+              if (latencyMs <= 2500) return 'status-grade-warn';
+              return 'status-grade-bad';
             },
             getCallTypeLabel: (callType) => constants.CALL_TYPE_LABELS[String(callType || '').trim()] || '未知类型',
             getStatusLabel: (status) => constants.STATUS_LABELS[String(status || '').trim()] || String(status || '未知'),
