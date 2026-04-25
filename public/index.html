@@ -671,6 +671,32 @@
                 <button @click="actions.clearAliasFilter" class="btn btn-inline btn-ghost ml-3 text-xs">清除</button>
               </div>
 
+              <div class="mt-4 grid gap-3 lg:grid-cols-6">
+                <input v-model="state.modelListControls.keyword" type="text" class="field lg:col-span-2" placeholder="搜索 code / 模型名 / 渠道 / 别名" />
+                <select v-model="state.modelListControls.provider" class="field-select">
+                  <option value="">全部 Provider</option>
+                  <option v-for="provider in actions.getModelListFilterOptions().providers" :key="provider" :value="provider">{{ actions.getProviderLabel(provider) }}</option>
+                </select>
+                <select v-model="state.modelListControls.status" class="field-select">
+                  <option value="">全部状态</option>
+                  <option v-for="status in constants.MODEL_STATUS" :key="status" :value="status">{{ actions.getModelStatusLabel(status) }}</option>
+                </select>
+                <select v-model="state.modelListControls.callType" class="field-select">
+                  <option value="">全部CallType</option>
+                  <option v-for="callType in actions.getModelListFilterOptions().callTypes" :key="callType" :value="callType">{{ actions.getCallTypeLabel(callType) }}</option>
+                </select>
+                <button @click="actions.resetModelListControls" class="btn btn-inline btn-secondary">重置筛选</button>
+              </div>
+
+              <div class="mt-3 grid gap-3 lg:grid-cols-2">
+                <select v-model="state.modelListControls.groupSortBy" class="field-select">
+                  <option v-for="option in constants.MODEL_GROUP_SORT_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+                </select>
+                <select v-model="state.modelListControls.rowSortBy" class="field-select">
+                  <option v-for="option in constants.MODEL_ROW_SORT_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
+                </select>
+              </div>
+
               <div class="mt-6 space-y-3">
                 <article v-for="group in actions.getVisibleModelGroups()" :key="group.code" class="list-card">
                   <div class="flex cursor-pointer items-center justify-between gap-3" @click="actions.toggleModelGroup(group.code)">
@@ -689,7 +715,7 @@
                           </svg>
                         </button>
                       </div>
-                      <p class="mt-1 text-sm text-[var(--text-soft)]">关联渠道：{{ group.count }}，平均成功率：{{ (group.avgSuccessRate * 100).toFixed(2) }}%，平均耗时：{{ Math.round(group.avgLatency) }}ms</p>
+                      <p class="mt-1 text-sm text-[var(--text-soft)]">关联渠道：{{ group.visibleCount }}/{{ group.count }}，平均成功率：{{ (group.avgSuccessRate * 100).toFixed(2) }}%，平均耗时：{{ Math.round(group.avgLatency) }}ms</p>
                     </div>
                     <div class="flex">
                       <button
@@ -698,7 +724,6 @@
                       >
                         编辑
                       </button>
-                      <span class="pill text-xs text-[var(--text-soft)]">{{ actions.isModelGroupExpanded(group.code) ? '已展开' : '已收起' }}</span>
                     </div>
                   </div>
                   <div v-if="actions.isModelGroupExpanded(group.code)" class="mt-4 log-table-wrap">
@@ -722,7 +747,7 @@
                           </tr>
                         </thead>
                         <tbody>
-                          <tr v-for="model in group.channels" :key="model.id">
+                          <tr v-for="model in group.visibleChannels" :key="model.id">
                             <td class="text-sm text-[var(--text)]">{{ model.name || '-' }}</td>
                             <td><span class="pill text-xs text-[var(--text-soft)]">{{ actions.getCallTypeLabel(model.call_type) }}</span></td>
                             <td>
@@ -1125,6 +1150,21 @@
           open: '熔断中',
           disable: '已禁用',
         },
+        MODEL_GROUP_SORT_OPTIONS: [
+          { value: 'code_asc', label: '模型Code A-Z' },
+          { value: 'code_desc', label: '模型Code Z-A' },
+          { value: 'channel_count_desc', label: '渠道数从多到少' },
+          { value: 'success_rate_desc', label: '成功率从高到低' },
+          { value: 'latency_asc', label: '平均耗时从低到高' },
+        ],
+        MODEL_ROW_SORT_OPTIONS: [
+          { value: 'channel_name_asc', label: '渠道名 A-Z' },
+          { value: 'provider_asc', label: 'Provider A-Z' },
+          { value: 'status_asc', label: '状态' },
+          { value: 'weight_desc', label: '模型权重从高到低' },
+          { value: 'success_rate_desc', label: '成功率从高到低' },
+          { value: 'latency_asc', label: '平均耗时从低到高' },
+        ],
         PROVIDER_LABELS: {
           'openai-compatible': 'OpenAI兼容',
           openai: 'OpenAI',
@@ -1216,6 +1256,14 @@
             modelGroups: [],
             modelGroupExpanded: {},
             aliasFilter: '',
+            modelListControls: {
+              keyword: '',
+              provider: '',
+              status: '',
+              callType: '',
+              groupSortBy: 'code_asc',
+              rowSortBy: 'channel_name_asc',
+            },
             notice: '',
             channelDrawerOpen: false,
             modelDrawerOpen: false,
@@ -1445,11 +1493,100 @@
             clearAliasFilter: () => {
               state.aliasFilter = '';
             },
+            resetModelListControls: () => {
+              state.modelListControls = {
+                keyword: '',
+                provider: '',
+                status: '',
+                callType: '',
+                groupSortBy: 'code_asc',
+                rowSortBy: 'channel_name_asc',
+              };
+              state.aliasFilter = '';
+            },
+            getModelListFilterOptions: () => {
+              const providers = new Set();
+              const callTypes = new Set();
+              for (const group of state.modelGroups) {
+                for (const item of group.channels || []) {
+                  if (item.provider) providers.add(item.provider);
+                  if (item.call_type) callTypes.add(item.call_type);
+                }
+              }
+              return {
+                providers: Array.from(providers).sort((a, b) => String(a).localeCompare(String(b))),
+                callTypes: Array.from(callTypes).sort((a, b) => String(a).localeCompare(String(b))),
+              };
+            },
+            sortModelRows: (rows) => {
+              const list = [...rows];
+              const rule = state.modelListControls.rowSortBy;
+              const getNumber = (value) => {
+                const numericValue = Number(value ?? 0);
+                return Number.isFinite(numericValue) ? numericValue : 0;
+              };
+              if (rule === 'provider_asc') return list.sort((a, b) => String(a.provider || '').localeCompare(String(b.provider || '')));
+              if (rule === 'status_asc') return list.sort((a, b) => String(a.status || '').localeCompare(String(b.status || '')));
+              if (rule === 'weight_desc') return list.sort((a, b) => getNumber(b.weight) - getNumber(a.weight));
+              if (rule === 'success_rate_desc') return list.sort((a, b) => getNumber(b.success_rate) - getNumber(a.success_rate));
+              if (rule === 'latency_asc') return list.sort((a, b) => getNumber(a.avg_latency_ms) - getNumber(b.avg_latency_ms));
+              return list.sort((a, b) => String(a.channel_name || '').localeCompare(String(b.channel_name || '')));
+            },
             getVisibleModelGroups: () => {
-              if (!state.aliasFilter) return state.modelGroups;
-              return state.modelGroups.filter((group) =>
-                group.channels.some((item) => parseStoredJsonArray(item.aliases).includes(state.aliasFilter))
-              );
+              const keyword = String(state.modelListControls.keyword || '').trim().toLowerCase();
+              const provider = state.modelListControls.provider;
+              const status = state.modelListControls.status;
+              const callType = state.modelListControls.callType;
+              const groupSortBy = state.modelListControls.groupSortBy;
+
+              const filteredGroups = state.modelGroups
+                .map((group) => {
+                  const visibleChannels = (group.channels || []).filter((item) => {
+                    const aliases = parseStoredJsonArray(item.aliases);
+                    if (state.aliasFilter && !aliases.includes(state.aliasFilter)) return false;
+                    if (provider && item.provider !== provider) return false;
+                    if (status && item.status !== status) return false;
+                    if (callType && item.call_type !== callType) return false;
+                    if (!keyword) return true;
+                    const searchableText = [
+                      group.code,
+                      item.name,
+                      item.channel_name,
+                      item.provider,
+                      item.call_type,
+                      ...aliases,
+                    ].join(' ').toLowerCase();
+                    return searchableText.includes(keyword);
+                  });
+
+                  if (visibleChannels.length === 0) return null;
+                  const successRates = visibleChannels.map((item) => Number(item.success_rate ?? 0)).filter((value) => Number.isFinite(value));
+                  const latencies = visibleChannels.map((item) => Number(item.avg_latency_ms ?? 0)).filter((value) => Number.isFinite(value));
+                  const avgSuccessRate = successRates.length ? successRates.reduce((a, b) => a + b, 0) / successRates.length : 0;
+                  const avgLatency = latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : 0;
+                  return {
+                    ...group,
+                    visibleChannels: actions.sortModelRows(visibleChannels),
+                    visibleCount: visibleChannels.length,
+                    avgSuccessRate,
+                    avgLatency,
+                  };
+                })
+                .filter(Boolean);
+
+              if (groupSortBy === 'code_desc') {
+                filteredGroups.sort((a, b) => String(b.code).localeCompare(String(a.code)));
+              } else if (groupSortBy === 'channel_count_desc') {
+                filteredGroups.sort((a, b) => b.visibleCount - a.visibleCount);
+              } else if (groupSortBy === 'success_rate_desc') {
+                filteredGroups.sort((a, b) => b.avgSuccessRate - a.avgSuccessRate);
+              } else if (groupSortBy === 'latency_asc') {
+                filteredGroups.sort((a, b) => a.avgLatency - b.avgLatency);
+              } else {
+                filteredGroups.sort((a, b) => String(a.code).localeCompare(String(b.code)));
+              }
+
+              return filteredGroups;
             },
             getModelSyncApiPath: (modelId, syncScope, scopeChannelId) => {
               const params = new URLSearchParams();
