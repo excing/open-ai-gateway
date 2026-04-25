@@ -183,7 +183,9 @@ const CONSTANTS = {
     COUNT_CHANNELS: `SELECT COUNT(*) as total FROM channels`,
     SELECT_CHANNELS_PAGED: `SELECT * FROM channels ORDER BY created_at DESC LIMIT ?1 OFFSET ?2`,
     SELECT_MODEL_BY_ID: `SELECT * FROM channel_models WHERE id = ?1`,
+    SELECT_MODELS_BY_CODE_BASE: `SELECT * FROM channel_models WHERE code = ?1`,
     DELETE_MODEL: `DELETE FROM channel_models WHERE id = ?1`,
+    DELETE_MODELS_BY_CODE_BASE: `DELETE FROM channel_models WHERE code = ?1`,
     INSERT_LOG: `INSERT INTO request_logs (id, channel_id, channel_name, model_id, model_code, call_type, request_model, status, error_message, latency_ms, input_quantity, output_quantity, input_price, output_price, input_cost, output_cost, total_cost, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)`,
     SELECT_LOGS_BASE: `SELECT * FROM request_logs`,
     COUNT_LOGS_BASE: `SELECT COUNT(*) as total FROM request_logs`,
@@ -295,6 +297,11 @@ const CALL_TYPE_TO_PATH = {
 const PATH_TO_CALL_TYPE = Object.fromEntries(
   Object.entries(CALL_TYPE_TO_PATH).map(([callType, path]) => [path, callType]),
 );
+
+const MODEL_SYNC_SCOPES = {
+  SINGLE: 'single',
+  BY_CODE: 'by_code',
+};
 
 CONSTANTS.CALL_TYPE_TO_PATH = CALL_TYPE_TO_PATH;
 CONSTANTS.PATH_TO_CALL_TYPE = PATH_TO_CALL_TYPE;
@@ -462,6 +469,27 @@ function handleCorsPreflightRequest() {
 function parsePagination(url) {
   const params = Object.fromEntries(url.searchParams.entries());
   return PaginationSchema.parse(params);
+}
+
+function parseModelBatchOptions(request) {
+  const url = new URL(request.url);
+  const rawSyncScope = url.searchParams.get('sync_scope') || MODEL_SYNC_SCOPES.SINGLE;
+  const channelId = url.searchParams.get('channel_id') || '';
+  if (!Object.values(MODEL_SYNC_SCOPES).includes(rawSyncScope)) {
+    throw new Error(`sync_scope must be one of: ${Object.values(MODEL_SYNC_SCOPES).join(', ')}`);
+  }
+  if (rawSyncScope === MODEL_SYNC_SCOPES.SINGLE && channelId) {
+    throw new Error('channel_id is only allowed when sync_scope=by_code');
+  }
+  return { syncScope: rawSyncScope, channelId };
+}
+
+function buildCodeScopedCondition(channelId, startIndex = 2) {
+  if (!channelId) return { suffix: '', params: [] };
+  return {
+    suffix: ` AND channel_id = ?${startIndex}`,
+    params: [channelId],
+  };
 }
 
 async function parseRequestBody(request) {
@@ -1787,6 +1815,13 @@ function createApp(deps = {}) {
     const model = await env.DB.prepare(SQL.SELECT_MODEL_BY_ID).bind(modelId).first();
     if (!model) return errorResponse(ERROR_MESSAGES.MODEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
 
+    let batchOptions;
+    try {
+      batchOptions = parseModelBatchOptions(request);
+    } catch (error) {
+      return invalidRequestBodyResponse(error instanceof Error ? error.message : String(error));
+    }
+
     const parsedRequestBody = await parseRequestBody(request);
     if (!parsedRequestBody.success) {
       return invalidRequestBodyResponse(parsedRequestBody.error);
@@ -1821,17 +1856,54 @@ function createApp(deps = {}) {
     if (parsed.headers) pushUpdate('headers', JSON.stringify(parsed.headers));
     pushUpdate('last_updated', nowIso(nowFn));
 
+    if (batchOptions.syncScope === MODEL_SYNC_SCOPES.BY_CODE) {
+      const scopedCondition = buildCodeScopedCondition(batchOptions.channelId, updates.length + 2);
+      const scopedSql = `${SQL.UPDATE_MODEL_BASE}${updates.join(', ')} WHERE code = ?${updates.length + 1}${scopedCondition.suffix}`;
+      await env.DB.prepare(scopedSql).bind(...values, model.code, ...scopedCondition.params).run();
+      const selectedRowsSql = `${SQL.SELECT_MODELS_BY_CODE_BASE}${scopedCondition.suffix}`;
+      const { results: scopedRows } = await env.DB.prepare(selectedRowsSql).bind(model.code, ...scopedCondition.params).all();
+      const preferredRow = scopedRows.find((row) => row.id === modelId) || scopedRows[0];
+      return jsonResponse({
+        success: true,
+        data: preferredRow || null,
+        affected: { scope: batchOptions.syncScope, channel_id: batchOptions.channelId, count: scopedRows.length },
+      }, HTTP_STATUS.OK);
+    }
+
     const sql = `${SQL.UPDATE_MODEL_BASE}${updates.join(', ')} WHERE id = ?${updates.length + 1}`;
     await env.DB.prepare(sql).bind(...values, modelId).run();
-
-    return handleGetModel(modelId, env);
+    const updatedModel = await env.DB.prepare(SQL.SELECT_MODEL_BY_ID).bind(modelId).first();
+    return jsonResponse({
+      success: true,
+      data: updatedModel,
+      affected: { scope: batchOptions.syncScope, channel_id: '', count: updatedModel ? 1 : 0 },
+    }, HTTP_STATUS.OK);
   }
 
-  async function handleDeleteModel(modelId, env) {
+  async function handleDeleteModel(modelId, request, env) {
     const model = await env.DB.prepare(SQL.SELECT_MODEL_BY_ID).bind(modelId).first();
     if (!model) return errorResponse(ERROR_MESSAGES.MODEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    let batchOptions;
+    try {
+      batchOptions = parseModelBatchOptions(request);
+    } catch (error) {
+      return invalidRequestBodyResponse(error instanceof Error ? error.message : String(error));
+    }
+
+    if (batchOptions.syncScope === MODEL_SYNC_SCOPES.BY_CODE) {
+      const scopedCondition = buildCodeScopedCondition(batchOptions.channelId);
+      const selectedRowsSql = `${SQL.SELECT_MODELS_BY_CODE_BASE}${scopedCondition.suffix}`;
+      const { results: scopedRows } = await env.DB.prepare(selectedRowsSql).bind(model.code, ...scopedCondition.params).all();
+      const deleteSql = `${SQL.DELETE_MODELS_BY_CODE_BASE}${scopedCondition.suffix}`;
+      await env.DB.prepare(deleteSql).bind(model.code, ...scopedCondition.params).run();
+      return jsonResponse({
+        success: true,
+        affected: { scope: batchOptions.syncScope, channel_id: batchOptions.channelId, count: scopedRows.length },
+      }, HTTP_STATUS.OK);
+    }
+
     await env.DB.prepare(SQL.DELETE_MODEL).bind(modelId).run();
-    return jsonResponse({ success: true }, HTTP_STATUS.OK);
+    return jsonResponse({ success: true, affected: { scope: batchOptions.syncScope, channel_id: '', count: 1 } }, HTTP_STATUS.OK);
   }
 
   async function handleGetLogs(request, env) {
@@ -2289,7 +2361,7 @@ function createApp(deps = {}) {
     if (modelId) {
       if (request.method === METHODS.GET) return handleGetModel(modelId, env);
       if (request.method === METHODS.PUT) return handleUpdateModel(modelId, request, env);
-      if (request.method === METHODS.DELETE) return handleDeleteModel(modelId, env);
+      if (request.method === METHODS.DELETE) return handleDeleteModel(modelId, request, env);
     }
 
     return errorResponse(ERROR_MESSAGES.NOT_FOUND, HTTP_STATUS.NOT_FOUND);

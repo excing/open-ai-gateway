@@ -796,6 +796,20 @@ async function handleUpdateModel(modelId: string, request: Request, env: Env): P
  * @throws 模型不存在返回 404
  */
 async function handleDeleteModel(modelId: string, env: Env): Promise<Response>;
+/**
+ * 解析模型更新/删除的作用域参数
+ * 用于支持“同名模型全量同步”与“按渠道单独处理”两种模式。
+ *
+ * 规则：
+ * - 默认 `sync_scope=single`：仅作用于 path 参数 modelId 对应记录
+ * - `sync_scope=by_code`：作用于与当前模型 `code` 相同的所有记录
+ * - `sync_scope=by_code&channel_id=...`：仅作用于同 code 且指定 channel_id 的记录
+ *
+ * @param request - Request 对象，读取 URL query
+ * @returns { syncScope, channelId }
+ * @throws 参数非法返回 400
+ */
+function parseModelBatchOptions(request: Request): { syncScope: 'single' | 'by_code'; channelId: string };
 
 /**
  * 获取请求日志（分页 + 过滤）
@@ -1567,11 +1581,62 @@ data: [DONE]
 
 **请求体**：UpdateModelSchema 字段（均可选）
 
-**响应** (200)：同 GET /api/model/{id}
+**Query 参数**：
+- `sync_scope`：`single | by_code`，默认 `single`
+  - `single`：只更新 `id` 对应的单条模型
+  - `by_code`：按该 `id` 对应模型的 `code` 批量更新
+- `channel_id`：可选，仅当 `sync_scope=by_code` 时生效。用于限定“同 code 且指定渠道”的批量更新范围
+
+**响应** (200)：
+```json
+{
+    "success": true,
+    "data": { "id": "uuid-yyy", "code": "gpt-4o", "name": "GPT-4o", "...": "..." },
+    "affected": {
+        "scope": "by_code",
+        "channel_id": "ch-001",
+        "count": 2
+    }
+}
+```
 
 #### DELETE /api/model/{id}
 
-**响应** (200)：`{ "success": true }`
+**Query 参数**：同 `PUT /api/model/{id}`
+
+**响应** (200)：
+```json
+{
+    "success": true,
+    "affected": {
+        "scope": "single",
+        "channel_id": "",
+        "count": 1
+    }
+}
+```
+
+#### 模型管理页（一级模型列表 + 二级渠道列表）展示规范
+
+1. 一级列表：按 `model.code` 聚合，显示“模型 code（可复制）”与聚合统计（渠道数、平均成功率、平均耗时）。
+2. 二级列表：展开后显示同 code 下全部渠道模型，列字段固定为：
+   - 模型名
+   - 模型别名（标签化）
+   - 模型状态（标签化，中文）
+   - 渠道名
+   - provider（标签化）
+   - 渠道权重
+   - 模型 callType（标签化）
+   - 模型输入价格
+   - 模型输出价格
+   - 模型成功率
+   - 模型平均耗时
+   - 模型权重
+3. 交互规则：
+   - 点击别名标签：进入“别名聚合视图”，展示该别名命中的全部渠道模型。
+   - 编辑模型：必须提供作用域选择（同名全量同步 / 指定渠道更新 / 单条更新）。
+   - 删除模型：规则同编辑（支持同名全量删除与指定渠道删除）。
+4. 展示语言：中文；内部字段值（如 `code`、`provider`、`callType`）可保留原值，但标签标题与状态文案必须中文。
 
 #### GET /api/log?page=1&limit=20&status=error&channel_id=xxx
 
@@ -1836,6 +1901,26 @@ data: [DONE]
 ---
 
 ## 9. 时序图
+
+### 9.1 模型管理页：同名批量更新
+
+```mermaid
+sequenceDiagram
+    participant A as 管理员
+    participant UI as 管理台前端
+    participant GW as Worker
+    participant DB as D1
+
+    A->>UI: 在一级模型中点击“编辑”
+    UI->>A: 选择作用域（single/by_code/按渠道）
+    A->>UI: 提交更新字段
+    UI->>GW: PUT /api/model/{id}?sync_scope=by_code&channel_id=ch-001
+    GW->>DB: 读取 id 对应模型(code)
+    GW->>DB: UPDATE channel_models SET ... WHERE code=? [AND channel_id=?]
+    DB-->>GW: 受影响行数
+    GW-->>UI: { success, affected.count }
+    UI-->>A: 刷新一级/二级列表并提示更新成功
+```
 
 ### 9.1 V1 聊天请求时序
 

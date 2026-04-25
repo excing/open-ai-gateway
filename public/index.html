@@ -170,6 +170,13 @@
         transform: translateY(0);
       }
 
+      .btn-inline {
+        min-height: 34px;
+        padding: 0.4rem 0.75rem;
+        font-size: 0.75rem;
+        line-height: 1.1;
+      }
+
       .btn-primary {
         background: linear-gradient(135deg, var(--accent) 0%, var(--accent-strong) 100%);
         color: rgba(255, 248, 241, 0.98);
@@ -256,6 +263,23 @@
         border-radius: 18px;
         background: rgba(255, 255, 255, 0.72);
         padding: 0.75rem 0.85rem;
+      }
+
+      .model-table th,
+      .model-table td {
+        white-space: nowrap;
+        padding-left: 0.9rem;
+        padding-right: 0.9rem;
+      }
+
+      .model-table th:first-child,
+      .model-table td:first-child {
+        padding-left: 1.2rem;
+      }
+
+      .model-table th:last-child,
+      .model-table td:last-child {
+        padding-right: 1.2rem;
       }
 
       .chip-group {
@@ -627,8 +651,8 @@
                     <span v-if="channel.models.length > 3" class="chip">+{{ channel.models.length - 3 }}</span>
                   </div>
                   <div class="mt-4 flex gap-2">
-                    <button @click="actions.editChannel(channel)" class="btn btn-primary flex-1 text-sm">编辑</button>
-                    <button @click="actions.deleteChannel(channel.id)" class="btn btn-ghost px-4 text-sm text-[var(--danger)]">删除</button>
+                    <button @click="actions.editChannel(channel)" class="btn btn-inline btn-primary flex-1 text-sm">编辑</button>
+                    <button @click="actions.deleteChannel(channel.id)" class="btn btn-inline btn-ghost px-4 text-sm text-[var(--danger)]">删除</button>
                   </div>
                 </article>
               </div>
@@ -638,45 +662,106 @@
               <div class="toolbar justify-between">
                 <div>
                   <h2 class="section-title font-semibold text-[var(--text)]">模型管理</h2>
-                  <p class="mt-2 text-sm text-[var(--text-soft)]">按渠道分组，补足上下文和操作密度。</p>
                 </div>
                 <button @click="actions.loadChannels" class="btn btn-secondary">刷新渠道与模型</button>
               </div>
 
+              <div v-if="state.aliasFilter" class="mt-4 panel-quiet p-3 text-sm text-[var(--text-soft)]">
+                <span>当前别名筛选：<strong class="text-[var(--text)]">{{ state.aliasFilter }}</strong></span>
+                <button @click="actions.clearAliasFilter" class="btn btn-inline btn-ghost ml-3 text-xs">清除</button>
+              </div>
+
               <div class="mt-6 space-y-3">
-                <article v-for="channel in state.channels" :key="channel.id" class="list-card">
-                  <div class="flex items-center justify-between gap-3">
+                <article v-for="group in actions.getVisibleModelGroups()" :key="group.code" class="list-card">
+                  <div class="flex cursor-pointer items-center justify-between gap-3" @click="actions.toggleModelGroup(group.code)">
                     <div>
-                      <p class="text-lg font-semibold text-[var(--text)]">{{ channel.name }}</p>
-                      <p class="mt-1 text-sm text-[var(--text-soft)]">{{ channel.provider }}</p>
-                    </div>
-                    <span class="pill text-xs text-[var(--text-soft)]">{{ channel.models?.length || 0 }} models</span>
-                  </div>
-                  <div class="mt-4 grid gap-3">
-                    <article v-for="model in channel.models" :key="model.id" class="rounded-[1.2rem] border border-[rgba(185,150,117,0.16)] bg-white/70 p-4">
-                      <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                        <div class="min-w-0">
-                          <div class="flex flex-wrap items-center gap-2">
-                            <p class="truncate text-base font-semibold text-[var(--text)]">{{ model.name }}</p>
-                            <span class="pill text-xs text-[var(--text-soft)]">{{ model.code }}</span>
-                            <span class="pill text-xs" :class="model.status === 'active' ? 'text-[var(--success)]' : 'text-[var(--danger)]'">{{ model.status || 'unknown' }}</span>
-                          </div>
-                          <p class="mt-2 text-sm text-[var(--text-soft)]">{{ model.desc || '无描述' }}</p>
-                          <p class="mt-2 text-xs text-[var(--text-soft)]">
-                            输入成本: {{ actions.formatCostDisplay(model.input_cost) }} · 输出成本: {{ actions.formatCostDisplay(model.output_cost) }}
-                          </p>
-                          <div class="mt-3 chip-group">
-                            <span v-for="alias in actions.parseStoredJsonArray(model.aliases).slice(0, 3)" :key="alias" class="chip">{{ alias }}</span>
-                            <span v-for="capability in actions.parseStoredJsonArray(model.capabilities).slice(0, 2)" :key="capability" class="chip">{{ capability }}</span>
-                          </div>
-                        </div>
-                        <div class="toolbar">
-                          <button @click="actions.editModel(model)" class="btn btn-primary text-sm">编辑模型</button>
-                          <button @click="actions.deleteModel(model.id)" class="btn btn-ghost text-sm text-[var(--danger)]">删除</button>
-                        </div>
+                      <div class="flex items-center gap-2">
+                        <p class="text-xl font-semibold text-[var(--text)]">{{ group.code }}</p>
+                        <button
+                          @click.stop="actions.copyText(group.code)"
+                          class="icon-btn"
+                          aria-label="复制模型 code"
+                          title="复制模型 code"
+                        >
+                          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <rect x="9" y="9" width="11" height="11" rx="2"></rect>
+                            <path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"></path>
+                          </svg>
+                        </button>
                       </div>
-                    </article>
+                      <p class="mt-1 text-sm text-[var(--text-soft)]">关联渠道：{{ group.count }}，平均成功率：{{ (group.avgSuccessRate * 100).toFixed(2) }}%，平均耗时：{{ Math.round(group.avgLatency) }}ms</p>
+                    </div>
+                    <div class="flex">
+                      <button
+                        @click.stop="actions.editModelGroup(group)"
+                        class="btn btn-inline btn-primary text-sm"
+                      >
+                        编辑
+                      </button>
+                      <span class="pill text-xs text-[var(--text-soft)]">{{ actions.isModelGroupExpanded(group.code) ? '已展开' : '已收起' }}</span>
+                    </div>
                   </div>
+                  <div v-if="actions.isModelGroupExpanded(group.code)" class="mt-4 log-table-wrap">
+                    <div class="log-table-scroll">
+                      <table class="log-table model-table">
+                        <thead>
+                          <tr>
+                            <th>模型名</th>
+                            <th>模型CallType</th>
+                            <th>模型别名</th>
+                            <th>模型状态</th>
+                            <th>渠道名</th>
+                            <th>Provider</th>
+                            <th>渠道权重</th>
+                            <th>模型权重</th>
+                            <th>模型输入价格</th>
+                            <th>模型输出价格</th>
+                            <th>模型成功率</th>
+                            <th>模型平均耗时</th>
+                            <th>操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr v-for="model in group.channels" :key="model.id">
+                            <td class="text-sm text-[var(--text)]">{{ model.name || '-' }}</td>
+                            <td><span class="pill text-xs text-[var(--text-soft)]">{{ actions.getCallTypeLabel(model.call_type) }}</span></td>
+                            <td>
+                              <div class="chip-group">
+                                <button
+                                  v-for="alias in actions.parseStoredJsonArray(model.aliases)"
+                                  :key="`${model.id}-${alias}`"
+                                  @click="actions.openAliasFilter(alias)"
+                                  class="chip"
+                                >{{ alias }}</button>
+                                <span
+                                  v-if="actions.parseStoredJsonArray(model.aliases).length === 0"
+                                  class="pill text-xs text-[var(--text-soft)]"
+                                >-</span>
+                              </div>
+                            </td>
+                            <td><span class="pill text-xs" :class="actions.getModelStatusClass(model.status)">{{ actions.getModelStatusLabel(model.status) }}</span></td>
+                            <td><span class="pill text-xs text-[var(--text-soft)]">{{ model.channel_name || '-' }}</span></td>
+                            <td><span class="pill text-xs text-[var(--text-soft)]">{{ actions.getProviderLabel(model.provider) }}</span></td>
+                            <td class="text-sm text-[var(--text-soft)]">{{ model.channel_weight ?? 1 }}</td>
+                            <td class="text-sm text-[var(--text-soft)]">{{ model.weight ?? 1 }}</td>
+                            <td class="text-sm text-[var(--text-soft)]">{{ model.input_cost || '0' }}</td>
+                            <td class="text-sm text-[var(--text-soft)]">{{ model.output_cost || '0' }}</td>
+                            <td class="text-sm text-[var(--text-soft)]">{{ ((Number(model.success_rate || 0)) * 100).toFixed(2) }}%</td>
+                            <td class="text-sm text-[var(--text-soft)]">{{ Math.round(Number(model.avg_latency_ms || 0)) }}ms</td>
+                            <td>
+                              <div class="flex my-2">
+                                <button @click="actions.editModelByChannel(model)" class="btn btn-inline btn-primary text-sm">编辑</button>
+                                <button @click="actions.deleteModel(model.id)" class="btn btn-inline btn-ghost text-sm text-[var(--danger)]">删除</button>
+                              </div>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </article>
+                <article v-if="actions.getVisibleModelGroups().length === 0" class="panel-quiet p-5 text-center text-sm text-[var(--text-soft)]">
+                  未找到匹配模型，请清空别名筛选或先创建渠道模型。
                 </article>
               </div>
             </section>
@@ -809,10 +894,10 @@
                               : '未检测'
                       }}
                     </span>
-                    <button @click="actions.detectChannelModel(index)" class="btn btn-secondary text-sm" :disabled="model.detectStatus === constants.DETECT_STATUS.LOADING">
+                    <button @click="actions.detectChannelModel(index)" class="btn btn-inline btn-secondary text-sm" :disabled="model.detectStatus === constants.DETECT_STATUS.LOADING">
                       {{ model.detectStatus === constants.DETECT_STATUS.LOADING ? '检测中...' : '检测' }}
                     </button>
-                    <button @click="actions.removeChannelModel(index)" class="btn btn-ghost text-sm text-[var(--danger)]">移除</button>
+                    <button @click="actions.removeChannelModel(index)" class="btn btn-inline btn-ghost text-sm text-[var(--danger)]">移除</button>
                   </div>
                 </div>
                 <p v-if="model.detectMessage" class="mt-3 text-xs" :class="model.detectStatus === constants.DETECT_STATUS.ERROR ? 'text-[var(--danger)]' : 'text-[var(--text-soft)]'">
@@ -888,7 +973,13 @@
           </div>
 
           <div class="mt-6 grid gap-3 sm:grid-cols-2">
-            <input v-model="state.modelForm.id" type="text" class="field sm:col-span-2" placeholder="模型 ID" />
+            <input
+              v-if="state.modelForm.syncScope !== constants.MODEL_SYNC_SCOPE.BY_CODE"
+              v-model="state.modelForm.id"
+              type="text"
+              class="field sm:col-span-2"
+              placeholder="模型 ID"
+            />
             <input v-model="state.modelForm.name" type="text" class="field" placeholder="模型名称" />
             <input v-model="state.modelForm.code" type="text" class="field" placeholder="模型 code" />
             <input v-model="state.modelForm.desc" type="text" class="field sm:col-span-2" placeholder="模型描述" />
@@ -904,6 +995,16 @@
           </div>
 
           <div class="mt-6 space-y-4">
+            <div class="panel-quiet p-4">
+              <p class="mb-2 text-sm font-medium text-[var(--text)]">当前操作作用域</p>
+              <p class="text-sm text-[var(--text-soft)]">
+                {{ state.modelForm.syncScope === constants.MODEL_SYNC_SCOPE.BY_CODE ? '同名模型全部渠道' : '当前渠道模型' }}
+              </p>
+              <p v-if="state.modelForm.syncScope !== constants.MODEL_SYNC_SCOPE.BY_CODE" class="mt-2 text-xs text-[var(--text-soft)]">
+                当前模型所属渠道：{{ state.modelForm.channelName || '-' }}
+              </p>
+            </div>
+
             <div class="panel-quiet p-4">
               <p class="mb-2 text-sm font-medium text-[var(--text)]">别名</p>
               <div class="chip-group">
@@ -938,8 +1039,9 @@
             </div>
           </div>
 
-          <div class="mt-6 grid gap-3 sm:grid-cols-2">
+          <div class="mt-6 grid gap-3 sm:grid-cols-3">
             <button @click="actions.updateModel" class="btn btn-primary">保存模型</button>
+            <button @click="actions.deleteModelFromDrawer" class="btn btn-ghost text-[var(--danger)]">删除模型</button>
             <button @click="actions.resetModelForm" class="btn btn-secondary">重置</button>
           </div>
         </div>
@@ -1013,6 +1115,28 @@
           SUCCESS: 'success',
           ERROR: 'error',
         },
+        MODEL_SYNC_SCOPE: {
+          SINGLE: 'single',
+          BY_CODE: 'by_code',
+          BY_CODE_CHANNEL: 'by_code_channel',
+        },
+        MODEL_STATUS_LABELS: {
+          active: '可用',
+          open: '熔断中',
+          disable: '已禁用',
+        },
+        PROVIDER_LABELS: {
+          'openai-compatible': 'OpenAI兼容',
+          openai: 'OpenAI',
+          google: 'Google',
+          gemini: 'Gemini',
+          anthropic: 'Anthropic',
+          claude: 'Claude',
+          openrouter: 'OpenRouter',
+          pollinations: 'Pollinations',
+          exacg: 'Exacg',
+          'microsoft-tts': 'Microsoft TTS',
+        },
       };
 
       createApp({
@@ -1073,6 +1197,10 @@
             capabilities: [],
             capabilityInput: '',
             headersRaw: constants.EMPTY_OBJECT_JSON,
+            channelId: '',
+            channelName: '',
+            syncScope: constants.MODEL_SYNC_SCOPE.BY_CODE,
+            scopeChannelId: '',
           });
 
           const state = reactive({
@@ -1085,6 +1213,9 @@
             statusModels: [],
             logs: [],
             expandedLogId: '',
+            modelGroups: [],
+            modelGroupExpanded: {},
+            aliasFilter: '',
             notice: '',
             channelDrawerOpen: false,
             modelDrawerOpen: false,
@@ -1263,6 +1394,74 @@
                 }
               }, 3000);
             },
+            getProviderLabel: (provider) => constants.PROVIDER_LABELS[String(provider || '').trim()] || String(provider || '-'),
+            getModelStatusLabel: (status) => constants.MODEL_STATUS_LABELS[String(status || '').trim()] || String(status || '未知'),
+            getModelStatusClass: (status) => (status === 'active' ? 'text-[var(--success)]' : status === 'open' ? 'text-[var(--accent-strong)]' : 'text-[var(--danger)]'),
+            copyText: async (text) => {
+              if (!text) return;
+              try {
+                await navigator.clipboard.writeText(String(text));
+                actions.setNotice(`已复制：${text}`);
+              } catch (error) {
+                actions.setNotice('复制失败，请手动复制');
+              }
+            },
+            buildModelGroups: (channels) => {
+              const groups = new Map();
+              for (const channel of channels || []) {
+                for (const model of channel.models || []) {
+                  const code = String(model.code || '').trim() || '未命名模型';
+                  if (!groups.has(code)) {
+                    groups.set(code, {
+                      code,
+                      channels: [],
+                    });
+                  }
+                  groups.get(code).channels.push({
+                    ...model,
+                    channel_name: channel.name,
+                    channel_id: channel.id,
+                    channel_weight: channel.weight ?? 1,
+                    provider: channel.provider,
+                  });
+                }
+              }
+              const output = Array.from(groups.values()).map((group) => {
+                const successRates = group.channels.map((item) => Number(item.success_rate ?? 0)).filter((value) => Number.isFinite(value));
+                const latencies = group.channels.map((item) => Number(item.avg_latency_ms ?? 0)).filter((value) => Number.isFinite(value));
+                const avgSuccessRate = successRates.length ? successRates.reduce((a, b) => a + b, 0) / successRates.length : 0;
+                const avgLatency = latencies.length ? latencies.reduce((a, b) => a + b, 0) / latencies.length : 0;
+                return { ...group, count: group.channels.length, avgSuccessRate, avgLatency };
+              });
+              return output.sort((a, b) => a.code.localeCompare(b.code));
+            },
+            toggleModelGroup: (code) => {
+              state.modelGroupExpanded = { ...state.modelGroupExpanded, [code]: !state.modelGroupExpanded[code] };
+            },
+            isModelGroupExpanded: (code) => Boolean(state.modelGroupExpanded[code]),
+            openAliasFilter: (alias) => {
+              state.aliasFilter = String(alias || '').trim();
+            },
+            clearAliasFilter: () => {
+              state.aliasFilter = '';
+            },
+            getVisibleModelGroups: () => {
+              if (!state.aliasFilter) return state.modelGroups;
+              return state.modelGroups.filter((group) =>
+                group.channels.some((item) => parseStoredJsonArray(item.aliases).includes(state.aliasFilter))
+              );
+            },
+            getModelSyncApiPath: (modelId, syncScope, scopeChannelId) => {
+              const params = new URLSearchParams();
+              if (syncScope === constants.MODEL_SYNC_SCOPE.BY_CODE) {
+                params.set('sync_scope', constants.MODEL_SYNC_SCOPE.BY_CODE);
+              } else if (syncScope === constants.MODEL_SYNC_SCOPE.BY_CODE_CHANNEL) {
+                params.set('sync_scope', constants.MODEL_SYNC_SCOPE.BY_CODE);
+                if (scopeChannelId) params.set('channel_id', scopeChannelId);
+              }
+              const query = params.toString();
+              return `${constants.API.MODEL}/${modelId}${query ? `?${query}` : ''}`;
+            },
             getChannelActiveCount: (channel) => (channel.models || []).filter((model) => model.status === 'active').length,
             addTokenToList: (target, fieldName, inputName) => {
               const value = String(target[inputName] || '').trim();
@@ -1431,6 +1630,7 @@
             loadChannels: async () => {
               const res = await apiRequest(`${constants.API.CHANNELS}?page=${constants.DEFAULT_PAGE}&limit=${constants.DEFAULT_LIMIT}`);
               state.channels = res.data?.data || [];
+              state.modelGroups = actions.buildModelGroups(state.channels);
             },
             createChannel: async () => {
               try {
@@ -1524,7 +1724,7 @@
               await actions.loadChannels();
               actions.setNotice('渠道已删除。');
             },
-            editModel: (model) => {
+            buildModelFormFromRecord: (model, syncScope, scopeChannelId) => {
               state.modelForm = {
                 id: model.id,
                 name: model.name || '',
@@ -1540,17 +1740,44 @@
                 capabilities: parseStoredJsonArray(model.capabilities),
                 capabilityInput: '',
                 headersRaw: JSON.stringify(JSON.parse(model.headers || constants.EMPTY_OBJECT_JSON), null, 2),
+                channelId: model.channel_id || '',
+                channelName: model.channel_name || '',
+                syncScope,
+                scopeChannelId,
               };
               state.modelDrawerOpen = true;
               actions.setNotice('模型已载入。');
             },
+            editModelGroup: (group) => {
+              const baseModel = group?.channels?.[0];
+              if (!baseModel) {
+                actions.setNotice('当前模型组无可编辑数据');
+                return;
+              }
+              actions.buildModelFormFromRecord(baseModel, constants.MODEL_SYNC_SCOPE.BY_CODE, '');
+            },
+            editModelByChannel: (model) => {
+              actions.buildModelFormFromRecord(
+                model,
+                constants.MODEL_SYNC_SCOPE.BY_CODE_CHANNEL,
+                model.channel_id || '',
+              );
+            },
             updateModel: async () => {
               if (!state.modelForm.id) return;
               try {
+                if (state.modelForm.syncScope === constants.MODEL_SYNC_SCOPE.BY_CODE_CHANNEL && !state.modelForm.scopeChannelId) {
+                  throw new Error('请选择指定渠道');
+                }
                 const aliases = createUniqueList(state.modelForm.aliases);
                 const capabilities = createUniqueList(state.modelForm.capabilities);
                 const headers = parseJsonInput(state.modelForm.headersRaw, constants.EMPTY_OBJECT_JSON, '模型请求头');
-                const res = await apiRequest(`${constants.API.MODEL}/${state.modelForm.id}`, {
+                const targetPath = actions.getModelSyncApiPath(
+                  state.modelForm.id,
+                  state.modelForm.syncScope,
+                  state.modelForm.scopeChannelId,
+                );
+                const res = await apiRequest(targetPath, {
                   method: constants.METHODS.PUT,
                   body: {
                     name: state.modelForm.name,
@@ -1568,7 +1795,7 @@
                 });
                 if (res.status === 200) {
                   await actions.loadChannels();
-                  actions.setNotice('模型已更新。');
+                  actions.setNotice(`模型已更新（影响 ${res.data?.affected?.count ?? 1} 条）。`);
                   state.modelDrawerOpen = false;
                 } else {
                   actions.setNotice(res.data?.error || '模型更新失败。');
@@ -1577,10 +1804,22 @@
                 actions.setNotice(error.message);
               }
             },
-            deleteModel: async (id) => {
-              await apiRequest(`${constants.API.MODEL}/${id}`, { method: constants.METHODS.DELETE });
+            deleteModel: async (modelId, syncScope = constants.MODEL_SYNC_SCOPE.SINGLE, scopeChannelId = '') => {
+              const targetPath = actions.getModelSyncApiPath(modelId, syncScope, scopeChannelId);
+              await apiRequest(targetPath, { method: constants.METHODS.DELETE });
               await actions.loadChannels();
               actions.setNotice('模型已删除。');
+            },
+            deleteModelFromDrawer: async () => {
+              if (!state.modelForm.id) return;
+              if (state.modelForm.syncScope === constants.MODEL_SYNC_SCOPE.BY_CODE_CHANNEL && !state.modelForm.scopeChannelId) {
+                actions.setNotice('请选择指定渠道');
+                return;
+              }
+              const syncScope = state.modelForm.syncScope;
+              const scopeChannelId = state.modelForm.scopeChannelId;
+              await actions.deleteModel(state.modelForm.id, syncScope, scopeChannelId);
+              state.modelDrawerOpen = false;
             },
             loadLogs: async () => {
               const params = new URLSearchParams({ page: constants.DEFAULT_PAGE, limit: constants.DEFAULT_LIMIT });

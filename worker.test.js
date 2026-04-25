@@ -83,6 +83,19 @@ function createMockEnv() {
               models.delete(bindings[0]);
               return { success: true };
             }
+            if (normalizedSql.includes('delete from channel_models where code')) {
+              const [code, channelId] = bindings;
+              let deleted = 0;
+              for (const [id, model] of models.entries()) {
+                const codeMatched = model.code === code;
+                const channelMatched = channelId ? model.channel_id === channelId : true;
+                if (codeMatched && channelMatched) {
+                  models.delete(id);
+                  deleted += 1;
+                }
+              }
+              return { success: true, meta: { changes: deleted } };
+            }
             
             // UPDATE channel
             if (normalizedSql.includes('update channels set')) {
@@ -95,7 +108,27 @@ function createMockEnv() {
             
             // UPDATE model stats
             if (normalizedSql.includes('update channel_models set')) {
-              return { success: true };
+              const sqlSegments = normalizedSql.split(' where ');
+              const setClauseRaw = sqlSegments[0].replace('update channel_models set', '').trim();
+              const setFields = setClauseRaw.split(',').map((item) => item.trim().split('=')[0].trim());
+              const setValues = bindings.slice(0, setFields.length);
+              const updates = Object.fromEntries(setFields.map((field, index) => [field, setValues[index]]));
+
+              const whereBindings = bindings.slice(setFields.length);
+              let updated = 0;
+              for (const model of models.values()) {
+                let matched = false;
+                if (normalizedSql.includes('where id')) {
+                  matched = model.id === whereBindings[0];
+                } else if (normalizedSql.includes('where code')) {
+                  const [code, channelId] = whereBindings;
+                  matched = model.code === code && (!channelId || model.channel_id === channelId);
+                }
+                if (!matched) continue;
+                Object.assign(model, updates);
+                updated += 1;
+              }
+              return { success: true, meta: { changes: updated } };
             }
             
             // INSERT log
@@ -145,6 +178,11 @@ function createMockEnv() {
             if (normalizedSql.includes('select * from channel_models where id')) {
               const model = models.get(bindings[0]);
               return { results: model ? [model] : [] };
+            }
+            if (normalizedSql.includes('select * from channel_models where code')) {
+              const [code, channelId] = bindings;
+              const results = Array.from(models.values()).filter((model) => model.code === code && (!channelId || model.channel_id === channelId));
+              return { results };
             }
             
             // COUNT channels
@@ -223,6 +261,10 @@ function createMockEnv() {
             }
             if (normalizedSql.includes('select * from channel_models where id')) {
               return models.get(bindings[0]);
+            }
+            if (normalizedSql.includes('select * from channel_models where code')) {
+              const [code, channelId] = bindings;
+              return Array.from(models.values()).find((model) => model.code === code && (!channelId || model.channel_id === channelId)) || null;
             }
             if (normalizedSql.includes('select count(*)')) {
               if (normalizedSql.includes('from channels')) {
@@ -1273,6 +1315,131 @@ describe('API: 参数校验错误应返回具体原因', () => {
     assert.strictEqual(data.success, false);
     assert.ok(data.error.startsWith(`${ERROR_MESSAGES.INVALID_REQUEST_BODY}:`));
     assert.ok(data.error.includes('limit'));
+  });
+});
+
+describe('API: PUT/DELETE /api/model/:id - 同名批量与按渠道操作', () => {
+  let app;
+  let mockEnv;
+
+  beforeEach(() => {
+    app = createApp();
+    mockEnv = createMockEnv();
+    mockEnv._addChannel({
+      id: 'ch-1',
+      name: '渠道一',
+      key: 'channel-1',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-1',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-25T00:00:00Z',
+      updated_at: '2026-04-25T00:00:00Z',
+    });
+    mockEnv._addChannel({
+      id: 'ch-2',
+      name: '渠道二',
+      key: 'channel-2',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-2',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-25T00:00:00Z',
+      updated_at: '2026-04-25T00:00:00Z',
+    });
+    mockEnv._addModel({
+      id: 'm-1',
+      channel_id: 'ch-1',
+      code: 'gpt-4o',
+      name: 'GPT-4o A',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: '["chat"]',
+      input_cost: '0',
+      output_cost: '0',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-25T00:00:00Z',
+      headers: '{}',
+    });
+    mockEnv._addModel({
+      id: 'm-2',
+      channel_id: 'ch-2',
+      code: 'gpt-4o',
+      name: 'GPT-4o B',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: '["chat"]',
+      input_cost: '0',
+      output_cost: '0',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-25T00:00:00Z',
+      headers: '{}',
+    });
+  });
+
+  afterEach(() => {
+    mockEnv._clear();
+  });
+
+  it('PUT sync_scope=by_code 应更新同 code 的全部模型', async () => {
+    const request = createMockRequest({
+      method: 'PUT',
+      pathname: '/api/model/m-1?sync_scope=by_code',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: { status: MODEL_STATUS.DISABLE },
+    });
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(mockEnv._models.get('m-1').status, MODEL_STATUS.DISABLE);
+    assert.strictEqual(mockEnv._models.get('m-2').status, MODEL_STATUS.DISABLE);
+  });
+
+  it('PUT sync_scope=by_code + channel_id 仅更新指定渠道模型', async () => {
+    const request = createMockRequest({
+      method: 'PUT',
+      pathname: '/api/model/m-1?sync_scope=by_code&channel_id=ch-1',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: { weight: 9 },
+    });
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(mockEnv._models.get('m-1').weight, 9);
+    assert.strictEqual(mockEnv._models.get('m-2').weight, 1);
+  });
+
+  it('DELETE sync_scope=by_code + channel_id 仅删除指定渠道模型', async () => {
+    const request = createMockRequest({
+      method: 'DELETE',
+      pathname: '/api/model/m-1?sync_scope=by_code&channel_id=ch-1',
+      headers: { authorization: 'Bearer test-admin-key' },
+    });
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(mockEnv._models.has('m-1'), false);
+    assert.strictEqual(mockEnv._models.has('m-2'), true);
   });
 });
 
