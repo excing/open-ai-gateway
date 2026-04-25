@@ -682,7 +682,7 @@
             <section v-if="state.view === constants.VIEWS.MODELS" class="panel px-5 py-5 sm:px-6 sm:py-6">
               <div class="toolbar justify-between">
                 <div>
-                  <h2 class="section-title font-semibold text-[var(--text)]">模型管理</h2>
+                  <h2 class="section-title font-semibold text-[var(--text)]">模型管理 ({{ actions.getVisibleModelGroups().length }})</h2>
                 </div>
                 <button @click="actions.loadChannels" class="btn btn-secondary">刷新渠道与模型</button>
               </div>
@@ -692,8 +692,8 @@
                 <button @click="actions.clearAliasFilter" class="btn btn-inline btn-ghost ml-3 text-xs">清除</button>
               </div>
 
-              <div class="mt-4 grid gap-3 lg:grid-cols-6">
-                <input v-model="state.modelListControls.keyword" type="text" class="field lg:col-span-2" placeholder="搜索 code / 模型名 / 渠道 / 别名" />
+              <div class="mt-5 grid gap-3 lg:grid-cols-4">
+                <input v-model="state.modelListControls.keyword" type="text" class="field" placeholder="搜索 code / 模型名 / 渠道 / 别名" />
                 <select v-model="state.modelListControls.provider" class="field-select">
                   <option value="">全部 Provider</option>
                   <option v-for="provider in actions.getModelListFilterOptions().providers" :key="provider" :value="provider">{{ actions.getProviderLabel(provider) }}</option>
@@ -702,20 +702,18 @@
                   <option value="">全部状态</option>
                   <option v-for="status in constants.MODEL_STATUS" :key="status" :value="status">{{ actions.getModelStatusLabel(status) }}</option>
                 </select>
-                <select v-model="state.modelListControls.callType" class="field-select">
-                  <option value="">全部CallType</option>
-                  <option v-for="callType in actions.getModelListFilterOptions().callTypes" :key="callType" :value="callType">{{ actions.getCallTypeLabel(callType) }}</option>
-                </select>
-                <button @click="actions.resetModelListControls" class="btn btn-inline btn-secondary">重置筛选</button>
+                <button @click="actions.resetModelListControls" class="btn btn-secondary">重置筛选</button>
               </div>
-
-              <div class="mt-3 grid gap-3 lg:grid-cols-2">
-                <select v-model="state.modelListControls.groupSortBy" class="field-select">
-                  <option v-for="option in constants.MODEL_GROUP_SORT_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
-                </select>
-                <select v-model="state.modelListControls.rowSortBy" class="field-select">
-                  <option v-for="option in constants.MODEL_ROW_SORT_OPTIONS" :key="option.value" :value="option.value">{{ option.label }}</option>
-                </select>
+              <div class="mt-3 flex flex-wrap gap-2">
+                <button
+                  v-for="callType in actions.getModelListFilterOptions().callTypes"
+                  :key="callType"
+                  @click="actions.toggleModelListCallType(callType)"
+                  class="btn btn-inline"
+                  :class="state.modelListControls.callTypes.includes(callType) ? 'btn-primary' : 'btn-secondary'"
+                >
+                  {{ actions.getCallTypeLabel(callType) }}
+                </button>
               </div>
 
               <div class="mt-6 space-y-3">
@@ -1226,21 +1224,6 @@
           open: '熔断中',
           disable: '已禁用',
         },
-        MODEL_GROUP_SORT_OPTIONS: [
-          { value: 'code_asc', label: '模型Code A-Z' },
-          { value: 'code_desc', label: '模型Code Z-A' },
-          { value: 'channel_count_desc', label: '渠道数从多到少' },
-          { value: 'success_rate_desc', label: '成功率从高到低' },
-          { value: 'latency_asc', label: '平均耗时从低到高' },
-        ],
-        MODEL_ROW_SORT_OPTIONS: [
-          { value: 'channel_name_asc', label: '渠道名 A-Z' },
-          { value: 'provider_asc', label: 'Provider A-Z' },
-          { value: 'status_asc', label: '状态' },
-          { value: 'weight_desc', label: '模型权重从高到低' },
-          { value: 'success_rate_desc', label: '成功率从高到低' },
-          { value: 'latency_asc', label: '平均耗时从低到高' },
-        ],
         PROVIDER_LABELS: {
           'openai-compatible': 'OpenAI兼容',
           openai: 'OpenAI',
@@ -1355,9 +1338,7 @@
               keyword: '',
               provider: '',
               status: '',
-              callType: '',
-              groupSortBy: 'code_asc',
-              rowSortBy: 'channel_name_asc',
+              callTypes: [],
             },
             notice: '',
             channelDrawerOpen: false,
@@ -1674,11 +1655,26 @@
                 keyword: '',
                 provider: '',
                 status: '',
-                callType: '',
-                groupSortBy: 'code_asc',
-                rowSortBy: 'channel_name_asc',
+                callTypes: [],
               };
               state.aliasFilter = '';
+            },
+            syncModelListCallTypes: () => {
+              const availableCallTypes = actions.getModelListFilterOptions().callTypes;
+              const selectedCallTypeSet = new Set(createUniqueList(state.modelListControls.callTypes));
+              const selectedCallTypes = availableCallTypes.filter((callType) => selectedCallTypeSet.has(callType));
+              state.modelListControls.callTypes = selectedCallTypes;
+            },
+            toggleModelListCallType: (callType) => {
+              const normalizedCallType = String(callType || '').trim();
+              if (!normalizedCallType) return;
+              const selectedCallTypes = createUniqueList(state.modelListControls.callTypes);
+              const exists = selectedCallTypes.includes(normalizedCallType);
+              if (exists) {
+                state.modelListControls.callTypes = selectedCallTypes.filter((item) => item !== normalizedCallType);
+                return;
+              }
+              state.modelListControls.callTypes = createUniqueList([...selectedCallTypes, normalizedCallType]);
             },
             getModelListFilterOptions: () => {
               const providers = new Set();
@@ -1696,24 +1692,13 @@
             },
             sortModelRows: (rows) => {
               const list = [...rows];
-              const rule = state.modelListControls.rowSortBy;
-              const getNumber = (value) => {
-                const numericValue = Number(value ?? 0);
-                return Number.isFinite(numericValue) ? numericValue : 0;
-              };
-              if (rule === 'provider_asc') return list.sort((a, b) => String(a.provider || '').localeCompare(String(b.provider || '')));
-              if (rule === 'status_asc') return list.sort((a, b) => String(a.status || '').localeCompare(String(b.status || '')));
-              if (rule === 'weight_desc') return list.sort((a, b) => getNumber(b.weight) - getNumber(a.weight));
-              if (rule === 'success_rate_desc') return list.sort((a, b) => getNumber(b.success_rate) - getNumber(a.success_rate));
-              if (rule === 'latency_asc') return list.sort((a, b) => getNumber(a.avg_latency_ms) - getNumber(b.avg_latency_ms));
               return list.sort((a, b) => String(a.channel_name || '').localeCompare(String(b.channel_name || '')));
             },
             getVisibleModelGroups: () => {
               const keyword = String(state.modelListControls.keyword || '').trim().toLowerCase();
               const provider = state.modelListControls.provider;
               const status = state.modelListControls.status;
-              const callType = state.modelListControls.callType;
-              const groupSortBy = state.modelListControls.groupSortBy;
+              const selectedCallTypeSet = new Set(createUniqueList(state.modelListControls.callTypes));
 
               const filteredGroups = state.modelGroups
                 .map((group) => {
@@ -1722,7 +1707,7 @@
                     if (state.aliasFilter && !aliases.includes(state.aliasFilter)) return false;
                     if (provider && item.provider !== provider) return false;
                     if (status && item.status !== status) return false;
-                    if (callType && item.call_type !== callType) return false;
+                    if (selectedCallTypeSet.size > 0 && !selectedCallTypeSet.has(item.call_type)) return false;
                     if (!keyword) return true;
                     const searchableText = [
                       group.code,
@@ -1750,17 +1735,7 @@
                 })
                 .filter(Boolean);
 
-              if (groupSortBy === 'code_desc') {
-                filteredGroups.sort((a, b) => String(b.code).localeCompare(String(a.code)));
-              } else if (groupSortBy === 'channel_count_desc') {
-                filteredGroups.sort((a, b) => b.visibleCount - a.visibleCount);
-              } else if (groupSortBy === 'success_rate_desc') {
-                filteredGroups.sort((a, b) => b.avgSuccessRate - a.avgSuccessRate);
-              } else if (groupSortBy === 'latency_asc') {
-                filteredGroups.sort((a, b) => a.avgLatency - b.avgLatency);
-              } else {
-                filteredGroups.sort((a, b) => String(a.code).localeCompare(String(b.code)));
-              }
+              filteredGroups.sort((a, b) => String(a.code).localeCompare(String(b.code)));
 
               return filteredGroups;
             },
@@ -1945,6 +1920,7 @@
               const res = await apiRequest(`${constants.API.CHANNELS}?page=${constants.DEFAULT_PAGE}&limit=${constants.DEFAULT_LIMIT}`);
               state.channels = res.data?.data || [];
               state.modelGroups = actions.buildModelGroups(state.channels);
+              actions.syncModelListCallTypes();
             },
             createChannel: async () => {
               try {
