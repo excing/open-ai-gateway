@@ -659,7 +659,9 @@
             </div>
             <div class="mt-8 space-y-4">
               <input v-model="state.tokenInput" type="password" class="field" placeholder="Bearer token" autocomplete="current-password" />
-              <button @click="actions.login" class="btn btn-primary w-full">进入管理台</button>
+              <button @click="actions.login" :disabled="actions.isAsyncTaskLoading(constants.ASYNC_TASKS.LOGIN)" class="btn btn-primary w-full">
+                {{ actions.isAsyncTaskLoading(constants.ASYNC_TASKS.LOGIN) ? '登录中...' : '进入管理台' }}
+              </button>
               <p v-if="state.error" class="rounded-2xl border border-[rgba(211,92,72,0.18)] bg-[rgba(255,240,235,0.72)] px-4 py-3 text-sm text-[var(--danger)]">
                 {{ state.error }}
               </p>
@@ -725,7 +727,9 @@
             <section v-if="state.view === constants.VIEWS.STATUS" class="panel px-5 py-5 sm:px-6 sm:py-6">
               <div class="toolbar justify-between">
                 <h2 class="section-title font-semibold text-[var(--text)]">模型状态</h2>
-                <button @click="actions.loadStatus" class="btn btn-secondary">刷新状态</button>
+                <button @click="actions.loadStatus" :disabled="actions.isAsyncTaskLoading(constants.ASYNC_TASKS.LOAD_STATUS)" class="btn btn-secondary">
+                  {{ actions.isAsyncTaskLoading(constants.ASYNC_TASKS.LOAD_STATUS) ? '刷新中...' : '刷新状态' }}
+                </button>
               </div>
               <div class="mt-5 grid gap-4 lg:grid-cols-2">
                 <article v-for="model in state.statusModels" :key="model.code" class="panel-quiet p-4 sm:p-5">
@@ -806,7 +810,9 @@
                 </div>
                 <div class="toolbar">
                   <button @click="actions.openCreateChannel" class="btn btn-primary">新建渠道</button>
-                  <button @click="actions.loadChannels" class="btn btn-secondary">刷新渠道</button>
+                  <button @click="actions.loadChannels" :disabled="actions.isAsyncTaskLoading(constants.ASYNC_TASKS.LOAD_CHANNELS)" class="btn btn-secondary">
+                    {{ actions.isAsyncTaskLoading(constants.ASYNC_TASKS.LOAD_CHANNELS) ? '刷新中...' : '刷新渠道' }}
+                  </button>
                 </div>
               </div>
 
@@ -839,7 +845,9 @@
                   </div>
                   <div class="mt-4 flex gap-2">
                     <button @click="actions.editChannel(channel)" class="btn btn-primary flex-1 text-sm">编辑</button>
-                    <button @click="actions.deleteChannel(channel.id)" class="btn btn-ghost px-4 text-sm text-[var(--danger)]">删除</button>
+                    <button @click="actions.deleteChannel(channel.id)" :disabled="actions.isAsyncTaskLoading(constants.ASYNC_TASKS.DELETE_CHANNEL)" class="btn btn-ghost px-4 text-sm text-[var(--danger)]">
+                      {{ actions.isAsyncTaskLoading(constants.ASYNC_TASKS.DELETE_CHANNEL) ? '删除中...' : '删除' }}
+                    </button>
                   </div>
                 </article>
               </div>
@@ -850,7 +858,9 @@
                 <div>
                   <h2 class="section-title font-semibold text-[var(--text)]">模型管理 ({{ actions.getVisibleModelGroups().length }})</h2>
                 </div>
-                <button @click="actions.loadChannels" class="btn btn-secondary">刷新模型</button>
+                <button @click="actions.loadChannels" :disabled="actions.isAsyncTaskLoading(constants.ASYNC_TASKS.LOAD_CHANNELS)" class="btn btn-secondary">
+                  {{ actions.isAsyncTaskLoading(constants.ASYNC_TASKS.LOAD_CHANNELS) ? '刷新中...' : '刷新模型' }}
+                </button>
               </div>
 
               <div class="mt-5 grid gap-3 lg:grid-cols-4">
@@ -958,7 +968,9 @@
                             <td>
                               <div class="flex my-2">
                                 <button @click="actions.editModelByChannel(model)" class="btn btn-inline btn-primary text-sm">编辑</button>
-                                <button @click="actions.deleteModel(model.id)" class="btn btn-inline btn-ghost text-sm text-[var(--danger)]">删除</button>
+                                <button @click="actions.deleteModel(model.id)" :disabled="actions.isAsyncTaskLoading(constants.ASYNC_TASKS.DELETE_MODEL)" class="btn btn-inline btn-ghost text-sm text-[var(--danger)]">
+                                  {{ actions.isAsyncTaskLoading(constants.ASYNC_TASKS.DELETE_MODEL) ? '删除中...' : '删除' }}
+                                </button>
                               </div>
                             </td>
                           </tr>
@@ -976,7 +988,9 @@
             <section v-if="state.view === constants.VIEWS.LOGS" class="panel px-5 py-5 sm:px-6 sm:py-6">
               <div class="toolbar justify-between">
                 <h2 class="section-title font-semibold text-[var(--text)]">调用日志</h2>
-                <button @click="actions.loadLogs" class="btn btn-secondary">刷新日志</button>
+                <button @click="actions.loadLogs" :disabled="actions.isAsyncTaskLoading(constants.ASYNC_TASKS.LOAD_LOGS)" class="btn btn-secondary">
+                  {{ actions.isAsyncTaskLoading(constants.ASYNC_TASKS.LOAD_LOGS) ? '刷新中...' : '刷新日志' }}
+                </button>
               </div>
               <div class="mt-5 grid gap-3 lg:grid-cols-4">
                 <input v-model="state.logFilters.channel_key" type="text" class="field" placeholder="渠道 Key" />
@@ -985,7 +999,9 @@
                   <option value="">全部状态</option>
                   <option v-for="s in constants.LOG_STATUS_LIST" :key="s" :value="s">{{ s }}</option>
                 </select>
-                <button @click="actions.searchLogs" class="btn btn-primary">查询</button>
+                <button @click="actions.searchLogs" :disabled="actions.isAsyncTaskLoading(constants.ASYNC_TASKS.LOAD_LOGS)" class="btn btn-primary">
+                  {{ actions.isAsyncTaskLoading(constants.ASYNC_TASKS.LOAD_LOGS) ? '查询中...' : '查询' }}
+                </button>
               </div>
               <div class="mt-5 log-table-wrap">
                 <div class="log-table-scroll">
@@ -1050,8 +1066,8 @@
                   <select v-model.number="state.logPagination.limit" @change="actions.updateLogPageSize" class="field-select field-mini">
                     <option v-for="size in constants.LOG_PAGE_SIZE_OPTIONS" :key="`log-page-size-${size}`" :value="size">{{ size }} 条</option>
                   </select>
-                  <button @click="actions.prevLogPage" :disabled="state.logPagination.page <= 1" class="btn btn-secondary btn-inline whitespace-nowrap">上一页</button>
-                  <button @click="actions.nextLogPage" :disabled="state.logPagination.page >= state.logPagination.totalPages" class="btn btn-secondary btn-inline whitespace-nowrap">下一页</button>
+                  <button @click="actions.prevLogPage" :disabled="state.logPagination.page <= 1 || actions.isAsyncTaskLoading(constants.ASYNC_TASKS.LOAD_LOGS)" class="btn btn-secondary btn-inline whitespace-nowrap">上一页</button>
+                  <button @click="actions.nextLogPage" :disabled="state.logPagination.page >= state.logPagination.totalPages || actions.isAsyncTaskLoading(constants.ASYNC_TASKS.LOAD_LOGS)" class="btn btn-secondary btn-inline whitespace-nowrap">下一页</button>
                 </div>
               </div>
             </section>
@@ -1086,7 +1102,9 @@
             <div class="toolbar justify-between">
               <h4 class="text-lg font-semibold text-[var(--text)]">模型配置</h4>
               <div class="toolbar">
-                <button @click="actions.fetchChannelModels" class="btn btn-secondary">获取模型</button>
+                <button @click="actions.fetchChannelModels" :disabled="actions.isAsyncTaskLoading(constants.ASYNC_TASKS.FETCH_CHANNEL_MODELS)" class="btn btn-secondary">
+                  {{ actions.isAsyncTaskLoading(constants.ASYNC_TASKS.FETCH_CHANNEL_MODELS) ? '获取中...' : '获取模型' }}
+                </button>
                 <button @click="actions.addChannelModel" class="btn btn-secondary">新增模型</button>
               </div>
             </div>
@@ -1118,25 +1136,25 @@
                   <div class="toolbar">
                     <span
                       class="pill text-xs"
-                      :class="model.detectStatus === constants.DETECT_STATUS.SUCCESS ? 'text-[var(--success)]' : model.detectStatus === constants.DETECT_STATUS.ERROR ? 'text-[var(--danger)]' : 'text-[var(--text-soft)]'"
+                      :class="model.detectStatus === constants.ASYNC_STATUS.SUCCESS ? 'text-[var(--success)]' : model.detectStatus === constants.ASYNC_STATUS.ERROR ? 'text-[var(--danger)]' : 'text-[var(--text-soft)]'"
                     >
                       {{
-                        model.detectStatus === constants.DETECT_STATUS.LOADING
+                        model.detectStatus === constants.ASYNC_STATUS.LOADING
                           ? '检测中'
-                          : model.detectStatus === constants.DETECT_STATUS.SUCCESS
+                          : model.detectStatus === constants.ASYNC_STATUS.SUCCESS
                             ? '可用'
-                            : model.detectStatus === constants.DETECT_STATUS.ERROR
+                            : model.detectStatus === constants.ASYNC_STATUS.ERROR
                               ? '不可用'
                               : '未检测'
                       }}
                     </span>
-                    <button @click="actions.detectChannelModel(index)" class="btn btn-inline btn-secondary text-sm" :disabled="model.detectStatus === constants.DETECT_STATUS.LOADING">
-                      {{ model.detectStatus === constants.DETECT_STATUS.LOADING ? '检测中...' : '检测' }}
+                    <button @click="actions.detectChannelModel(index)" class="btn btn-inline btn-secondary text-sm" :disabled="model.detectStatus === constants.ASYNC_STATUS.LOADING">
+                      {{ model.detectStatus === constants.ASYNC_STATUS.LOADING ? '检测中...' : '检测' }}
                     </button>
                     <button @click="actions.removeChannelModel(index)" class="btn btn-inline btn-ghost text-sm text-[var(--danger)]">移除</button>
                   </div>
                 </div>
-                <p v-if="model.detectMessage" class="mt-3 text-xs" :class="model.detectStatus === constants.DETECT_STATUS.ERROR ? 'text-[var(--danger)]' : 'text-[var(--text-soft)]'">
+                <p v-if="model.detectMessage" class="mt-3 text-xs" :class="model.detectStatus === constants.ASYNC_STATUS.ERROR ? 'text-[var(--danger)]' : 'text-[var(--text-soft)]'">
                   {{ model.detectMessage }}
                 </p>
 
@@ -1202,7 +1220,17 @@
           </div>
 
           <div class="mt-6 grid gap-3 sm:grid-cols-3">
-            <button @click="state.channelForm.id ? actions.updateChannel() : actions.createChannel()" class="btn btn-primary sm:col-span-2">{{ state.channelForm.id ? '保存更新' : '创建渠道' }}</button>
+            <button
+              @click="state.channelForm.id ? actions.updateChannel() : actions.createChannel()"
+              :disabled="state.channelForm.id ? actions.isAsyncTaskLoading(constants.ASYNC_TASKS.UPDATE_CHANNEL) : actions.isAsyncTaskLoading(constants.ASYNC_TASKS.CREATE_CHANNEL)"
+              class="btn btn-primary sm:col-span-2"
+            >
+              {{
+                state.channelForm.id
+                  ? (actions.isAsyncTaskLoading(constants.ASYNC_TASKS.UPDATE_CHANNEL) ? '更新中...' : '保存更新')
+                  : (actions.isAsyncTaskLoading(constants.ASYNC_TASKS.CREATE_CHANNEL) ? '创建中...' : '创建渠道')
+              }}
+            </button>
             <button @click="actions.resetChannelForm" class="btn btn-secondary">重置</button>
           </div>
         </div>
@@ -1314,8 +1342,12 @@
           </div>
 
           <div class="mt-6 grid gap-3 sm:grid-cols-3">
-            <button @click="actions.updateModel" class="btn btn-primary">保存模型</button>
-            <button @click="actions.deleteModelFromDrawer" class="btn btn-ghost text-[var(--danger)]">删除模型</button>
+            <button @click="actions.updateModel" :disabled="actions.isAsyncTaskLoading(constants.ASYNC_TASKS.UPDATE_MODEL)" class="btn btn-primary">
+              {{ actions.isAsyncTaskLoading(constants.ASYNC_TASKS.UPDATE_MODEL) ? '保存中...' : '保存模型' }}
+            </button>
+            <button @click="actions.deleteModelFromDrawer" :disabled="actions.isAsyncTaskLoading(constants.ASYNC_TASKS.DELETE_MODEL)" class="btn btn-ghost text-[var(--danger)]">
+              {{ actions.isAsyncTaskLoading(constants.ASYNC_TASKS.DELETE_MODEL) ? '删除中...' : '删除模型' }}
+            </button>
             <button @click="actions.resetModelForm" class="btn btn-secondary">重置</button>
           </div>
         </div>
@@ -1411,11 +1443,23 @@
           system: 'toastify-gateway-system',
           default: 'toastify-gateway-default',
         },
-        DETECT_STATUS: {
+        ASYNC_STATUS: {
           IDLE: 'idle',
           LOADING: 'loading',
           SUCCESS: 'success',
           ERROR: 'error',
+        },
+        ASYNC_TASKS: {
+          LOGIN: 'login',
+          LOAD_STATUS: 'loadStatus',
+          LOAD_CHANNELS: 'loadChannels',
+          LOAD_LOGS: 'loadLogs',
+          FETCH_CHANNEL_MODELS: 'fetchChannelModels',
+          CREATE_CHANNEL: 'createChannel',
+          UPDATE_CHANNEL: 'updateChannel',
+          DELETE_CHANNEL: 'deleteChannel',
+          UPDATE_MODEL: 'updateModel',
+          DELETE_MODEL: 'deleteModel',
         },
         MODEL_SYNC_SCOPE: {
           SINGLE: 'single',
@@ -1491,7 +1535,7 @@
             outputPrice: '0',
             weight: 1,
             headersRaw: constants.EMPTY_OBJECT_JSON,
-            detectStatus: constants.DETECT_STATUS.IDLE,
+            detectStatus: constants.ASYNC_STATUS.IDLE,
             detectMessage: '',
           });
 
@@ -1571,6 +1615,16 @@
               total: 0,
               totalPages: 1,
             },
+            asyncTaskState: {},
+          });
+
+          const createAsyncTaskState = () => ({
+            status: constants.ASYNC_STATUS.IDLE,
+            message: '',
+          });
+
+          Object.values(constants.ASYNC_TASKS).forEach((taskKey) => {
+            state.asyncTaskState[taskKey] = createAsyncTaskState();
           });
 
           const createDebouncedTask = (task, delayMs) => {
@@ -1630,7 +1684,7 @@
               outputPrice: model.outputPrice ?? model.output_price ?? '0',
               weight: model.weight ?? 1,
               headersRaw: JSON.stringify(model.headers || {}, null, 2),
-              detectStatus: constants.DETECT_STATUS.IDLE,
+              detectStatus: constants.ASYNC_STATUS.IDLE,
               detectMessage: '',
             }));
           };
@@ -1856,6 +1910,36 @@
             setNotice: (message, modeOrOptions = constants.NOTICE_MODE.DEFAULT) => {
               showToast(message, modeOrOptions);
             },
+            setAsyncTaskState: (taskKey, status, message = '') => {
+              if (!taskKey) return;
+              if (!state.asyncTaskState[taskKey]) {
+                state.asyncTaskState[taskKey] = createAsyncTaskState();
+              }
+              state.asyncTaskState[taskKey].status = status;
+              state.asyncTaskState[taskKey].message = String(message || '');
+            },
+            isAsyncTaskLoading: (taskKey) => state.asyncTaskState[taskKey]?.status === constants.ASYNC_STATUS.LOADING,
+            getAsyncTaskStatus: (taskKey) => state.asyncTaskState[taskKey]?.status || constants.ASYNC_STATUS.IDLE,
+            runAsyncTask: async (taskKey, task, options = {}) => {
+              const loadingMessage = String(options.loadingMessage || '').trim();
+              const successMessage = String(options.successMessage || '').trim();
+              const errorPrefix = String(options.errorPrefix || '').trim();
+              const notifyOnError = options.notifyOnError !== false;
+              actions.setAsyncTaskState(taskKey, constants.ASYNC_STATUS.LOADING, loadingMessage);
+              try {
+                const result = await task();
+                actions.setAsyncTaskState(taskKey, constants.ASYNC_STATUS.SUCCESS, successMessage);
+                return result;
+              } catch (error) {
+                const message = error?.message || '请求失败';
+                const finalMessage = errorPrefix ? `${errorPrefix}: ${message}` : message;
+                actions.setAsyncTaskState(taskKey, constants.ASYNC_STATUS.ERROR, finalMessage);
+                if (notifyOnError) {
+                  actions.setNotice(finalMessage, constants.NOTICE_MODE.ERROR);
+                }
+                throw error;
+              }
+            },
             syncNameByCode: (target) => {
               if (!target) return;
               target.name = formatModelNameFromCode(target.code);
@@ -2073,12 +2157,26 @@
                 state.error = '请输入密钥';
                 return;
               }
-              localStorage.setItem(constants.STORAGE_KEY, state.token);
-              state.ready = true;
-              await actions.loadStatus();
-              await actions.loadChannels();
-              await actions.loadLogs();
-              actions.setNotice('已加载状态、渠道和日志数据', constants.NOTICE_MODE.SYSTEM);
+              try {
+                await actions.runAsyncTask(
+                  constants.ASYNC_TASKS.LOGIN,
+                  async () => {
+                    localStorage.setItem(constants.STORAGE_KEY, state.token);
+                    state.ready = true;
+                    await actions.loadStatus();
+                    await actions.loadChannels();
+                    await actions.loadLogs();
+                  },
+                  {
+                    loadingMessage: '正在登录并加载数据',
+                    successMessage: '登录成功',
+                    errorPrefix: '登录失败',
+                  },
+                );
+                actions.setNotice('已加载状态、渠道和日志数据', constants.NOTICE_MODE.SYSTEM);
+              } catch (error) {
+                state.ready = false;
+              }
             },
             logout: () => {
               localStorage.removeItem(constants.STORAGE_KEY);
@@ -2142,34 +2240,43 @@
             },
             fetchChannelModels: async () => {
               try {
-                if (!state.channelForm.apiKey) {
-                  throw new Error('请先填写 API Key');
-                }
-                const res = await apiRequest(constants.API.CHANNEL_MODELS, {
-                  method: constants.METHODS.POST,
-                  body: {
-                    provider: state.channelForm.provider,
-                    apiKey: state.channelForm.apiKey,
-                    baseURL: state.channelForm.baseURL,
+                await actions.runAsyncTask(
+                  constants.ASYNC_TASKS.FETCH_CHANNEL_MODELS,
+                  async () => {
+                    if (!state.channelForm.apiKey) {
+                      throw new Error('请先填写 API Key');
+                    }
+                    const res = await apiRequest(constants.API.CHANNEL_MODELS, {
+                      method: constants.METHODS.POST,
+                      body: {
+                        provider: state.channelForm.provider,
+                        apiKey: state.channelForm.apiKey,
+                        baseURL: state.channelForm.baseURL,
+                      },
+                    });
+                    if (res.status === 200 && res.data?.success) {
+                      const discoveredModels = (res.data.data || []).map((item) => ({
+                        ...createEmptyChannelModel(),
+                        code: item.id || '',
+                        name: formatModelNameFromCode(item.id),
+                        desc: '',
+                      }));
+                      const mergedResult = mergeChannelModelsByCode(state.channelForm.models, discoveredModels);
+                      state.channelForm.models = mergedResult.models;
+                      syncChannelModelsRaw();
+                      const summary = `已获取 ${discoveredModels.length} 个模型，新增 ${mergedResult.appendedCount} 个，跳过 ${mergedResult.skippedCount} 个`;
+                      actions.setAsyncTaskState(constants.ASYNC_TASKS.FETCH_CHANNEL_MODELS, constants.ASYNC_STATUS.SUCCESS, summary);
+                      actions.setNotice(summary, constants.NOTICE_MODE.LOG);
+                      return;
+                    }
+                    throw new Error(res.data?.error || '获取模型失败');
                   },
-                });
-                if (res.status === 200 && res.data?.success) {
-                  const discoveredModels = (res.data.data || []).map((item) => ({
-                    ...createEmptyChannelModel(),
-                    code: item.id || '',
-                    name: formatModelNameFromCode(item.id),
-                    desc: '',
-                  }));
-                  const mergedResult = mergeChannelModelsByCode(state.channelForm.models, discoveredModels);
-                  state.channelForm.models = mergedResult.models;
-                  syncChannelModelsRaw();
-                  actions.setNotice(`已获取 ${discoveredModels.length} 个模型，新增 ${mergedResult.appendedCount} 个，跳过 ${mergedResult.skippedCount} 个`, constants.NOTICE_MODE.LOG);
-                } else {
-                  throw new Error(res.data?.error || '获取模型失败');
-                }
-              } catch (error) {
-                actions.setNotice(`获取模型失败: ${error.message}`, constants.NOTICE_MODE.ERROR);
-              }
+                  {
+                    loadingMessage: '正在获取渠道模型',
+                    errorPrefix: '获取模型失败',
+                  },
+                );
+              } catch (error) {}
             },
             detectChannelModel: async (index) => {
               try {
@@ -2180,7 +2287,7 @@
                 if (!state.channelForm.apiKey) {
                   throw new Error('请先填写 API Key');
                 }
-                actions.setChannelModelDetectState(index, constants.DETECT_STATUS.LOADING, '检测中...');
+                actions.setChannelModelDetectState(index, constants.ASYNC_STATUS.LOADING, '检测中...');
                 const res = await apiRequest(constants.API.MODEL_CHECK, {
                   method: constants.METHODS.POST,
                   body: {
@@ -2195,17 +2302,17 @@
                 if (res.status === 200 && res.data?.success) {
                   const result = res.data.data;
                   if (result.api_accessible && result.data_available) {
-                    actions.setChannelModelDetectState(index, constants.DETECT_STATUS.SUCCESS, `可用 (${result.latency_ms}ms)`);
+                    actions.setChannelModelDetectState(index, constants.ASYNC_STATUS.SUCCESS, `可用 (${result.latency_ms}ms)`);
                   } else if (result.api_accessible) {
-                    actions.setChannelModelDetectState(index, constants.DETECT_STATUS.ERROR, result.error_message || '无有效数据');
+                    actions.setChannelModelDetectState(index, constants.ASYNC_STATUS.ERROR, result.error_message || '无有效数据');
                   } else {
-                    actions.setChannelModelDetectState(index, constants.DETECT_STATUS.ERROR, result.error_message || 'API 不可访问');
+                    actions.setChannelModelDetectState(index, constants.ASYNC_STATUS.ERROR, result.error_message || 'API 不可访问');
                   }
                 } else {
                   throw new Error(res.data?.error || '检测失败');
                 }
               } catch (error) {
-                actions.setChannelModelDetectState(index, constants.DETECT_STATUS.ERROR, error.message);
+                actions.setChannelModelDetectState(index, constants.ASYNC_STATUS.ERROR, error.message);
               }
             },
             addModelAlias: () => {
@@ -2221,104 +2328,140 @@
               actions.removeTokenFromList(state.modelForm, 'capabilities', index);
             },
             loadStatus: async () => {
-              const res = await apiRequest(constants.API.STATUS, { auth: false });
-              state.statusModels = res.data?.models || [];
-              state.statusOverview = state.statusModels.reduce(
-                (acc, model) => {
-                  const requestCount = Number(model?.request_count ?? 0);
-                  const totalCost = Number(model?.total_cost ?? 0);
-                  const inputUsage = Number(model?.input_usage ?? 0);
-                  const outputUsage = Number(model?.outpu_usage ?? 0);
-                  if (Number.isFinite(requestCount) && requestCount > 0) {
-                    acc.totalRequestCount += Math.round(requestCount);
-                  }
-                  if (Number.isFinite(totalCost) && totalCost > 0) {
-                    acc.totalCost += Math.round(totalCost);
-                  }
-                  if (Number.isFinite(inputUsage) && inputUsage > 0) {
-                    acc.totalInputUsage += Math.round(inputUsage);
-                  }
-                  if (Number.isFinite(outputUsage) && outputUsage > 0) {
-                    acc.totalOutputUsage += Math.round(outputUsage);
-                  }
-                  acc.totalUsage = acc.totalInputUsage + acc.totalOutputUsage;
-                  return acc;
+              return actions.runAsyncTask(
+                constants.ASYNC_TASKS.LOAD_STATUS,
+                async () => {
+                  const res = await apiRequest(constants.API.STATUS, { auth: false });
+                  state.statusModels = res.data?.models || [];
+                  state.statusOverview = state.statusModels.reduce(
+                    (acc, model) => {
+                      const requestCount = Number(model?.request_count ?? 0);
+                      const totalCost = Number(model?.total_cost ?? 0);
+                      const inputUsage = Number(model?.input_usage ?? 0);
+                      const outputUsage = Number(model?.outpu_usage ?? 0);
+                      if (Number.isFinite(requestCount) && requestCount > 0) {
+                        acc.totalRequestCount += Math.round(requestCount);
+                      }
+                      if (Number.isFinite(totalCost) && totalCost > 0) {
+                        acc.totalCost += Math.round(totalCost);
+                      }
+                      if (Number.isFinite(inputUsage) && inputUsage > 0) {
+                        acc.totalInputUsage += Math.round(inputUsage);
+                      }
+                      if (Number.isFinite(outputUsage) && outputUsage > 0) {
+                        acc.totalOutputUsage += Math.round(outputUsage);
+                      }
+                      acc.totalUsage = acc.totalInputUsage + acc.totalOutputUsage;
+                      return acc;
+                    },
+                    { totalRequestCount: 0, totalCost: 0, totalInputUsage: 0, totalOutputUsage: 0, totalUsage: 0 },
+                  );
                 },
-                { totalRequestCount: 0, totalCost: 0, totalInputUsage: 0, totalOutputUsage: 0, totalUsage: 0 },
+                {
+                  loadingMessage: '正在加载状态',
+                  successMessage: '状态加载完成',
+                  errorPrefix: '加载状态失败',
+                },
               );
             },
             loadChannels: async () => {
-              const res = await apiRequest(`${constants.API.CHANNELS}?page=${constants.DEFAULT_PAGE}&limit=${constants.DEFAULT_LIMIT}`);
-              state.channels = res.data?.data || [];
-              state.modelGroups = actions.buildModelGroups(state.channels);
-              actions.syncModelListCallTypes();
+              return actions.runAsyncTask(
+                constants.ASYNC_TASKS.LOAD_CHANNELS,
+                async () => {
+                  const res = await apiRequest(`${constants.API.CHANNELS}?page=${constants.DEFAULT_PAGE}&limit=${constants.DEFAULT_LIMIT}`);
+                  state.channels = res.data?.data || [];
+                  state.modelGroups = actions.buildModelGroups(state.channels);
+                  actions.syncModelListCallTypes();
+                },
+                {
+                  loadingMessage: '正在加载渠道',
+                  successMessage: '渠道加载完成',
+                  errorPrefix: '加载渠道失败',
+                },
+              );
             },
             createChannel: async () => {
               try {
-                syncChannelModelsRaw();
-                const models = parseJsonInput(state.channelForm.modelsRaw, constants.EMPTY_ARRAY_JSON, '渠道模型配置');
-                const res = await apiRequest(constants.API.CHANNEL, {
-                  method: constants.METHODS.POST,
-                  body: {
-                    name: state.channelForm.name,
-                    key: state.channelForm.key,
-                    provider: state.channelForm.provider,
-                    apiKey: state.channelForm.apiKey,
-                    baseURL: state.channelForm.baseURL,
-                    weight: Number(state.channelForm.weight || 0),
-                    models,
+                await actions.runAsyncTask(
+                  constants.ASYNC_TASKS.CREATE_CHANNEL,
+                  async () => {
+                    syncChannelModelsRaw();
+                    const models = parseJsonInput(state.channelForm.modelsRaw, constants.EMPTY_ARRAY_JSON, '渠道模型配置');
+                    const res = await apiRequest(constants.API.CHANNEL, {
+                      method: constants.METHODS.POST,
+                      body: {
+                        name: state.channelForm.name,
+                        key: state.channelForm.key,
+                        provider: state.channelForm.provider,
+                        apiKey: state.channelForm.apiKey,
+                        baseURL: state.channelForm.baseURL,
+                        weight: Number(state.channelForm.weight || 0),
+                        models,
+                      },
+                    });
+                    if (res.status === 201) {
+                      await actions.loadChannels();
+                      actions.setNotice('渠道已创建', constants.NOTICE_MODE.SUCCESS);
+                      actions.resetChannelForm();
+                      state.channelDrawerOpen = false;
+                      return;
+                    }
+                    throw new Error(res.data?.error || '渠道创建失败');
                   },
-                });
-                if (res.status === 201) {
-                  await actions.loadChannels();
-                  actions.setNotice('渠道已创建', constants.NOTICE_MODE.SUCCESS);
-                  actions.resetChannelForm();
-                  state.channelDrawerOpen = false;
-                } else {
-                  actions.setNotice(res.data?.error || '渠道创建失败', constants.NOTICE_MODE.ERROR);
-                }
-              } catch (error) {
-                actions.setNotice(error.message, constants.NOTICE_MODE.ERROR);
-              }
+                  {
+                    loadingMessage: '正在创建渠道',
+                    successMessage: '渠道创建成功',
+                    errorPrefix: '渠道创建失败',
+                  },
+                );
+              } catch (error) {}
             },
             updateChannel: async () => {
               if (!state.channelForm.id) return;
               try {
-                syncChannelModelsRaw();
-                const models = parseJsonInput(state.channelForm.modelsRaw, constants.EMPTY_ARRAY_JSON, '渠道模型配置');
-                const deletedModelIds = collectDeletedModelIds(state.channelModelIdsSnapshot, models);
-                const res = await apiRequest(`${constants.API.CHANNEL}/${state.channelForm.id}`, {
-                  method: constants.METHODS.PUT,
-                  body: {
-                    name: state.channelForm.name,
-                    key: state.channelForm.key,
-                    provider: state.channelForm.provider,
-                    apiKey: state.channelForm.apiKey,
-                    baseURL: state.channelForm.baseURL,
-                    weight: Number(state.channelForm.weight || 0),
-                    models,
-                    deletedModelIds,
+                await actions.runAsyncTask(
+                  constants.ASYNC_TASKS.UPDATE_CHANNEL,
+                  async () => {
+                    syncChannelModelsRaw();
+                    const models = parseJsonInput(state.channelForm.modelsRaw, constants.EMPTY_ARRAY_JSON, '渠道模型配置');
+                    const deletedModelIds = collectDeletedModelIds(state.channelModelIdsSnapshot, models);
+                    const res = await apiRequest(`${constants.API.CHANNEL}/${state.channelForm.id}`, {
+                      method: constants.METHODS.PUT,
+                      body: {
+                        name: state.channelForm.name,
+                        key: state.channelForm.key,
+                        provider: state.channelForm.provider,
+                        apiKey: state.channelForm.apiKey,
+                        baseURL: state.channelForm.baseURL,
+                        weight: Number(state.channelForm.weight || 0),
+                        models,
+                        deletedModelIds,
+                      },
+                    });
+                    if (res.status === 200) {
+                      await actions.loadChannels();
+                      const skippedCount = Array.isArray(res.data?.model_changes?.skipped) ? res.data.model_changes.skipped.length : 0;
+                      const deleteSkippedCount = Array.isArray(res.data?.model_changes?.delete_skipped) ? res.data.model_changes.delete_skipped.length : 0;
+                      const updatedCount = Number(res.data?.model_changes?.updated_count ?? 0);
+                      const createdCount = Number(res.data?.model_changes?.created_count ?? 0);
+                      const deletedCount = Number(res.data?.model_changes?.deleted_count ?? 0);
+                      const totalSkipped = skippedCount + deleteSkippedCount;
+                      const summary = totalSkipped > 0
+                        ? `渠道已更新。模型变更：更新 ${updatedCount}，新增 ${createdCount}，删除 ${deletedCount}，跳过 ${totalSkipped}`
+                        : `渠道已更新。模型变更：更新 ${updatedCount}，新增 ${createdCount}，删除 ${deletedCount}`;
+                      actions.setAsyncTaskState(constants.ASYNC_TASKS.UPDATE_CHANNEL, constants.ASYNC_STATUS.SUCCESS, summary);
+                      actions.setNotice(summary, constants.NOTICE_MODE.SUCCESS);
+                      state.channelDrawerOpen = false;
+                      return;
+                    }
+                    throw new Error(res.data?.error || '渠道更新失败');
                   },
-                });
-                if (res.status === 200) {
-                  await actions.loadChannels();
-                  const skippedCount = Array.isArray(res.data?.model_changes?.skipped) ? res.data.model_changes.skipped.length : 0;
-                  const deleteSkippedCount = Array.isArray(res.data?.model_changes?.delete_skipped) ? res.data.model_changes.delete_skipped.length : 0;
-                  const updatedCount = Number(res.data?.model_changes?.updated_count ?? 0);
-                  const createdCount = Number(res.data?.model_changes?.created_count ?? 0);
-                  const deletedCount = Number(res.data?.model_changes?.deleted_count ?? 0);
-                  const totalSkipped = skippedCount + deleteSkippedCount;
-                  const summary = totalSkipped > 0
-                    ? `渠道已更新。模型变更：更新 ${updatedCount}，新增 ${createdCount}，删除 ${deletedCount}，跳过 ${totalSkipped}`
-                    : `渠道已更新。模型变更：更新 ${updatedCount}，新增 ${createdCount}，删除 ${deletedCount}`;
-                  actions.setNotice(summary, constants.NOTICE_MODE.SUCCESS);
-                  state.channelDrawerOpen = false;
-                } else {
-                  actions.setNotice(res.data?.error || '渠道更新失败', constants.NOTICE_MODE.ERROR);
-                }
-              } catch (error) {
-                actions.setNotice(error.message, constants.NOTICE_MODE.ERROR);
-              }
+                  {
+                    loadingMessage: '正在更新渠道',
+                    errorPrefix: '渠道更新失败',
+                  },
+                );
+              } catch (error) {}
             },
             editChannel: (channel) => {
               const modelsRaw = JSON.stringify(
@@ -2355,9 +2498,21 @@
               state.channelDrawerOpen = true;
             },
             deleteChannel: async (id) => {
-              await apiRequest(`${constants.API.CHANNEL}/${id}`, { method: constants.METHODS.DELETE });
-              await actions.loadChannels();
-              actions.setNotice('渠道已删除', constants.NOTICE_MODE.SUCCESS);
+              try {
+                await actions.runAsyncTask(
+                  constants.ASYNC_TASKS.DELETE_CHANNEL,
+                  async () => {
+                    await apiRequest(`${constants.API.CHANNEL}/${id}`, { method: constants.METHODS.DELETE });
+                    await actions.loadChannels();
+                    actions.setNotice('渠道已删除', constants.NOTICE_MODE.SUCCESS);
+                  },
+                  {
+                    loadingMessage: '正在删除渠道',
+                    successMessage: '渠道删除成功',
+                    errorPrefix: '渠道删除失败',
+                  },
+                );
+              } catch (error) {}
             },
             buildModelFormFromRecord: (model, syncScope, scopeChannelId) => {
               const code = model.code || '';
@@ -2405,46 +2560,64 @@
             updateModel: async () => {
               if (!state.modelForm.id) return;
               try {
-                const aliases = createUniqueList(state.modelForm.aliases);
-                const capabilities = createUniqueList(state.modelForm.capabilities);
-                const headers = parseJsonInput(state.modelForm.headersRaw, constants.EMPTY_OBJECT_JSON, '模型请求头');
-                const targetPath = actions.getModelSyncApiPath(
-                  state.modelForm.id,
-                  state.modelForm.syncScope,
-                  state.modelForm.scopeChannelId,
-                );
-                const res = await apiRequest(targetPath, {
-                  method: constants.METHODS.PUT,
-                  body: {
-                    name: state.modelForm.name,
-                    code: state.modelForm.code,
-                    desc: state.modelForm.desc,
-                    weight: state.modelForm.weight,
-                    status: state.modelForm.status,
-                    callType: state.modelForm.callType,
-                    inputPrice: state.modelForm.inputPrice,
-                    outputPrice: state.modelForm.outputPrice,
-                    aliases,
-                    capabilities,
-                    headers,
+                await actions.runAsyncTask(
+                  constants.ASYNC_TASKS.UPDATE_MODEL,
+                  async () => {
+                    const aliases = createUniqueList(state.modelForm.aliases);
+                    const capabilities = createUniqueList(state.modelForm.capabilities);
+                    const headers = parseJsonInput(state.modelForm.headersRaw, constants.EMPTY_OBJECT_JSON, '模型请求头');
+                    const targetPath = actions.getModelSyncApiPath(
+                      state.modelForm.id,
+                      state.modelForm.syncScope,
+                      state.modelForm.scopeChannelId,
+                    );
+                    const res = await apiRequest(targetPath, {
+                      method: constants.METHODS.PUT,
+                      body: {
+                        name: state.modelForm.name,
+                        code: state.modelForm.code,
+                        desc: state.modelForm.desc,
+                        weight: state.modelForm.weight,
+                        status: state.modelForm.status,
+                        callType: state.modelForm.callType,
+                        inputPrice: state.modelForm.inputPrice,
+                        outputPrice: state.modelForm.outputPrice,
+                        aliases,
+                        capabilities,
+                        headers,
+                      },
+                    });
+                    if (res.status === 200) {
+                      await actions.loadChannels();
+                      actions.setNotice(`模型已更新（影响 ${res.data?.affected?.count ?? 1} 条）`, constants.NOTICE_MODE.SUCCESS);
+                      state.modelDrawerOpen = false;
+                      return;
+                    }
+                    throw new Error(res.data?.error || '模型更新失败');
                   },
-                });
-                if (res.status === 200) {
-                  await actions.loadChannels();
-                  actions.setNotice(`模型已更新（影响 ${res.data?.affected?.count ?? 1} 条）`, constants.NOTICE_MODE.SUCCESS);
-                  state.modelDrawerOpen = false;
-                } else {
-                  actions.setNotice(res.data?.error || '模型更新失败', constants.NOTICE_MODE.ERROR);
-                }
-              } catch (error) {
-                actions.setNotice(error.message, constants.NOTICE_MODE.ERROR);
-              }
+                  {
+                    loadingMessage: '正在更新模型',
+                    successMessage: '模型更新成功',
+                    errorPrefix: '模型更新失败',
+                  },
+                );
+              } catch (error) {}
             },
             deleteModel: async (modelId, syncScope = constants.MODEL_SYNC_SCOPE.SINGLE, scopeChannelId = '') => {
-              const targetPath = actions.getModelSyncApiPath(modelId, syncScope, scopeChannelId);
-              await apiRequest(targetPath, { method: constants.METHODS.DELETE });
-              await actions.loadChannels();
-              actions.setNotice('模型已删除', constants.NOTICE_MODE.SUCCESS);
+              await actions.runAsyncTask(
+                constants.ASYNC_TASKS.DELETE_MODEL,
+                async () => {
+                  const targetPath = actions.getModelSyncApiPath(modelId, syncScope, scopeChannelId);
+                  await apiRequest(targetPath, { method: constants.METHODS.DELETE });
+                  await actions.loadChannels();
+                  actions.setNotice('模型已删除', constants.NOTICE_MODE.SUCCESS);
+                },
+                {
+                  loadingMessage: '正在删除模型',
+                  successMessage: '模型删除成功',
+                  errorPrefix: '模型删除失败',
+                },
+              );
             },
             deleteModelFromDrawer: async () => {
               if (!state.modelForm.id) return;
@@ -2454,22 +2627,32 @@
               state.modelDrawerOpen = false;
             },
             loadLogs: async (options = {}) => {
-              const nextPage = Number(options.page ?? state.logPagination.page);
-              const nextLimit = Number(options.limit ?? state.logPagination.limit);
-              const page = Number.isFinite(nextPage) && nextPage > 0 ? nextPage : Number(constants.DEFAULT_PAGE);
-              const limit = Number.isFinite(nextLimit) && nextLimit > 0 ? nextLimit : Number(constants.DEFAULT_LIMIT);
-              const params = new URLSearchParams({ page: String(page), limit: String(limit) });
-              Object.entries(constants.LOG_FILTER_QUERY_KEYS).forEach(([filterKey, queryKey]) => {
-                const value = String(state.logFilters[filterKey] || '').trim();
-                if (value) params.set(queryKey, value);
-              });
-              const res = await apiRequest(`${constants.API.LOG}?${params.toString()}`);
-              state.logs = res.data?.data || [];
-              state.logPagination.page = Number(res.data?.page || page);
-              state.logPagination.limit = Number(res.data?.limit || limit);
-              state.logPagination.total = Number(res.data?.total || 0);
-              state.logPagination.totalPages = Number(res.data?.total_pages || 1);
-              state.expandedLogId = '';
+              return actions.runAsyncTask(
+                constants.ASYNC_TASKS.LOAD_LOGS,
+                async () => {
+                  const nextPage = Number(options.page ?? state.logPagination.page);
+                  const nextLimit = Number(options.limit ?? state.logPagination.limit);
+                  const page = Number.isFinite(nextPage) && nextPage > 0 ? nextPage : Number(constants.DEFAULT_PAGE);
+                  const limit = Number.isFinite(nextLimit) && nextLimit > 0 ? nextLimit : Number(constants.DEFAULT_LIMIT);
+                  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+                  Object.entries(constants.LOG_FILTER_QUERY_KEYS).forEach(([filterKey, queryKey]) => {
+                    const value = String(state.logFilters[filterKey] || '').trim();
+                    if (value) params.set(queryKey, value);
+                  });
+                  const res = await apiRequest(`${constants.API.LOG}?${params.toString()}`);
+                  state.logs = res.data?.data || [];
+                  state.logPagination.page = Number(res.data?.page || page);
+                  state.logPagination.limit = Number(res.data?.limit || limit);
+                  state.logPagination.total = Number(res.data?.total || 0);
+                  state.logPagination.totalPages = Number(res.data?.total_pages || 1);
+                  state.expandedLogId = '';
+                },
+                {
+                  loadingMessage: '正在加载日志',
+                  successMessage: '日志加载完成',
+                  errorPrefix: '加载日志失败',
+                },
+              );
             },
             searchLogs: async () => {
               await actions.loadLogs({ page: 1 });
