@@ -7,10 +7,14 @@
     <title>Open AI Gateway 管理台</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet" />
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" media="print" onload="this.media='all'">
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap"></noscript>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap" media="print" onload="this.media='all'">
+    <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&display=swap"></noscript>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script type="text/javascript" src="https://unpkg.com/toastify-js@1.12.0/src/toastify.js"></script>
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/toastify-js@1.12.0/src/toastify.css">
     <style>
       :root {
         --bg: oklch(97.7% 0.015 95);
@@ -550,6 +554,43 @@
         animation: fadeUp 760ms cubic-bezier(0.22, 1, 0.36, 1) both;
       }
 
+      .toastify-gateway-default,
+      .toastify-gateway-log,
+      .toastify-gateway-info {
+        background: var(--accent-strong);
+        color: rgba(255, 248, 241, 0.98);
+        border-radius: 999px;
+        box-shadow: 0 16px 34px rgba(170, 92, 26, 0.24);
+      }
+
+      .toastify-gateway-success {
+        background: var(--success);
+        color: #f5fff8;
+        border-radius: 999px;
+        box-shadow: 0 16px 34px rgba(40, 120, 68, 0.24);
+      }
+
+      .toastify-gateway-error {
+        background: var(--danger);
+        color: #fff6f3;
+        border-radius: 999px;
+        box-shadow: 0 16px 34px rgba(160, 40, 24, 0.3);
+      }
+
+      .toastify-gateway-warning {
+        background: var(--accent);
+        color: #fff8ef;
+        border-radius: 999px;
+        box-shadow: 0 16px 34px rgba(172, 102, 28, 0.26);
+      }
+
+      .toastify-gateway-system {
+        background: var(--text);
+        color: #f8f5f1;
+        border-radius: 999px;
+        box-shadow: 0 16px 34px rgba(84, 68, 52, 0.22);
+      }
+
       @keyframes fadeUp {
         from {
           opacity: 0;
@@ -648,10 +689,6 @@
             </div>
           </div>
         </aside>
-
-        <div v-if="state.notice" class="fade-up mt-5 rounded-[1.5rem] border border-[rgba(214,140,79,0.18)] bg-[rgba(255,244,231,0.82)] px-4 py-3 text-sm text-[var(--accent-strong)] shadow-[0_14px_40px_rgba(140,88,31,0.08)] sm:px-5">
-          {{ state.notice }}
-        </div>
 
         <div class="mt-6 grid gap-6">
           <main class="min-w-0 space-y-6">
@@ -1353,6 +1390,27 @@
           IMAGE: '/img',
           SECOND: '/sec',
         },
+        NOTICE_DURATION_MS: 3000,
+        TOAST_POSITION: {
+          GRAVITY: 'top',
+          POSITION: 'right',
+        },
+        NOTICE_MODE: {
+          SUCCESS: 'success',
+          ERROR: 'error',
+          WARNING: 'warning',
+          LOG: 'log',
+          SYSTEM: 'system',
+          DEFAULT: 'default',
+        },
+        TOAST_THEME_BY_MODE: {
+          success: 'toastify-gateway-success',
+          error: 'toastify-gateway-error',
+          warning: 'toastify-gateway-warning',
+          log: 'toastify-gateway-log',
+          system: 'toastify-gateway-system',
+          default: 'toastify-gateway-default',
+        },
         DETECT_STATUS: {
           IDLE: 'idle',
           LOADING: 'loading',
@@ -1497,7 +1555,6 @@
               status: '',
               callTypes: [],
             },
-            notice: '',
             channelDrawerOpen: false,
             modelDrawerOpen: false,
             channelForm: createEmptyChannelForm(),
@@ -1640,6 +1697,47 @@
             return { status: res.status, data: text ? JSON.parse(text) : null };
           };
 
+          const normalizeNoticeOptions = (modeOrOptions) => {
+            if (typeof modeOrOptions === 'string') {
+              return {
+                mode: modeOrOptions,
+                duration: constants.NOTICE_DURATION_MS,
+                action: null,
+              };
+            }
+            const options = modeOrOptions && typeof modeOrOptions === 'object' ? modeOrOptions : {};
+            return {
+              mode: String(options.mode || constants.NOTICE_MODE.DEFAULT),
+              duration: Number(options.duration) > 0 ? Number(options.duration) : constants.NOTICE_DURATION_MS,
+              action: options.action && typeof options.action === 'object' ? options.action : null,
+            };
+          };
+
+          const showToast = (message, modeOrOptions = constants.NOTICE_MODE.DEFAULT) => {
+            const text = String(message || '').trim();
+            if (!text) return;
+            const normalizedOptions = normalizeNoticeOptions(modeOrOptions);
+            const className = constants.TOAST_THEME_BY_MODE[normalizedOptions.mode] || constants.TOAST_THEME_BY_MODE[constants.NOTICE_MODE.DEFAULT];
+            const actionLabel = String(normalizedOptions.action?.label || '').trim();
+            const actionHandler = normalizedOptions.action?.onClick;
+            const destination = normalizedOptions.action?.destination;
+            const close = normalizedOptions.action?.close !== false;
+            Toastify({
+              text,
+              duration: normalizedOptions.duration,
+              gravity: constants.TOAST_POSITION.GRAVITY,
+              position: constants.TOAST_POSITION.POSITION,
+              stopOnFocus: true,
+              close,
+              destination: typeof destination === 'string' && destination.trim() ? destination : undefined,
+              className,
+              onClick: typeof actionHandler === 'function'
+                ? () => actionHandler()
+                : undefined,
+              ...(actionLabel ? { ariaLabel: actionLabel } : {}),
+            }).showToast();
+          };
+
           const actions = {
             parseStoredJsonArray,
             formatQuantityDisplay: (rawValue) => {
@@ -1755,13 +1853,8 @@
                 '仅供参考，以实际扣费为准',
               ].join('\n');
             },
-            setNotice: (message) => {
-              state.notice = message;
-              window.setTimeout(() => {
-                if (state.notice === message) {
-                  state.notice = '';
-                }
-              }, 3000);
+            setNotice: (message, modeOrOptions = constants.NOTICE_MODE.DEFAULT) => {
+              showToast(message, modeOrOptions);
             },
             syncNameByCode: (target) => {
               if (!target) return;
@@ -1816,9 +1909,9 @@
               if (!text) return;
               try {
                 await navigator.clipboard.writeText(String(text));
-                actions.setNotice(`已复制：${text}`);
+                actions.setNotice(`已复制：${text}`, constants.NOTICE_MODE.SUCCESS);
               } catch (error) {
-                actions.setNotice('复制失败，请手动复制');
+                actions.setNotice('复制失败，请手动复制', constants.NOTICE_MODE.WARNING);
               }
             },
             buildModelGroups: (channels) => {
@@ -1985,7 +2078,7 @@
               await actions.loadStatus();
               await actions.loadChannels();
               await actions.loadLogs();
-              actions.setNotice('已加载状态、渠道和日志数据。');
+              actions.setNotice('已加载状态、渠道和日志数据', constants.NOTICE_MODE.SYSTEM);
             },
             logout: () => {
               localStorage.removeItem(constants.STORAGE_KEY);
@@ -2070,12 +2163,12 @@
                   const mergedResult = mergeChannelModelsByCode(state.channelForm.models, discoveredModels);
                   state.channelForm.models = mergedResult.models;
                   syncChannelModelsRaw();
-                  actions.setNotice(`已获取 ${discoveredModels.length} 个模型，新增 ${mergedResult.appendedCount} 个，跳过 ${mergedResult.skippedCount} 个。`);
+                  actions.setNotice(`已获取 ${discoveredModels.length} 个模型，新增 ${mergedResult.appendedCount} 个，跳过 ${mergedResult.skippedCount} 个`, constants.NOTICE_MODE.LOG);
                 } else {
                   throw new Error(res.data?.error || '获取模型失败');
                 }
               } catch (error) {
-                actions.setNotice(`获取模型失败: ${error.message}`);
+                actions.setNotice(`获取模型失败: ${error.message}`, constants.NOTICE_MODE.ERROR);
               }
             },
             detectChannelModel: async (index) => {
@@ -2178,14 +2271,14 @@
                 });
                 if (res.status === 201) {
                   await actions.loadChannels();
-                  actions.setNotice('渠道已创建。');
+                  actions.setNotice('渠道已创建', constants.NOTICE_MODE.SUCCESS);
                   actions.resetChannelForm();
                   state.channelDrawerOpen = false;
                 } else {
-                  actions.setNotice(res.data?.error || '渠道创建失败。');
+                  actions.setNotice(res.data?.error || '渠道创建失败', constants.NOTICE_MODE.ERROR);
                 }
               } catch (error) {
-                actions.setNotice(error.message);
+                actions.setNotice(error.message, constants.NOTICE_MODE.ERROR);
               }
             },
             updateChannel: async () => {
@@ -2216,15 +2309,15 @@
                   const deletedCount = Number(res.data?.model_changes?.deleted_count ?? 0);
                   const totalSkipped = skippedCount + deleteSkippedCount;
                   const summary = totalSkipped > 0
-                    ? `渠道已更新。模型变更：更新 ${updatedCount}，新增 ${createdCount}，删除 ${deletedCount}，跳过 ${totalSkipped}。`
-                    : `渠道已更新。模型变更：更新 ${updatedCount}，新增 ${createdCount}，删除 ${deletedCount}。`;
-                  actions.setNotice(summary);
+                    ? `渠道已更新。模型变更：更新 ${updatedCount}，新增 ${createdCount}，删除 ${deletedCount}，跳过 ${totalSkipped}`
+                    : `渠道已更新。模型变更：更新 ${updatedCount}，新增 ${createdCount}，删除 ${deletedCount}`;
+                  actions.setNotice(summary, constants.NOTICE_MODE.SUCCESS);
                   state.channelDrawerOpen = false;
                 } else {
-                  actions.setNotice(res.data?.error || '渠道更新失败。');
+                  actions.setNotice(res.data?.error || '渠道更新失败', constants.NOTICE_MODE.ERROR);
                 }
               } catch (error) {
-                actions.setNotice(error.message);
+                actions.setNotice(error.message, constants.NOTICE_MODE.ERROR);
               }
             },
             editChannel: (channel) => {
@@ -2260,12 +2353,11 @@
                 id: String(model.id || '').trim(),
               }));
               state.channelDrawerOpen = true;
-              actions.setNotice('渠道已载入。');
             },
             deleteChannel: async (id) => {
               await apiRequest(`${constants.API.CHANNEL}/${id}`, { method: constants.METHODS.DELETE });
               await actions.loadChannels();
-              actions.setNotice('渠道已删除。');
+              actions.setNotice('渠道已删除', constants.NOTICE_MODE.SUCCESS);
             },
             buildModelFormFromRecord: (model, syncScope, scopeChannelId) => {
               const code = model.code || '';
@@ -2294,12 +2386,11 @@
                 scopeChannelId,
               };
               state.modelDrawerOpen = true;
-              actions.setNotice('模型已载入。');
             },
             editModelGroup: (group) => {
               const baseModel = group?.channels?.[0];
               if (!baseModel) {
-                actions.setNotice('当前模型组无可编辑数据');
+                actions.setNotice('当前模型组无可编辑数据', constants.NOTICE_MODE.WARNING);
                 return;
               }
               actions.buildModelFormFromRecord(baseModel, constants.MODEL_SYNC_SCOPE.BY_CODE, '');
@@ -2340,20 +2431,20 @@
                 });
                 if (res.status === 200) {
                   await actions.loadChannels();
-                  actions.setNotice(`模型已更新（影响 ${res.data?.affected?.count ?? 1} 条）。`);
+                  actions.setNotice(`模型已更新（影响 ${res.data?.affected?.count ?? 1} 条）`, constants.NOTICE_MODE.SUCCESS);
                   state.modelDrawerOpen = false;
                 } else {
-                  actions.setNotice(res.data?.error || '模型更新失败。');
+                  actions.setNotice(res.data?.error || '模型更新失败', constants.NOTICE_MODE.ERROR);
                 }
               } catch (error) {
-                actions.setNotice(error.message);
+                actions.setNotice(error.message, constants.NOTICE_MODE.ERROR);
               }
             },
             deleteModel: async (modelId, syncScope = constants.MODEL_SYNC_SCOPE.SINGLE, scopeChannelId = '') => {
               const targetPath = actions.getModelSyncApiPath(modelId, syncScope, scopeChannelId);
               await apiRequest(targetPath, { method: constants.METHODS.DELETE });
               await actions.loadChannels();
-              actions.setNotice('模型已删除。');
+              actions.setNotice('模型已删除', constants.NOTICE_MODE.SUCCESS);
             },
             deleteModelFromDrawer: async () => {
               if (!state.modelForm.id) return;

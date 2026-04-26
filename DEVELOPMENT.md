@@ -1783,6 +1783,36 @@ data: [DONE]
    - `mix`→`混合`
 5. 所有金额、token、状态、时间格式化逻辑必须复用公共方法，避免在模板中重复拼接。
 
+#### 管理台通知（`public/index.html`）规范
+
+1. 通知组件：统一使用 `toastify-js`，禁止再使用页面内联 `notice` 横幅块。
+2. 调用入口：统一通过 `actions.setNotice(message, modeOrOptions)` 调用，禁止在各业务分支直接创建 Toast。
+3. 通知模式（常量化）：
+   - `constants.NOTICE_MODE.SUCCESS`
+   - `constants.NOTICE_MODE.ERROR`
+   - `constants.NOTICE_MODE.WARNING`
+   - `constants.NOTICE_MODE.LOG`
+   - `constants.NOTICE_MODE.SYSTEM`
+   - `constants.NOTICE_MODE.DEFAULT`
+4. 模式映射规则：
+   - `constants.TOAST_THEME_BY_MODE[mode] -> className`
+   - 未命中模式必须回退到 `DEFAULT`，禁止返回空样式。
+5. 默认配置（常量化）：
+   - 展示时长：`constants.NOTICE_DURATION_MS = 3000`
+   - 位置：`gravity='top'` + `position='right'`
+   - `stopOnFocus=true`
+6. 样式约束：
+   - `success`：积极反馈（类名：`toastify-gateway-success`）
+   - `error`：失败/错误（类名：`toastify-gateway-error`）
+   - `warning`：风险提醒（类名：`toastify-gateway-warning`）
+   - `log`：中性日志（类名：`toastify-gateway-log`）
+   - `system`：系统事件（类名：`toastify-gateway-system`）
+   - `default`：默认信息（类名：`toastify-gateway-default`）
+7. 撤销能力预留（本次仅预埋接口，不新增业务逻辑）：
+   - `setNotice` 支持可选对象参数：`{ mode, duration, action }`
+   - `action` 结构：`{ label: string, onClick: Function }`
+   - 当前版本仅保留参数与事件绑定入口，后续业务可注入具体“撤销”回调。
+
 #### POST /api/channel/models
 
 按连接参数获取上游模型列表，不依赖已保存渠道。通过调用上游 provider 的 `/v1/models` API 获取可用模型列表。
