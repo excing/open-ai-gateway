@@ -743,13 +743,16 @@ async function handleGetChannel(channelId: string, env: Env): Promise<Response>;
  * 更新渠道
  * 1. 用 UpdateChannelSchema 校验请求体
  * 2. 更新 channels 表对应字段
- * 3. 若 models 字段存在，删除旧模型，批量插入新模型
- * 4. 更新 updated_at 时间戳
+ * 3. 若 models 字段存在：
+ *    - 有 id 的模型按 id 更新（仅更新显式传入字段）
+ *    - 无 id 的模型新增
+ *    - 非法 id（不存在）跳过，并记录 skipped 原因
+ * 4. 更新 updated_at 时间戳并返回处理摘要
  *
  * @param channelId - URL 路径中的渠道 ID
  * @param request - Request 对象
  * @param env - 环境变量
- * @returns { success: true, data: ChannelWithModels }
+ * @returns { success: true, data: ChannelWithModels, model_changes: { updated_count: number, created_count: number, skipped: Array<{ id: string, reason: string }> } }
  * @throws 渠道不存在返回 404，校验失败返回 400
  */
 async function handleUpdateChannel(channelId: string, request: Request, env: Env): Promise<Response>;
@@ -811,7 +814,7 @@ async function handleDeleteModel(modelId: string, env: Env): Promise<Response>;
  * 规则：
  * - 默认 `sync_scope=single`：仅作用于 path 参数 modelId 对应记录
  * - `sync_scope=by_code`：作用于与当前模型 `code` 相同的所有记录
- * - `sync_scope=by_code&channel_id=...`：仅作用于同 code 且指定 channel_id 的记录
+ * - `channel_id` 在该函数内不参与 single 模式处理；仅在 by_code 时可用于限定范围
  *
  * @param request - Request 对象，读取 URL query
  * @returns { syncScope, channelId }
@@ -1624,6 +1627,31 @@ data: [DONE]
 }
 ```
 
+#### PUT /api/channel/{id}
+
+**请求体**：UpdateChannelSchema 字段（均可选），支持 `models` 增量更新
+
+**`models` 处理规则**：
+- 当 `models[i].id` 存在时：更新该模型（仅更新请求内显式传入字段）
+- 当 `models[i].id` 缺失时：创建新模型
+- 当 `models[i].id` 非法（模型不存在）时：跳过该项并记录原因
+- 未出现在 `models` 中的已存量模型保持不变，不会删除
+
+**响应** (200)：
+```json
+{
+    "success": true,
+    "data": { "id": "ch-001", "name": "Main Channel", "...": "...", "models": [] },
+    "model_changes": {
+        "updated_count": 2,
+        "created_count": 1,
+        "skipped": [
+            { "id": "m-not-exists", "reason": "model_not_found" }
+        ]
+    }
+}
+```
+
 #### 模型管理页（一级模型列表 + 二级渠道列表）展示规范
 
 1. 一级列表：按 `model.code` 聚合，显示“模型 code（可复制）”与聚合统计（渠道数、平均成功率、平均耗时）。
@@ -1642,8 +1670,8 @@ data: [DONE]
    - 模型权重
 3. 交互规则：
    - 点击别名标签：进入“别名聚合视图”，展示该别名命中的全部渠道模型。
-   - 编辑模型：必须提供作用域选择（同名全量同步 / 指定渠道更新 / 单条更新）。
-   - 删除模型：规则同编辑（支持同名全量删除与指定渠道删除）。
+   - 编辑模型：必须提供作用域选择（同名全量同步 / 单条更新）。
+   - 删除模型：规则同编辑（支持同名全量删除与单条删除）。
    - 排序规则固定（不提供排序选择控件）：
      - 一级模型分组固定按 `model.code` 升序（A-Z）。
      - 二级渠道行固定按 `channel_name` 升序（A-Z）。
@@ -1932,9 +1960,9 @@ sequenceDiagram
     participant DB as D1
 
     A->>UI: 在一级模型中点击“编辑”
-    UI->>A: 选择作用域（single/by_code/按渠道）
+    UI->>A: 选择作用域（single/by_code）
     A->>UI: 提交更新字段
-    UI->>GW: PUT /api/model/{id}?sync_scope=by_code&channel_id=ch-001
+    UI->>GW: PUT /api/model/{id}?sync_scope=by_code
     GW->>DB: 读取 id 对应模型(code)
     GW->>DB: UPDATE channel_models SET ... WHERE code=? [AND channel_id=?]
     DB-->>GW: 受影响行数

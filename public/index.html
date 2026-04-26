@@ -663,7 +663,7 @@
                     <span class="mt-3 block text-[var(--accent-strong)]">状态概览</span>
                   </h1>
                 </div>
-                <div class="fade-up-delay grid gap-3 grid-cols-2 sm:grid-cols-3">
+                <div class="fade-up-delay grid gap-3 grid-cols-1 sm:grid-cols-3">
                   <div class="stat-block">
                     <p class="text-xs uppercase tracking-[0.24em] text-[var(--text-soft)]">Channels</p>
                     <p class="mt-2 text-2xl font-semibold">{{ state.channels.length }}</p>
@@ -786,7 +786,7 @@
                     </div>
                     <div>
                       <p class="text-xs uppercase tracking-[0.18em] text-[var(--text-soft)]">Base URL</p>
-                      <p class="mt-2 truncate font-semibold">{{ channel.base_url || '-' }}</p>
+                      <p class="mt-2 truncate font-semibold max-w-[calc(100vw-110px)]">{{ channel.base_url || '-' }}</p>
                     </div>
                   </div>
                   <div v-if="channel.models?.length" class="mt-4 chip-group">
@@ -1360,7 +1360,6 @@
         MODEL_SYNC_SCOPE: {
           SINGLE: 'single',
           BY_CODE: 'by_code',
-          BY_CODE_CHANNEL: 'by_code_channel',
         },
         MODEL_STATUS_LABELS: {
           active: '可用',
@@ -1410,6 +1409,7 @@
 
           const createEmptyChannelModel = () => ({
             localId: crypto.randomUUID(),
+            id: '',
             code: '',
             name: '',
             isEditingName: false,
@@ -1521,6 +1521,7 @@
           const syncChannelModelsRaw = () => {
             state.channelForm.modelsRaw = JSON.stringify(
               state.channelForm.models.map((model) => ({
+                ...(model.id ? { id: model.id } : {}),
                 code: model.code,
                 name: model.name,
                 desc: model.desc,
@@ -1553,6 +1554,7 @@
                 };
               })(),
               localId: crypto.randomUUID(),
+              id: model.id || '',
               desc: model.desc || '',
               aliases: createUniqueList(model.aliases || []),
               aliasInput: '',
@@ -1934,9 +1936,6 @@
               const params = new URLSearchParams();
               if (syncScope === constants.MODEL_SYNC_SCOPE.BY_CODE) {
                 params.set('sync_scope', constants.MODEL_SYNC_SCOPE.BY_CODE);
-              } else if (syncScope === constants.MODEL_SYNC_SCOPE.BY_CODE_CHANNEL) {
-                params.set('sync_scope', constants.MODEL_SYNC_SCOPE.BY_CODE);
-                if (scopeChannelId) params.set('channel_id', scopeChannelId);
               }
               const query = params.toString();
               return `${constants.API.MODEL}/${modelId}${query ? `?${query}` : ''}`;
@@ -2183,7 +2182,13 @@
                 });
                 if (res.status === 200) {
                   await actions.loadChannels();
-                  actions.setNotice('渠道已更新。');
+                  const skippedCount = Array.isArray(res.data?.model_changes?.skipped) ? res.data.model_changes.skipped.length : 0;
+                  const updatedCount = Number(res.data?.model_changes?.updated_count ?? 0);
+                  const createdCount = Number(res.data?.model_changes?.created_count ?? 0);
+                  const summary = skippedCount > 0
+                    ? `渠道已更新。模型变更：更新 ${updatedCount}，新增 ${createdCount}，跳过 ${skippedCount}。`
+                    : `渠道已更新。模型变更：更新 ${updatedCount}，新增 ${createdCount}。`;
+                  actions.setNotice(summary);
                   state.channelDrawerOpen = false;
                 } else {
                   actions.setNotice(res.data?.error || '渠道更新失败。');
@@ -2197,6 +2202,7 @@
                 (channel.models || []).map((model) => ({
                   code: model.code,
                   name: model.name,
+                  id: model.id || '',
                   desc: model.desc,
                   aliases: parseStoredJsonArray(model.aliases),
                   callType: model.call_type,
@@ -2268,16 +2274,13 @@
             editModelByChannel: (model) => {
               actions.buildModelFormFromRecord(
                 model,
-                constants.MODEL_SYNC_SCOPE.BY_CODE_CHANNEL,
-                model.channel_id || '',
+                constants.MODEL_SYNC_SCOPE.SINGLE,
+                '',
               );
             },
             updateModel: async () => {
               if (!state.modelForm.id) return;
               try {
-                if (state.modelForm.syncScope === constants.MODEL_SYNC_SCOPE.BY_CODE_CHANNEL && !state.modelForm.scopeChannelId) {
-                  throw new Error('请选择指定渠道');
-                }
                 const aliases = createUniqueList(state.modelForm.aliases);
                 const capabilities = createUniqueList(state.modelForm.capabilities);
                 const headers = parseJsonInput(state.modelForm.headersRaw, constants.EMPTY_OBJECT_JSON, '模型请求头');
@@ -2321,10 +2324,6 @@
             },
             deleteModelFromDrawer: async () => {
               if (!state.modelForm.id) return;
-              if (state.modelForm.syncScope === constants.MODEL_SYNC_SCOPE.BY_CODE_CHANNEL && !state.modelForm.scopeChannelId) {
-                actions.setNotice('请选择指定渠道');
-                return;
-              }
               const syncScope = state.modelForm.syncScope;
               const scopeChannelId = state.modelForm.scopeChannelId;
               await actions.deleteModel(state.modelForm.id, syncScope, scopeChannelId);

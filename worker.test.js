@@ -410,7 +410,7 @@ describe('API: GET /api/channel/:id/models - 获取指定渠道上游的模型�
     const response = await app.handleRequest(request, mockEnv);
     const data = await response.json();
     
-    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(response.status, HTTP_STATUS.OK, JSON.stringify(data));
     assert.strictEqual(data.success, true);
     assert.ok(Array.isArray(data.data));
     assert.strictEqual(data.data.length, 3);
@@ -1414,6 +1414,181 @@ describe('API: 参数校验错误应返回具体原因', () => {
     assert.strictEqual(data.success, false);
     assert.ok(data.error.startsWith(`${ERROR_MESSAGES.INVALID_REQUEST_BODY}:`));
     assert.ok(data.error.includes('limit'));
+  });
+});
+
+describe('API: PUT /api/channel/:id - models 增量更新（有 id 更新、无 id 创建、非法 id 跳过）', () => {
+  let app;
+  let mockEnv;
+
+  beforeEach(() => {
+    app = createApp();
+    mockEnv = createMockEnv();
+    mockEnv._addChannel({
+      id: 'ch-main',
+      name: '主渠道',
+      key: 'main-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-main',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-25T00:00:00Z',
+      updated_at: '2026-04-25T00:00:00Z',
+    });
+    mockEnv._addModel({
+      id: 'm-existing',
+      channel_id: 'ch-main',
+      code: 'gpt-4o',
+      name: 'GPT-4o Old',
+      desc: 'old-desc',
+      aliases: '["gpt-4o-old"]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: '["chat"]',
+      input_price: '10/M',
+      output_price: '20/M',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 3,
+      avg_latency_ms: 321,
+      success_rate: 0.88,
+      error_rate: 0.12,
+      consecutive_failures: 2,
+      cooldown_until: null,
+      request_count: 42,
+      input_usage: 1000,
+      outpu_usage: 2000,
+      total_cost: 3000,
+      last_updated: '2026-04-25T00:00:00Z',
+      headers: '{"x-test":"1"}',
+    });
+    mockEnv._addModel({
+      id: 'm-untouched',
+      channel_id: 'ch-main',
+      code: 'gpt-4o-mini',
+      name: 'GPT-4o Mini',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: '["chat"]',
+      input_price: '0',
+      output_price: '0',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      request_count: 9,
+      input_usage: 90,
+      outpu_usage: 180,
+      total_cost: 270,
+      last_updated: '2026-04-25T00:00:00Z',
+      headers: '{}',
+    });
+  });
+
+  afterEach(() => {
+    mockEnv._clear();
+  });
+
+  it('应更新已有模型并保留统计字段，同时创建新模型且不删除未提交模型', async () => {
+    const request = createMockRequest({
+      method: 'PUT',
+      pathname: '/api/channel/ch-main',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        name: '主渠道-更新后',
+        models: [
+          {
+            id: 'm-existing',
+            code: 'gpt-4o',
+            name: 'GPT-4o New',
+            desc: 'new-desc',
+            aliases: ['gpt-4o-new'],
+            callType: CALL_TYPES.CHAT,
+            capabilities: [CALL_TYPES.CHAT],
+            inputPrice: '11/M',
+            outputPrice: '21/M',
+            weight: 5,
+            headers: { 'x-test': '2' },
+          },
+          {
+            code: 'gpt-4.1',
+            name: 'GPT-4.1',
+            desc: 'new-model',
+            aliases: ['gpt41'],
+            callType: CALL_TYPES.CHAT,
+            capabilities: [CALL_TYPES.CHAT],
+            inputPrice: '12/M',
+            outputPrice: '22/M',
+            weight: 2,
+            headers: { 'x-new': '1' },
+          },
+        ],
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.model_changes.updated_count, 1);
+    assert.strictEqual(data.model_changes.created_count, 1);
+    assert.deepStrictEqual(data.model_changes.skipped, []);
+
+    const updated = mockEnv._models.get('m-existing');
+    assert.strictEqual(updated.name, 'GPT-4o New');
+    assert.strictEqual(updated.desc, 'new-desc');
+    assert.strictEqual(updated.input_price, '11/M');
+    assert.strictEqual(updated.output_price, '21/M');
+    assert.strictEqual(updated.weight, 5);
+    assert.strictEqual(updated.request_count, 42);
+    assert.strictEqual(updated.input_usage, 1000);
+    assert.strictEqual(updated.outpu_usage, 2000);
+    assert.strictEqual(updated.total_cost, 3000);
+    assert.strictEqual(updated.avg_latency_ms, 321);
+    assert.strictEqual(updated.success_rate, 0.88);
+
+    assert.strictEqual(mockEnv._models.has('m-untouched'), true);
+
+    const created = Array.from(mockEnv._models.values()).find((model) => model.code === 'gpt-4.1');
+    assert.ok(created);
+    assert.strictEqual(created.channel_id, 'ch-main');
+    assert.strictEqual(created.request_count, 0);
+    assert.strictEqual(created.input_usage, 0);
+    assert.strictEqual(created.outpu_usage, 0);
+    assert.strictEqual(created.total_cost, 0);
+  });
+
+  it('models 中非法 id 应跳过并返回 skipped 原因', async () => {
+    const request = createMockRequest({
+      method: 'PUT',
+      pathname: '/api/channel/ch-main',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        models: [
+          {
+            id: 'm-not-found',
+            code: 'gpt-4o',
+            name: 'ignore',
+          },
+        ],
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.model_changes.updated_count, 0);
+    assert.strictEqual(data.model_changes.created_count, 0);
+    assert.strictEqual(data.model_changes.skipped.length, 1);
+    assert.deepStrictEqual(data.model_changes.skipped[0], {
+      id: 'm-not-found',
+      reason: 'model_not_found',
+    });
   });
 });
 

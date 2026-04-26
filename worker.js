@@ -307,6 +307,11 @@ const MODEL_SYNC_SCOPES = {
   BY_CODE: 'by_code',
 };
 
+const MODEL_UPDATE_SKIPPED_REASONS = {
+  MODEL_NOT_FOUND: 'model_not_found',
+  MISSING_REQUIRED_FIELDS: 'missing_required_fields',
+};
+
 CONSTANTS.CALL_TYPE_TO_PATH = CALL_TYPE_TO_PATH;
 CONSTANTS.PATH_TO_CALL_TYPE = PATH_TO_CALL_TYPE;
 
@@ -334,6 +339,19 @@ const SCHEMAS = (() => {
     CALL_TYPES.EMBEDDING,
   ]);
 
+  const ChannelModelSchema = z.object({
+    code: z.string().min(1),
+    name: z.string().min(1),
+    desc: z.string().default(''),
+    aliases: z.array(z.string()).default([]),
+    callType: CallTypeEnum.default(CALL_TYPES.CHAT),
+    capabilities: z.array(z.string()).default([CALL_TYPES.CHAT]),
+    inputPrice: z.string().default('0'),
+    outputPrice: z.string().default('0'),
+    weight: z.number().min(0).max(100).default(1.0),
+    headers: z.record(z.string(), z.string()).default({}),
+  });
+
   const CreateChannelSchema = z.object({
     name: z.string().min(1).max(100),
     key: z.string().regex(/^[a-z0-9-]+$/).min(1).max(50),
@@ -341,25 +359,35 @@ const SCHEMAS = (() => {
     apiKey: z.string(),
     baseURL: z.string().url().or(z.literal('')).default(''),
     weight: z.number().min(0).max(100).default(1.0),
-    models: z
-      .array(
-        z.object({
-          code: z.string().min(1),
-          name: z.string().min(1),
-          desc: z.string().default(''),
-          aliases: z.array(z.string()).default([]),
-          callType: CallTypeEnum.default(CALL_TYPES.CHAT),
-          capabilities: z.array(z.string()).default([CALL_TYPES.CHAT]),
-          inputPrice: z.string().default('0'),
-          outputPrice: z.string().default('0'),
-          weight: z.number().min(0).max(100).default(1.0),
-          headers: z.record(z.string()).default({}),
-        }),
-      )
-      .default([]),
+    models: z.array(ChannelModelSchema).default([]),
   });
 
-  const UpdateChannelSchema = CreateChannelSchema.partial();
+  const UpdateChannelModelSchema = z
+    .object({
+      id: z.string().min(1).optional(),
+      code: z.string().min(1).optional(),
+      name: z.string().min(1).optional(),
+      desc: z.string().optional(),
+      aliases: z.array(z.string()).optional(),
+      callType: CallTypeEnum.optional(),
+      capabilities: z.array(z.string()).optional(),
+      inputPrice: z.string().optional(),
+      outputPrice: z.string().optional(),
+      status: z.enum([MODEL_STATUS.ACTIVE, MODEL_STATUS.OPEN, MODEL_STATUS.DISABLE]).optional(),
+      weight: z.number().min(0).max(100).optional(),
+      headers: z.record(z.string(), z.string()).optional(),
+    })
+    .partial();
+
+  const UpdateChannelSchema = z.object({
+    name: z.string().min(1).max(100).optional(),
+    key: z.string().regex(/^[a-z0-9-]+$/).min(1).max(50).optional(),
+    provider: ProviderEnum.optional(),
+    apiKey: z.string().optional(),
+    baseURL: z.string().url().or(z.literal('')).optional(),
+    weight: z.number().min(0).max(100).optional(),
+    models: z.array(UpdateChannelModelSchema).optional(),
+  });
 
   const UpdateModelSchema = z
     .object({
@@ -373,7 +401,7 @@ const SCHEMAS = (() => {
       outputPrice: z.string().optional(),
       status: z.enum([MODEL_STATUS.ACTIVE, MODEL_STATUS.OPEN, MODEL_STATUS.DISABLE]).optional(),
       weight: z.number().min(0).max(100).optional(),
-      headers: z.record(z.string()).optional(),
+      headers: z.record(z.string(), z.string()).optional(),
     })
     .partial();
 
@@ -407,7 +435,7 @@ const SCHEMAS = (() => {
   const UpstreamModelCheckSchema = UpstreamConnectionSchema.extend({
     model: z.string().min(1),
     callType: CallTypeEnum,
-    headers: z.record(z.string()).default({}),
+    headers: z.record(z.string(), z.string()).default({}),
     timeoutMs: z
       .coerce
       .number()
@@ -482,9 +510,6 @@ function parseModelBatchOptions(request) {
   if (!Object.values(MODEL_SYNC_SCOPES).includes(rawSyncScope)) {
     throw new Error(`sync_scope must be one of: ${Object.values(MODEL_SYNC_SCOPES).join(', ')}`);
   }
-  if (rawSyncScope === MODEL_SYNC_SCOPES.SINGLE && channelId) {
-    throw new Error('channel_id is only allowed when sync_scope=by_code');
-  }
   return { syncScope: rawSyncScope, channelId };
 }
 
@@ -528,6 +553,34 @@ async function parseRequestBody(request) {
       error: error instanceof Error ? error.message : String(error),
     };
   }
+}
+
+function buildModelInsertBindings(modelId, channelId, model, timestamp) {
+  return [
+    modelId,
+    channelId,
+    model.code,
+    model.name,
+    model.desc ?? '',
+    JSON.stringify(model.aliases || []),
+    model.callType || CALL_TYPES.CHAT,
+    JSON.stringify(model.capabilities || []),
+    model.inputPrice ?? '0',
+    model.outputPrice ?? '0',
+    model.status || MODEL_STATUS.ACTIVE,
+    model.weight ?? 1,
+    0,
+    1,
+    0,
+    0,
+    null,
+    0,
+    0,
+    0,
+    0,
+    timestamp,
+    JSON.stringify(model.headers || {}),
+  ];
 }
 
 function invalidRequestBodyResponse(parseErrorMessage) {
@@ -1707,42 +1760,18 @@ function createApp(deps = {}) {
       const modelId = uuidFn();
       await env.DB
         .prepare(SQL.INSERT_MODEL)
-        .bind(
-          modelId,
-          channelId,
-          model.code,
-          model.name,
-          model.desc,
-          JSON.stringify(model.aliases || []),
-          model.callType,
-          JSON.stringify(model.capabilities || []),
-          model.inputPrice,
-          model.outputPrice,
-          MODEL_STATUS.ACTIVE,
-          model.weight,
-          0,
-          1,
-          0,
-          0,
-          null,
-          0,
-          0,
-          0,
-          0,
-          timestamp,
-          JSON.stringify(model.headers || {}),
-        )
+        .bind(...buildModelInsertBindings(modelId, channelId, model, timestamp))
         .run();
     }
 
     return handleGetChannel(channelId, env, HTTP_STATUS.CREATED);
   }
 
-  async function handleGetChannel(channelId, env, status = HTTP_STATUS.OK) {
+  async function handleGetChannel(channelId, env, status = HTTP_STATUS.OK, extra = {}) {
     const channel = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_ID).bind(channelId).first();
     if (!channel) return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
     const { results: models } = await env.DB.prepare(SQL.SELECT_MODELS_BY_CHANNEL_ID).bind(channelId).all();
-    return jsonResponse({ success: true, data: { ...channel, models } }, status);
+    return jsonResponse({ success: true, data: { ...channel, models }, ...extra }, status);
   }
 
   async function handleUpdateChannel(channelId, request, env) {
@@ -1784,43 +1813,68 @@ function createApp(deps = {}) {
       await env.DB.prepare(sql).bind(...values, channelId).run();
     }
 
+    const modelChanges = {
+      updated_count: 0,
+      created_count: 0,
+      skipped: [],
+    };
+
     if (parsed.models) {
-      await env.DB.prepare(SQL.DELETE_MODELS_BY_CHANNEL_ID).bind(channelId).run();
       const timestamp = nowIso(nowFn);
       for (const model of parsed.models) {
+        if (model.id) {
+          const existingModel = await env.DB.prepare(SQL.SELECT_MODEL_BY_ID).bind(model.id).first();
+          if (!existingModel || existingModel.channel_id !== channelId) {
+            modelChanges.skipped.push({ id: model.id, reason: MODEL_UPDATE_SKIPPED_REASONS.MODEL_NOT_FOUND });
+            continue;
+          }
+
+          const modelUpdates = [];
+          const modelValues = [];
+          const pushModelUpdate = (field, value) => {
+            modelUpdates.push(`${field} = ?${modelUpdates.length + 1}`);
+            modelValues.push(value);
+          };
+
+          if (model.code !== undefined) pushModelUpdate('code', model.code);
+          if (model.name !== undefined) pushModelUpdate('name', model.name);
+          if (model.desc !== undefined) pushModelUpdate('desc', model.desc);
+          if (model.aliases !== undefined) pushModelUpdate('aliases', JSON.stringify(model.aliases));
+          if (model.callType !== undefined) pushModelUpdate('call_type', model.callType);
+          if (model.capabilities !== undefined) pushModelUpdate('capabilities', JSON.stringify(model.capabilities));
+          if (model.inputPrice !== undefined) pushModelUpdate('input_price', model.inputPrice);
+          if (model.outputPrice !== undefined) pushModelUpdate('output_price', model.outputPrice);
+          if (model.status !== undefined) pushModelUpdate('status', model.status);
+          if (model.weight !== undefined) pushModelUpdate('weight', model.weight);
+          if (model.headers !== undefined) pushModelUpdate('headers', JSON.stringify(model.headers));
+          pushModelUpdate('last_updated', timestamp);
+
+          if (modelUpdates.length > 0) {
+            const modelSql = `${SQL.UPDATE_MODEL_BASE}${modelUpdates.join(', ')} WHERE id = ?${modelUpdates.length + 1}`;
+            await env.DB.prepare(modelSql).bind(...modelValues, model.id).run();
+            modelChanges.updated_count += 1;
+          }
+          continue;
+        }
+
+        if (!model.code || !model.name) {
+          modelChanges.skipped.push({
+            id: '',
+            reason: MODEL_UPDATE_SKIPPED_REASONS.MISSING_REQUIRED_FIELDS,
+          });
+          continue;
+        }
+
         const modelId = uuidFn();
         await env.DB
           .prepare(SQL.INSERT_MODEL)
-          .bind(
-            modelId,
-            channelId,
-            model.code,
-            model.name,
-            model.desc || '',
-            JSON.stringify(model.aliases || []),
-            model.callType || CALL_TYPES.CHAT,
-            JSON.stringify(model.capabilities || []),
-            model.inputPrice ?? '0',
-            model.outputPrice ?? '0',
-            MODEL_STATUS.ACTIVE,
-            model.weight ?? 1,
-            0,
-            1,
-            0,
-            0,
-            null,
-            0,
-            0,
-            0,
-            0,
-            timestamp,
-            JSON.stringify(model.headers || {}),
-          )
+          .bind(...buildModelInsertBindings(modelId, channelId, model, timestamp))
           .run();
+        modelChanges.created_count += 1;
       }
     }
 
-    return handleGetChannel(channelId, env, HTTP_STATUS.OK);
+    return handleGetChannel(channelId, env, HTTP_STATUS.OK, { model_changes: modelChanges });
   }
 
   async function handleDeleteChannel(channelId, env) {
