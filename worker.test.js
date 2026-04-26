@@ -733,6 +733,153 @@ describe('API: GET /status - 返回状态列表', () => {
   });
 });
 
+describe('API: GET /v1/models - 模型标识列表（code + alias）', () => {
+  it('应把真实 code 与 aliases 作为同级模型项返回', async () => {
+    const app = createApp({
+      now: () => new Date('2026-04-20T00:00:00Z'),
+    });
+    const mockEnv = createMockEnv();
+
+    mockEnv._addChannel({
+      id: 'ch-v1-models-1',
+      name: 'OpenAI Main',
+      key: 'openai-main',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-test',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-20T00:00:00Z',
+      updated_at: '2026-04-20T00:00:00Z',
+    });
+    mockEnv._addModel({
+      id: 'm-v1-models-1',
+      channel_id: 'ch-v1-models-1',
+      code: 'gpt-4o',
+      name: 'gpt-4o',
+      desc: '',
+      aliases: JSON.stringify(['my-gpt', 'my-gpt-4o']),
+      call_type: CALL_TYPES.CHAT,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT]),
+      input_price: '0',
+      output_price: '0',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-20T00:00:00Z',
+      headers: '{}',
+    });
+
+    const request = createMockRequest({
+      method: 'GET',
+      pathname: ROUTES.V1_MODELS,
+      headers: { authorization: 'Bearer test-admin-key' },
+    });
+    const response = await app.handleRequest(request, mockEnv);
+    const payload = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK, JSON.stringify(payload));
+    assert.strictEqual(payload.object, 'list');
+    assert.strictEqual(payload.data.length, 3);
+    assert.deepStrictEqual(
+      payload.data.map((item) => item.id).sort(),
+      ['gpt-4o', 'my-gpt', 'my-gpt-4o'],
+    );
+    mockEnv._clear();
+  });
+
+  it('应按最终模型标识去重（含跨渠道重复 alias、alias=code、空 alias）', async () => {
+    const app = createApp({
+      now: () => new Date('2026-04-20T00:00:00Z'),
+    });
+    const mockEnv = createMockEnv();
+
+    mockEnv._addChannel({
+      id: 'ch-v1-models-a',
+      name: 'OpenAI A',
+      key: 'openai-a',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-test-a',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-20T00:00:00Z',
+      updated_at: '2026-04-20T00:00:00Z',
+    });
+    mockEnv._addChannel({
+      id: 'ch-v1-models-b',
+      name: 'OpenAI B',
+      key: 'openai-b',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-test-b',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-20T00:00:00Z',
+      updated_at: '2026-04-20T00:00:00Z',
+    });
+
+    mockEnv._addModel({
+      id: 'm-v1-models-a',
+      channel_id: 'ch-v1-models-a',
+      code: 'gpt-4o',
+      name: 'gpt-4o',
+      desc: '',
+      aliases: JSON.stringify(['my-gpt', 'gpt-4o', '   ', '']),
+      call_type: CALL_TYPES.CHAT,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT]),
+      input_price: '0',
+      output_price: '0',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-20T00:00:00Z',
+      headers: '{}',
+    });
+    mockEnv._addModel({
+      id: 'm-v1-models-b',
+      channel_id: 'ch-v1-models-b',
+      code: 'gpt-4o',
+      name: 'gpt-4o mirror',
+      desc: '',
+      aliases: JSON.stringify(['my-gpt', 'mirror']),
+      call_type: CALL_TYPES.CHAT,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT]),
+      input_price: '0',
+      output_price: '0',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-20T00:00:00Z',
+      headers: '{}',
+    });
+
+    const request = createMockRequest({
+      method: 'GET',
+      pathname: ROUTES.V1_MODELS,
+      headers: { authorization: 'Bearer test-admin-key' },
+    });
+    const response = await app.handleRequest(request, mockEnv);
+    const payload = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK, JSON.stringify(payload));
+    assert.deepStrictEqual(
+      payload.data.map((item) => item.id).sort(),
+      ['gpt-4o', 'mirror', 'my-gpt'],
+    );
+    mockEnv._clear();
+  });
+});
+
 describe('API: POST /api/channel/models - 通过连接参数获取上游模型列表', () => {
   let app;
   let mockEnv;

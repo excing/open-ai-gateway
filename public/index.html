@@ -816,11 +816,6 @@
                 <button @click="actions.loadChannels" class="btn btn-secondary">刷新模型</button>
               </div>
 
-              <div v-if="state.aliasFilter" class="mt-4 panel-quiet p-3 text-sm text-[var(--text-soft)]">
-                <span>当前别名筛选：<strong class="text-[var(--text)]">{{ state.aliasFilter }}</strong></span>
-                <button @click="actions.clearAliasFilter" class="btn btn-inline btn-ghost ml-3 text-xs">清除</button>
-              </div>
-
               <div class="mt-5 grid gap-3 lg:grid-cols-4">
                 <input v-model="state.modelListControls.keyword" type="text" class="field" placeholder="搜索 code / 模型名 / 渠道 / 别名" />
                 <select v-model="state.modelListControls.provider" class="field-select">
@@ -867,6 +862,7 @@
                     </div>
                     <div class="flex">
                       <button
+                        v-if="group.hasCodeMember"
                         @click.stop="actions.editModelGroup(group)"
                         class="btn btn-primary text-sm"
                       >
@@ -901,12 +897,11 @@
                             <td><span class="pill text-xs text-[var(--text-soft)]">{{ actions.getCallTypeLabel(model.call_type) }}</span></td>
                             <td>
                               <div class="chip-group">
-                                <button
+                                <span
                                   v-for="alias in actions.parseStoredJsonArray(model.aliases)"
                                   :key="`${model.id}-${alias}`"
-                                  @click="actions.openAliasFilter(alias)"
                                   class="chip"
-                                >{{ alias }}</button>
+                                >{{ alias }}</span>
                                 <span
                                   v-if="actions.parseStoredJsonArray(model.aliases).length === 0"
                                   class="pill text-xs text-[var(--text-soft)]"
@@ -936,7 +931,7 @@
                   </div>
                 </article>
                 <article v-if="actions.getVisibleModelGroups().length === 0" class="panel-quiet p-5 text-center text-sm text-[var(--text-soft)]">
-                  未找到匹配模型，请清空别名筛选或先创建渠道模型。
+                  未找到匹配模型，请调整筛选条件或先创建渠道模型。
                 </article>
               </div>
             </section>
@@ -1412,6 +1407,12 @@
             }
           };
 
+          const collectModelGroupIdentifiers = (model) => {
+            const modelCode = String(model?.code || '').trim();
+            const aliases = parseStoredJsonArray(model?.aliases);
+            return createUniqueList([modelCode, ...aliases]);
+          };
+
           const normalizeModelCode = (codeValue) => String(codeValue || '').trim().toLowerCase();
 
           const createEmptyChannelModel = () => ({
@@ -1490,7 +1491,6 @@
             expandedLogId: '',
             modelGroups: [],
             modelGroupExpanded: {},
-            aliasFilter: '',
             modelListControls: {
               keyword: '',
               provider: '',
@@ -1810,20 +1810,29 @@
               const groups = new Map();
               for (const channel of channels || []) {
                 for (const model of channel.models || []) {
-                  const code = String(model.code || '').trim() || '未命名模型';
-                  if (!groups.has(code)) {
-                    groups.set(code, {
-                      code,
-                      channels: [],
+                  const modelCode = String(model.code || '').trim();
+                  const identifiers = collectModelGroupIdentifiers(model);
+                  for (const identifier of identifiers) {
+                    const groupCode = identifier || '未命名模型';
+                    if (!groups.has(groupCode)) {
+                      groups.set(groupCode, {
+                        code: groupCode,
+                        channels: [],
+                        hasCodeMember: false,
+                      });
+                    }
+                    const group = groups.get(groupCode);
+                    if (identifier === modelCode) {
+                      group.hasCodeMember = true;
+                    }
+                    group.channels.push({
+                      ...model,
+                      channel_name: channel.name,
+                      channel_id: channel.id,
+                      channel_weight: channel.weight ?? 1,
+                      provider: channel.provider,
                     });
                   }
-                  groups.get(code).channels.push({
-                    ...model,
-                    channel_name: channel.name,
-                    channel_id: channel.id,
-                    channel_weight: channel.weight ?? 1,
-                    provider: channel.provider,
-                  });
                 }
               }
               const output = Array.from(groups.values()).map((group) => {
@@ -1844,12 +1853,6 @@
               state.modelGroupExpanded = { ...state.modelGroupExpanded, [code]: !state.modelGroupExpanded[code] };
             },
             isModelGroupExpanded: (code) => Boolean(state.modelGroupExpanded[code]),
-            openAliasFilter: (alias) => {
-              state.aliasFilter = String(alias || '').trim();
-            },
-            clearAliasFilter: () => {
-              state.aliasFilter = '';
-            },
             resetModelListControls: () => {
               state.modelListControls = {
                 keyword: '',
@@ -1857,7 +1860,6 @@
                 status: '',
                 callTypes: [],
               };
-              state.aliasFilter = '';
             },
             syncModelListCallTypes: () => {
               const availableCallTypes = actions.getModelListFilterOptions().callTypes;
@@ -1904,7 +1906,6 @@
                 .map((group) => {
                   const visibleChannels = (group.channels || []).filter((item) => {
                     const aliases = parseStoredJsonArray(item.aliases);
-                    if (state.aliasFilter && !aliases.includes(state.aliasFilter)) return false;
                     if (provider && item.provider !== provider) return false;
                     if (status && item.status !== status) return false;
                     if (selectedCallTypeSet.size > 0 && !selectedCallTypeSet.has(item.call_type)) return false;

@@ -747,6 +747,28 @@ function safeJsonParse(value, fallback) {
   }
 }
 
+function collectModelIdentifiers(row) {
+  const code = String(row?.code || '').trim();
+  const aliasList = safeJsonParse(row?.aliases, []);
+  const identifiers = [];
+  const seen = new Set();
+
+  if (code && !seen.has(code)) {
+    seen.add(code);
+    identifiers.push(code);
+  }
+
+  const aliases = Array.isArray(aliasList) ? aliasList : [];
+  for (const aliasValue of aliases) {
+    const alias = String(aliasValue || '').trim();
+    if (!alias || seen.has(alias)) continue;
+    seen.add(alias);
+    identifiers.push(alias);
+  }
+
+  return identifiers;
+}
+
 function getUsageTokens(usage) {
   const inputTokens = Number(usage?.inputTokens ?? usage?.promptTokens ?? 0);
   const outputTokens = Number(usage?.outputTokens ?? usage?.completionTokens ?? 0);
@@ -1711,19 +1733,21 @@ function createApp(deps = {}) {
   async function handleModelsList(request, env) {
     const { results } = await env.DB.prepare(SQL.SELECT_STATUS_BASE).all();
     const seen = new Set();
-    const data = results
-      .filter((row) => row.status !== MODEL_STATUS.DISABLE)
-      .filter((row) => {
-        if (seen.has(row.code)) return false;
-        seen.add(row.code);
-        return true;
-      })
-      .map((row) => ({
-        id: row.code,
-        object: OPENAI_OBJECTS.MODEL,
-        created: toEpochSeconds(nowFn()),
-        owned_by: row.channel_name || 'unknown',
-      }));
+    const data = [];
+    for (const row of results) {
+      if (row.status === MODEL_STATUS.DISABLE) continue;
+      const identifiers = collectModelIdentifiers(row);
+      for (const identifier of identifiers) {
+        if (seen.has(identifier)) continue;
+        seen.add(identifier);
+        data.push({
+          id: identifier,
+          object: OPENAI_OBJECTS.MODEL,
+          created: toEpochSeconds(nowFn()),
+          owned_by: row.channel_name || 'unknown',
+        });
+      }
+    }
 
     return jsonResponse({ object: OPENAI_OBJECTS.LIST, data });
   }
