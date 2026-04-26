@@ -773,7 +773,7 @@
                 </div>
               </div>
 
-              <div class="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              <div class="mt-6 grid gap-3 sm:grid-cols-2">
                 <article v-for="channel in state.channels" :key="channel.id" class="list-card">
                   <div class="flex items-start justify-between gap-3">
                     <div class="min-w-0">
@@ -1501,6 +1501,7 @@
             channelDrawerOpen: false,
             modelDrawerOpen: false,
             channelForm: createEmptyChannelForm(),
+            channelModelIdsSnapshot: [],
             modelForm: createEmptyModelForm(),
             logFilters: {
               channel_key: '',
@@ -1575,6 +1576,20 @@
               detectStatus: constants.DETECT_STATUS.IDLE,
               detectMessage: '',
             }));
+          };
+
+          const collectDeletedModelIds = (initialModels, currentModels) => {
+            const initialIds = new Set(
+              (Array.isArray(initialModels) ? initialModels : [])
+                .map((model) => String(model?.id || '').trim())
+                .filter(Boolean),
+            );
+            const currentIds = new Set(
+              (Array.isArray(currentModels) ? currentModels : [])
+                .map((model) => String(model?.id || '').trim())
+                .filter(Boolean),
+            );
+            return Array.from(initialIds).filter((id) => !currentIds.has(id));
           };
 
           const mergeChannelModelsByCode = (existingModels, discoveredModels) => {
@@ -1984,12 +1999,14 @@
             },
             closeChannelDrawer: () => {
               state.channelDrawerOpen = false;
+              state.channelModelIdsSnapshot = [];
             },
             closeModelDrawer: () => {
               state.modelDrawerOpen = false;
             },
             resetChannelForm: () => {
               state.channelForm = createEmptyChannelForm();
+              state.channelModelIdsSnapshot = [];
               syncChannelModelsRaw();
             },
             resetModelForm: () => {
@@ -2176,6 +2193,7 @@
               try {
                 syncChannelModelsRaw();
                 const models = parseJsonInput(state.channelForm.modelsRaw, constants.EMPTY_ARRAY_JSON, '渠道模型配置');
+                const deletedModelIds = collectDeletedModelIds(state.channelModelIdsSnapshot, models);
                 const res = await apiRequest(`${constants.API.CHANNEL}/${state.channelForm.id}`, {
                   method: constants.METHODS.PUT,
                   body: {
@@ -2186,16 +2204,20 @@
                     baseURL: state.channelForm.baseURL,
                     weight: Number(state.channelForm.weight || 0),
                     models,
+                    deletedModelIds,
                   },
                 });
                 if (res.status === 200) {
                   await actions.loadChannels();
                   const skippedCount = Array.isArray(res.data?.model_changes?.skipped) ? res.data.model_changes.skipped.length : 0;
+                  const deleteSkippedCount = Array.isArray(res.data?.model_changes?.delete_skipped) ? res.data.model_changes.delete_skipped.length : 0;
                   const updatedCount = Number(res.data?.model_changes?.updated_count ?? 0);
                   const createdCount = Number(res.data?.model_changes?.created_count ?? 0);
-                  const summary = skippedCount > 0
-                    ? `渠道已更新。模型变更：更新 ${updatedCount}，新增 ${createdCount}，跳过 ${skippedCount}。`
-                    : `渠道已更新。模型变更：更新 ${updatedCount}，新增 ${createdCount}。`;
+                  const deletedCount = Number(res.data?.model_changes?.deleted_count ?? 0);
+                  const totalSkipped = skippedCount + deleteSkippedCount;
+                  const summary = totalSkipped > 0
+                    ? `渠道已更新。模型变更：更新 ${updatedCount}，新增 ${createdCount}，删除 ${deletedCount}，跳过 ${totalSkipped}。`
+                    : `渠道已更新。模型变更：更新 ${updatedCount}，新增 ${createdCount}，删除 ${deletedCount}。`;
                   actions.setNotice(summary);
                   state.channelDrawerOpen = false;
                 } else {
@@ -2234,6 +2256,9 @@
                 models: parseRawModelsToEditor(modelsRaw),
                 modelsRaw,
               };
+              state.channelModelIdsSnapshot = (channel.models || []).map((model) => ({
+                id: String(model.id || '').trim(),
+              }));
               state.channelDrawerOpen = true;
               actions.setNotice('渠道已载入。');
             },

@@ -1737,6 +1737,90 @@ describe('API: PUT /api/channel/:id - models 增量更新（有 id 更新、无 
       reason: 'model_not_found',
     });
   });
+
+  it('应支持 deletedModelIds 删除当前渠道下指定模型并返回删除统计', async () => {
+    const request = createMockRequest({
+      method: 'PUT',
+      pathname: '/api/channel/ch-main',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        deletedModelIds: ['m-untouched'],
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.model_changes.deleted_count, 1);
+    assert.deepStrictEqual(data.model_changes.delete_skipped, []);
+    assert.strictEqual(mockEnv._models.has('m-untouched'), false);
+    assert.strictEqual(mockEnv._models.has('m-existing'), true);
+  });
+
+  it('deletedModelIds 包含不存在或不属于当前渠道模型时应跳过并记录原因', async () => {
+    mockEnv._addChannel({
+      id: 'ch-other',
+      name: '其他渠道',
+      key: 'other-channel',
+      provider: PROVIDERS.OPENAI,
+      api_key: 'sk-other',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-25T00:00:00Z',
+      updated_at: '2026-04-25T00:00:00Z',
+    });
+    mockEnv._addModel({
+      id: 'm-other-channel',
+      channel_id: 'ch-other',
+      code: 'gpt-4o',
+      name: 'other',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: '["chat"]',
+      input_price: '0',
+      output_price: '0',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      request_count: 0,
+      input_usage: 0,
+      outpu_usage: 0,
+      total_cost: 0,
+      last_updated: '2026-04-25T00:00:00Z',
+      headers: '{}',
+    });
+
+    const request = createMockRequest({
+      method: 'PUT',
+      pathname: '/api/channel/ch-main',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        deletedModelIds: ['m-not-found', 'm-other-channel'],
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.model_changes.deleted_count, 0);
+    assert.strictEqual(data.model_changes.delete_skipped.length, 2);
+    assert.deepStrictEqual(data.model_changes.delete_skipped, [
+      { id: 'm-not-found', reason: 'model_not_found' },
+      { id: 'm-other-channel', reason: 'model_not_found' },
+    ]);
+    assert.strictEqual(mockEnv._models.has('m-existing'), true);
+    assert.strictEqual(mockEnv._models.has('m-untouched'), true);
+    assert.strictEqual(mockEnv._models.has('m-other-channel'), true);
+  });
 });
 
 describe('API: PUT/DELETE /api/model/:id - 同名批量与按渠道操作', () => {

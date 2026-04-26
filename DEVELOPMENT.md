@@ -556,7 +556,9 @@ const CreateChannelSchema = z.object({
 });
 
 /** 更新渠道请求体校验（所有字段可选） */
-const UpdateChannelSchema = CreateChannelSchema.partial();
+const UpdateChannelSchema = CreateChannelSchema.partial().extend({
+    deletedModelIds: z.array(z.string().min(1)).optional(), // 显式删除模型 ID 列表（仅当前渠道有效）
+});
 
 /** 更新模型请求体校验 */
 const UpdateModelSchema = z.object({
@@ -749,16 +751,19 @@ async function handleGetChannel(channelId: string, env: Env): Promise<Response>;
  * 更新渠道
  * 1. 用 UpdateChannelSchema 校验请求体
  * 2. 更新 channels 表对应字段
- * 3. 若 models 字段存在：
+ * 3. 若 deletedModelIds 字段存在：
+ *    - 按模型 id 删除（仅删除当前渠道下匹配模型）
+ *    - 非法 id（不存在或不属于当前渠道）跳过，并记录 delete_skipped 原因
+ * 4. 若 models 字段存在：
  *    - 有 id 的模型按 id 更新（仅更新显式传入字段）
  *    - 无 id 的模型新增
  *    - 非法 id（不存在）跳过，并记录 skipped 原因
- * 4. 更新 updated_at 时间戳并返回处理摘要
+ * 5. 更新 updated_at 时间戳并返回处理摘要
  *
  * @param channelId - URL 路径中的渠道 ID
  * @param request - Request 对象
  * @param env - 环境变量
- * @returns { success: true, data: ChannelWithModels, model_changes: { updated_count: number, created_count: number, skipped: Array<{ id: string, reason: string }> } }
+ * @returns { success: true, data: ChannelWithModels, model_changes: { updated_count: number, created_count: number, skipped: Array<{ id: string, reason: string }>, deleted_count: number, delete_skipped: Array<{ id: string, reason: string }> } }
  * @throws 渠道不存在返回 404，校验失败返回 400
  */
 async function handleUpdateChannel(channelId: string, request: Request, env: Env): Promise<Response>;
@@ -1648,11 +1653,15 @@ data: [DONE]
 
 **请求体**：UpdateChannelSchema 字段（均可选），支持 `models` 增量更新
 
-**`models` 处理规则**：
+**`deletedModelIds` 处理规则（可选）**：
+- 当 `deletedModelIds[i]` 匹配当前渠道下模型 id 时：删除该模型
+- 当 `deletedModelIds[i]` 非法（不存在或不属于当前渠道）时：跳过该项并记录原因
+
+**`models` 处理规则（可选）**：
 - 当 `models[i].id` 存在时：更新该模型（仅更新请求内显式传入字段）
 - 当 `models[i].id` 缺失时：创建新模型
 - 当 `models[i].id` 非法（模型不存在）时：跳过该项并记录原因
-- 未出现在 `models` 中的已存量模型保持不变，不会删除
+- 未出现在 `models` 中的已存量模型保持不变；删除需通过 `deletedModelIds` 显式声明
 
 **响应** (200)：
 ```json
@@ -1662,8 +1671,12 @@ data: [DONE]
     "model_changes": {
         "updated_count": 2,
         "created_count": 1,
+        "deleted_count": 1,
         "skipped": [
             { "id": "m-not-exists", "reason": "model_not_found" }
+        ],
+        "delete_skipped": [
+            { "id": "m-not-exists-2", "reason": "model_not_found" }
         ]
     }
 }

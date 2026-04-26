@@ -387,6 +387,7 @@ const SCHEMAS = (() => {
     baseURL: z.string().url().or(z.literal('')).optional(),
     weight: z.number().min(0).max(100).optional(),
     models: z.array(UpdateChannelModelSchema).optional(),
+    deletedModelIds: z.array(z.string().min(1)).optional(),
   });
 
   const UpdateModelSchema = z
@@ -1841,7 +1842,21 @@ function createApp(deps = {}) {
       updated_count: 0,
       created_count: 0,
       skipped: [],
+      deleted_count: 0,
+      delete_skipped: [],
     };
+
+    if (parsed.deletedModelIds) {
+      for (const modelId of parsed.deletedModelIds) {
+        const existingModel = await env.DB.prepare(SQL.SELECT_MODEL_BY_ID).bind(modelId).first();
+        if (!existingModel || existingModel.channel_id !== channelId) {
+          modelChanges.delete_skipped.push({ id: modelId, reason: MODEL_UPDATE_SKIPPED_REASONS.MODEL_NOT_FOUND });
+          continue;
+        }
+        await env.DB.prepare(SQL.DELETE_MODEL).bind(modelId).run();
+        modelChanges.deleted_count += 1;
+      }
+    }
 
     if (parsed.models) {
       const timestamp = nowIso(nowFn);
