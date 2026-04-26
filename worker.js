@@ -19,6 +19,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createPollinations } from './pollinations.js';
 import { createExacg } from './exacg.js';
 import { createMicrosoftTTS } from './microsoft-tts.js';
+import { createGoogleApisTranslate } from './googleapis-translate.js';
 import { extractMediaResources, getMp3Duration, getMp4Duration } from './media-utils.js';
 
 const CONSTANTS = {
@@ -33,6 +34,7 @@ const CONSTANTS = {
     POLLINATIONS: 'pollinations',
     EXACG: 'exacg',
     MICROSOFT_TTS: 'microsoft-tts',
+    GOOGLE_TRANSLATE: 'google-translate',
   },
   CALL_TYPES: {
     CHAT: 'chat',
@@ -327,6 +329,7 @@ const SCHEMAS = (() => {
     PROVIDERS.POLLINATIONS,
     PROVIDERS.EXACG,
     PROVIDERS.MICROSOFT_TTS,
+    PROVIDERS.GOOGLE_TRANSLATE,
   ]);
 
   const CallTypeEnum = z.enum([
@@ -1071,6 +1074,7 @@ function createApp(deps = {}) {
     createPollinations: deps.providers?.createPollinations || createPollinations,
     createExacg: deps.providers?.createExacg || createExacg,
     createMicrosoftTTS: deps.providers?.createMicrosoftTTS || createMicrosoftTTS,
+    createGoogleApisTranslate: deps.providers?.createGoogleApisTranslate || createGoogleApisTranslate,
   };
 
   const ai = {
@@ -1176,6 +1180,18 @@ function createApp(deps = {}) {
         switch (callType) {
           case CALL_TYPES.AUDIO_GEN:
             return providerInstance.speech(modelCode);
+          default:
+            return unsupportedCallType();
+        }
+      }
+      case PROVIDERS.GOOGLE_TRANSLATE: {
+        const providerInstance = providers.createGoogleApisTranslate({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
+        switch (callType) {
+          case CALL_TYPES.AUDIO_GEN:
+            return providerInstance.speech(modelCode);
+          case CALL_TYPES.MIX:
+          case CALL_TYPES.CHAT:
+            return providerInstance.chat(modelCode);
           default:
             return unsupportedCallType();
         }
@@ -2185,7 +2201,8 @@ function createApp(deps = {}) {
     if (
       normalizedProvider === PROVIDERS.ANTHROPIC ||
       normalizedProvider === PROVIDERS.EXACG ||
-      normalizedProvider === PROVIDERS.MICROSOFT_TTS
+      normalizedProvider === PROVIDERS.MICROSOFT_TTS ||
+      normalizedProvider === PROVIDERS.GOOGLE_TRANSLATE
     ) {
       return [];
     }
@@ -2268,6 +2285,8 @@ function createApp(deps = {}) {
         return 'https://openrouter.ai/api/v1';
       case PROVIDERS.POLLINATIONS:
         return 'https://gen.pollinations.ai/v1';
+      case PROVIDERS.GOOGLE_TRANSLATE:
+        return 'https://translate.googleapis.com';
       default:
         return '';
     }

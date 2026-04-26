@@ -2343,6 +2343,144 @@ describe('Microsoft TTS: 仅语音生成且模型固定 default', () => {
   });
 });
 
+describe('Google Translate: 仅 chat 与语音生成且模型受限', () => {
+  let app;
+  let mockEnv;
+
+  beforeEach(() => {
+    mockEnv = createMockEnv();
+  });
+
+  afterEach(() => {
+    mockEnv._clear();
+  });
+
+  it('google-translate 的 chat 模型检测应成功', async () => {
+    app = createApp({
+      fetch: async (url, options) => {
+        const target = url.toString();
+        assert.ok(target.includes('/translate_a/single'));
+        assert.ok(target.includes('client=gtx'));
+        assert.ok(target.includes('q='));
+        assert.strictEqual(options.method, 'GET');
+        return new Response(JSON.stringify({ sentences: [{ trans: 'OK' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'google-translate',
+        apiKey: 'not-required',
+        baseURL: 'https://translate.googleapis.com',
+        model: 'google-translate',
+        callType: CALL_TYPES.CHAT,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+  });
+
+  it('google-translate 的 audio_gen 模型检测应成功', async () => {
+    app = createApp({
+      fetch: async (url, options) => {
+        const target = url.toString();
+        assert.ok(target.includes('/translate_tts'));
+        assert.ok(target.includes('client=tw-ob'));
+        assert.ok(target.includes('tl=en'));
+        assert.ok(target.includes('q=test'));
+        assert.strictEqual(options.method, 'GET');
+        return new Response(new Uint8Array([1, 2, 3, 4]), {
+          status: 200,
+          headers: { 'content-type': 'audio/mpeg' },
+        });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'google-translate',
+        apiKey: 'not-required',
+        baseURL: 'https://translate.googleapis.com',
+        model: 'google-tts',
+        callType: CALL_TYPES.AUDIO_GEN,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+  });
+
+  it('google-translate 的 chat 非白名单模型应返回不可用', async () => {
+    app = createApp();
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'google-translate',
+        apiKey: 'not-required',
+        baseURL: 'https://translate.googleapis.com',
+        model: 'not-supported-model',
+        callType: CALL_TYPES.CHAT,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, false);
+    assert.strictEqual(data.data.data_available, false);
+  });
+
+  it('google-translate 的 embedding 模型检测应返回不可用', async () => {
+    app = createApp();
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'google-translate',
+        apiKey: 'not-required',
+        baseURL: 'https://translate.googleapis.com',
+        model: 'google-translate',
+        callType: CALL_TYPES.EMBEDDING,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.SERVICE_UNAVAILABLE);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, false);
+    assert.strictEqual(data.data.data_available, false);
+  });
+});
+
 describe('extra_body 透传', () => {
   it('executeAIRequest(chat) 应透传 extra_body 到 generateText.providerOptions', async () => {
     let receivedOptions;

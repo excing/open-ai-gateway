@@ -1391,11 +1391,11 @@
           CHANNEL_MODELS: '/api/channel/models',
           MODEL_CHECK: '/api/model/check',
         },
-        PROVIDERS: ['openai-compatible', 'openai', 'google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations', 'exacg', 'microsoft-tts'],
+        PROVIDERS: ['openai-compatible', 'openai', 'google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations', 'exacg', 'microsoft-tts', 'google-translate'],
         MODEL_STATUS: ['active', 'open', 'disable'],
         LOG_STATUS_LIST: ['success', 'error'],
         LOG_QUERY_DEBOUNCE_MS: 300,
-        LOG_PAGE_SIZE_OPTIONS: [20, 50, 100],
+        LOG_PAGE_SIZE_OPTIONS: [10, 20, 50, 100],
         LOG_FILTER_QUERY_KEYS: {
           channel_key: 'channel_key',
           model_code: 'model_code',
@@ -1422,7 +1422,7 @@
           IMAGE: '/img',
           SECOND: '/sec',
         },
-        NOTICE_DURATION_MS: 3000,
+        NOTICE_DURATION_MS: 5000,
         TOAST_POSITION: {
           GRAVITY: 'top',
           POSITION: 'right',
@@ -1481,6 +1481,7 @@
           pollinations: 'Pollinations',
           exacg: 'Exacg',
           'microsoft-tts': 'Microsoft TTS',
+          'google-translate': 'Google Translate',
         },
       };
 
@@ -1611,7 +1612,7 @@
             },
             logPagination: {
               page: 1,
-              limit: Number(constants.DEFAULT_LIMIT),
+              limit: Number(constants.LOG_PAGE_SIZE_OPTIONS[0]),
               total: 0,
               totalPages: 1,
             },
