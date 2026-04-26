@@ -695,7 +695,14 @@
                   <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
                     <div class="min-w-0">
                       <div class="flex items-center gap-2">
-                        <p class="text-lg font-semibold text-[var(--text)]">{{ model.name }}</p>
+                        <p
+                          class="cursor-pointer text-lg font-semibold text-[var(--text)] transition-colors hover:text-[var(--accent-strong)]"
+                          @click="actions.copyText(model.code)"
+                          aria-label="复制模型 code"
+                          title="点击复制模型 code"
+                        >
+                          {{ model.name }}
+                        </p>
                         <span class="inline-flex items-center rounded-full bg-[rgba(214,140,79,0.14)] px-2.5 py-1 text-xs font-semibold text-[var(--accent-strong)] whitespace-nowrap">
                           {{ actions.getCallTypeLabel(model.call_type) }}
                         </span>
