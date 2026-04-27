@@ -1,4 +1,4 @@
-import { assertResponseIsOK } from "./provider-errors";
+import { assertResponseIsOK } from "./provider-errors.js";
 
 const MICROSOFT_TTS_PROVIDER_NAME = 'microsoft-tts';
 const MICROSOFT_TTS_DEFAULT_MODEL = 'microsoft-tts';

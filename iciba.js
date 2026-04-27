@@ -1,4 +1,4 @@
-import { assertResponseIsOK } from "./provider-errors";
+import { assertResponseIsOK } from "./provider-errors.js";
 
 const ICIBA_PROVIDER_NAME = 'iciba';
 const ICIBA_DEFAULT_BASE_URL = 'https://www.iciba.com';

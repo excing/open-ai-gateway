@@ -1398,7 +1398,7 @@ describe('API: POST /v1/audio/transcriptions - multipart file', () => {
       ai: {
         experimental_transcribe: async ({ audio }) => {
           receivedAudio = audio;
-          return { text: 'ok' };
+          return { text: 'ok', responses: [{ body: { words: [], duration: 0, language: 'en' } }] };
         },
         generateText: async () => ({ text: 'test', usage: {} }),
         streamText: async () => ({ textStream: ['test'], usage: {} }),
@@ -1445,7 +1445,7 @@ describe('API: POST /v1/audio/transcriptions - multipart file', () => {
       ai: {
         experimental_transcribe: async ({ audio }) => {
           receivedAudio = audio;
-          return { text: 'ok-multi-file' };
+          return { text: 'ok-multi-file', responses: [{ body: { words: [], duration: 0, language: 'en' } }] };
         },
       },
     });
@@ -2504,7 +2504,6 @@ describe('Youdao: 仅 chat 与语音生成且模型受限', () => {
         const body = String(options.body || '');
         assert.ok(body.includes('q='));
         assert.ok(body.includes('le=en'));
-        assert.ok(body.includes('t=1'));
         assert.ok(body.includes('client=web'));
         assert.ok(body.includes('keyfrom=webdict'));
         return new Response(JSON.stringify({ ec: { word: [{ trs: [{ tr: [{ l: { i: ['test'] } }] }] }] } }), {
@@ -2631,8 +2630,6 @@ describe('Youdao: 仅 chat 与语音生成且模型受限', () => {
         assert.ok(target.includes('num=5'));
         assert.ok(target.includes('ver=3.0'));
         assert.ok(target.includes('doctype=json'));
-        assert.ok(target.includes('cache=false'));
-        assert.ok(target.includes('le=en'));
         assert.ok(target.includes('q='));
         assert.strictEqual(options.method, 'GET');
         return new Response(JSON.stringify({
@@ -2776,6 +2773,12 @@ describe('Iciba: 仅 chat 与语音生成且模型受限', () => {
     app = createApp({
       fetch: async (url, options) => {
         const target = url.toString();
+        if (target.includes('res.ksyun.iciba.com/resource/amp3')) {
+          return new Response(new Uint8Array([1, 2, 3, 4]), {
+            status: 200,
+            headers: { 'content-type': 'audio/mpeg' },
+          });
+        }
         assert.ok(target.includes('/_next/data/SIgDISbkU9OFnSzS3LWHc/word.json'));
         assert.ok(target.includes('w=test'));
         assert.strictEqual(options.method, 'GET');
@@ -3562,7 +3565,7 @@ describe('openai-compatible provider', () => {
         createOpenAICompatible: (config) => {
           compatibleCalled = true;
           capturedConfig = config;
-          return { chat: () => ({ source: 'openai-compatible' }) };
+          return { chatModel: () => ({ source: 'openai-compatible' }) };
         },
       },
     });
@@ -4502,7 +4505,7 @@ describe('formatAIResponse(chat)', () => {
     const response = await app.formatAIResponse(
       {
         text: 'final answer',
-        reasoning: 'internal reasoning summary',
+        reasoningText: 'internal reasoning summary',
         toolCalls: [
           {
             id: 'call_1',

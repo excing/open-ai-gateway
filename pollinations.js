@@ -1,4 +1,4 @@
-import { assertResponseIsOK } from "./provider-errors";
+import { assertResponseIsOK } from "./provider-errors.js";
 
 const POLLINATIONS_PROVIDER_NAME = 'pollinations';
 const POLLINATIONS_DEFAULT_BASE_URL = 'https://gen.pollinations.ai';

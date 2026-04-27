@@ -1,4 +1,4 @@
-import { assertResponseIsOK } from "./provider-errors";
+import { assertResponseIsOK } from "./provider-errors.js";
 
 const GOOGLE_TRANSLATE_PROVIDER_NAME = 'google-translate';
 const GOOGLE_TRANSLATE_DEFAULT_BASE_URL = 'https://translate.googleapis.com';

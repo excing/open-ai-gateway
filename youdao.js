@@ -1,4 +1,4 @@
-import { assertResponseIsOK } from "./provider-errors";
+import { assertResponseIsOK } from "./provider-errors.js";
 
 const YOUDAO_PROVIDER_NAME = 'youdao';
 const YOUDAO_DEFAULT_BASE_URL = 'https://dict.youdao.com';
