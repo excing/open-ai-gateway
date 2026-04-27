@@ -22,6 +22,7 @@ import { createMicrosoftTTS } from './microsoft-tts.js';
 import { createGoogleApisTranslate } from './googleapis-translate.js';
 import { createYoudao } from './youdao.js';
 import { createIciba } from './iciba.js';
+import { createCustomPubApi } from './custom-pubapi.js';
 import { extractMediaResources, getMp3Duration, getMp4Duration } from './media-utils.js';
 
 const CONSTANTS = {
@@ -39,6 +40,7 @@ const CONSTANTS = {
     GOOGLE_TRANSLATE: 'google-translate',
     YOUDAO: 'youdao',
     ICIBA: 'iciba',
+    CUSTOM_PUBAPI: 'custom-pubapi',
   },
   CALL_TYPES: {
     CHAT: 'chat',
@@ -337,6 +339,7 @@ const SCHEMAS = (() => {
     PROVIDERS.GOOGLE_TRANSLATE,
     PROVIDERS.YOUDAO,
     PROVIDERS.ICIBA,
+    PROVIDERS.CUSTOM_PUBAPI,
   ]);
 
   const CallTypeEnum = z.enum([
@@ -1084,6 +1087,7 @@ function createApp(deps = {}) {
     createGoogleApisTranslate: deps.providers?.createGoogleApisTranslate || createGoogleApisTranslate,
     createYoudao: deps.providers?.createYoudao || createYoudao,
     createIciba: deps.providers?.createIciba || createIciba,
+    createCustomPubApi: deps.providers?.createCustomPubApi || createCustomPubApi,
   };
 
   const ai = {
@@ -1219,6 +1223,18 @@ function createApp(deps = {}) {
       }
       case PROVIDERS.ICIBA: {
         const providerInstance = providers.createIciba({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
+        switch (callType) {
+          case CALL_TYPES.AUDIO_GEN:
+            return providerInstance.speech(modelCode);
+          case CALL_TYPES.MIX:
+          case CALL_TYPES.CHAT:
+            return providerInstance.chat(modelCode);
+          default:
+            return unsupportedCallType();
+        }
+      }
+      case PROVIDERS.CUSTOM_PUBAPI: {
+        const providerInstance = providers.createCustomPubApi({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
         switch (callType) {
           case CALL_TYPES.AUDIO_GEN:
             return providerInstance.speech(modelCode);
@@ -2150,6 +2166,7 @@ function createApp(deps = {}) {
       success_rate: row.success_rate,
       avg_latency_ms: row.avg_latency_ms,
       consecutive_failures: row.consecutive_failures,
+      cooldown_until: row.cooldown_until,
       request_count: row.request_count,
       input_usage: row.input_usage,
       outpu_usage: row.outpu_usage,
@@ -2226,6 +2243,7 @@ function createApp(deps = {}) {
    * - google-translate: 无公开的模型列表 API，返回空数组
    * - youdao: 无公开的模型列表 API，返回空数组
    * - iciba: 无公开的模型列表 API，返回空数组
+   * - custom-pubapi: GET {baseURL}/v1/models
    *
    * @param channel - 渠道数据库行
    * @returns UpstreamModel[] 上游模型列表

@@ -675,6 +675,7 @@ describe('API: GET /status - 返回状态列表', () => {
   });
 
   it('应返回 provider 和 call_type 字段', async () => {
+    const cooldownUntil = '2026-04-12T00:10:00.000Z';
     const channelId = 'status-ch-1';
     mockEnv._addChannel({
       id: channelId,
@@ -704,7 +705,7 @@ describe('API: GET /status - 返回状态列表', () => {
       success_rate: 0.999,
       error_rate: 0.001,
       consecutive_failures: 0,
-      cooldown_until: null,
+      cooldown_until: cooldownUntil,
       request_count: 42,
       input_usage: 123,
       outpu_usage: 456,
@@ -730,6 +731,7 @@ describe('API: GET /status - 返回状态列表', () => {
     assert.strictEqual(data.models[0].input_usage, 123);
     assert.strictEqual(data.models[0].outpu_usage, 456);
     assert.strictEqual(data.models[0].total_cost, 7890);
+    assert.strictEqual(data.models[0].cooldown_until, cooldownUntil);
   });
 });
 
@@ -960,6 +962,37 @@ describe('API: POST /api/channel/models - 通过连接参数获取上游模型�
     assert.strictEqual(response.status, HTTP_STATUS.BAD_REQUEST);
     assert.strictEqual(data.success, false);
     assert.strictEqual(data.error, `${ERROR_MESSAGES.INVALID_REQUEST_BODY}: Malformed JSON payload`);
+  });
+
+  it('custom-pubapi 应调用 {baseURL}/v1/models 获取模型列表', async () => {
+    app = createApp({
+      fetch: async (url, options = {}) => {
+        const target = String(url);
+        assert.ok(target.includes('pubapi.example.com/v1/models'));
+        assert.strictEqual(options.method, 'GET');
+        assert.strictEqual(options.headers?.authorization, 'Bearer pub-key');
+        return new Response(JSON.stringify({
+          object: 'list',
+          data: [{ id: 'custom-chat', object: 'model', created: 1700000000, owned_by: 'custom-pubapi' }],
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/channel/models',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: { provider: 'custom-pubapi', apiKey: 'pub-key', baseURL: 'https://pubapi.example.com' },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data[0].id, 'custom-chat');
   });
 });
 
@@ -2825,6 +2858,126 @@ describe('Iciba: 仅 chat 与语音生成且模型受限', () => {
     assert.strictEqual(data.success, true);
     assert.strictEqual(data.data.api_accessible, true);
     assert.strictEqual(data.data.data_available, true);
+  });
+});
+
+describe('Custom PubAPI: chat/audio + models', () => {
+  let app;
+  let mockEnv;
+
+  beforeEach(() => {
+    mockEnv = createMockEnv();
+  });
+
+  afterEach(() => {
+    mockEnv._clear();
+  });
+
+  it('custom-pubapi 的 chat 模型检测应成功', async () => {
+    app = createApp({
+      fetch: async (url, options) => {
+        const target = url.toString();
+        assert.ok(target.includes('/v1/chat/completions'));
+        assert.strictEqual(options.method, 'POST');
+        assert.strictEqual(options.headers?.authorization, 'Bearer not-required');
+        const body = JSON.parse(String(options.body || '{}'));
+        assert.ok(Array.isArray(body.messages));
+        assert.ok(typeof body.source_lang === 'string');
+        assert.ok(typeof body.target_lang === 'string');
+        assert.ok(typeof body.nums === 'number');
+        return new Response(JSON.stringify({ ok: true, result: [{ text: 'hello' }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'custom-pubapi',
+        apiKey: 'not-required',
+        baseURL: 'https://pubapi.example.com',
+        model: 'custom-chat',
+        callType: CALL_TYPES.CHAT,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+  });
+
+  it('custom-pubapi 的 audio_gen 模型检测应成功', async () => {
+    app = createApp({
+      fetch: async (url, options) => {
+        const target = url.toString();
+        assert.ok(target.includes('/v1/audio/speech'));
+        assert.strictEqual(options.method, 'POST');
+        assert.strictEqual(options.headers?.authorization, 'Bearer not-required');
+        const body = JSON.parse(String(options.body || '{}'));
+        assert.ok(typeof body.input === 'string');
+        assert.ok(typeof body.voice === 'string');
+        assert.ok(typeof body.speed === 'string');
+        assert.ok(typeof body.type === 'string');
+        return new Response(new Uint8Array([1, 2, 3, 4]), {
+          status: 200,
+          headers: { 'content-type': 'audio/mpeg' },
+        });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'custom-pubapi',
+        apiKey: 'not-required',
+        baseURL: 'https://pubapi.example.com',
+        model: 'custom-tts',
+        callType: CALL_TYPES.AUDIO_GEN,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+  });
+
+  it('custom-pubapi 的 embedding 模型检测应返回不可用', async () => {
+    app = createApp();
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'custom-pubapi',
+        apiKey: 'not-required',
+        baseURL: 'https://pubapi.example.com',
+        model: 'custom-embed',
+        callType: CALL_TYPES.EMBEDDING,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.SERVICE_UNAVAILABLE);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, false);
+    assert.strictEqual(data.data.data_available, false);
   });
 });
 

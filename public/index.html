@@ -752,9 +752,15 @@
                         {{ model.channel_name || '-' }} ({{ actions.getProviderLabel(model.provider) }})
                       </p>
                     </div>
-                    <span class="inline-flex w-fit items-center rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em]" :class="model.status === 'active' ? 'bg-[rgba(74,176,112,0.14)] text-[var(--success)]' : 'bg-[rgba(220,114,92,0.12)] text-[var(--danger)]'">
-                      {{ model.status }}
-                    </span>
+                    <button
+                      type="button"
+                      class="inline-flex w-fit items-center rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-[0.18em] transition-opacity hover:opacity-80"
+                      :class="actions.getStatusBadgeClass(model.status)"
+                      @click="actions.handleModelStatusTagClick(model)"
+                      :title="actions.getModelStatusTagTitle(model)"
+                    >
+                      {{ actions.getModelStatusLabel(model.status) }}
+                    </button>
                   </div>
                   <div class="mt-4 status-cluster-grid">
                     <section class="status-cluster">
@@ -955,7 +961,17 @@
                                 >-</span>
                               </div>
                             </td>
-                            <td><span class="pill text-xs" :class="actions.getModelStatusClass(model.status)">{{ actions.getModelStatusLabel(model.status) }}</span></td>
+                            <td>
+                              <button
+                                type="button"
+                                class="pill text-xs transition-opacity hover:opacity-80"
+                                :class="actions.getModelStatusClass(model.status)"
+                                @click="actions.handleModelStatusTagClick(model)"
+                                :title="actions.getModelStatusTagTitle(model)"
+                              >
+                                {{ actions.getModelStatusLabel(model.status) }}
+                              </button>
+                            </td>
                             <td><span class="pill text-xs text-[var(--text-soft)]">{{ model.channel_name || '-' }}</span></td>
                             <td><span class="pill text-xs text-[var(--text-soft)]">{{ actions.getProviderLabel(model.provider) }}</span></td>
                             <td class="text-sm text-[var(--text-soft)]">{{ model.channel_weight ?? 1 }}</td>
@@ -1391,7 +1407,7 @@
           CHANNEL_MODELS: '/api/channel/models',
           MODEL_CHECK: '/api/model/check',
         },
-        PROVIDERS: ['openai-compatible', 'openai', 'google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations', 'exacg', 'microsoft-tts', 'google-translate', 'youdao', 'iciba'],
+        PROVIDERS: ['openai-compatible', 'openai', 'google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations', 'exacg', 'microsoft-tts', 'google-translate', 'youdao', 'iciba', 'custom-pubapi'],
         MODEL_STATUS: ['active', 'open', 'disable'],
         LOG_STATUS_LIST: ['success', 'error'],
         LOG_QUERY_DEBOUNCE_MS: 300,
@@ -1431,6 +1447,7 @@
           SUCCESS: 'success',
           ERROR: 'error',
           WARNING: 'warning',
+          INFO: 'info',
           LOG: 'log',
           SYSTEM: 'system',
           DEFAULT: 'default',
@@ -1439,10 +1456,12 @@
           success: 'toastify-gateway-success',
           error: 'toastify-gateway-error',
           warning: 'toastify-gateway-warning',
+          info: 'toastify-gateway-info',
           log: 'toastify-gateway-log',
           system: 'toastify-gateway-system',
           default: 'toastify-gateway-default',
         },
+        MODEL_COOLDOWN_UNTIL_FIELDS: ['cooldown_until', 'cooldownUntil', 'circuit_open_until', 'circuitOpenUntil', 'open_until', 'openUntil', 'expires_at', 'expiresAt'],
         ASYNC_STATUS: {
           IDLE: 'idle',
           LOADING: 'loading',
@@ -1484,6 +1503,7 @@
           'google-translate': 'Google Translate',
           youdao: 'Youdao',
           iciba: 'Iciba',
+          'custom-pubapi': 'Custom PubAPI',
         },
       };
 
@@ -1990,8 +2010,52 @@
               state.modelForm.isEditingName = false;
             },
             getProviderLabel: (provider) => constants.PROVIDER_LABELS[String(provider || '').trim()] || String(provider || '-'),
-            getModelStatusLabel: (status) => constants.MODEL_STATUS_LABELS[String(status || '').trim()] || String(status || '未知'),
-            getModelStatusClass: (status) => (status === 'active' ? 'text-[var(--success)]' : status === 'open' ? 'text-[var(--accent-strong)]' : 'text-[var(--danger)]'),
+            getModelStatusLabel: (status) => {
+              const normalizedStatus = String(status || '').trim().toLowerCase();
+              return constants.MODEL_STATUS_LABELS[normalizedStatus] || String(status || '未知');
+            },
+            getModelStatusClass: (status) => {
+              const normalizedStatus = String(status || '').trim().toLowerCase();
+              return normalizedStatus === 'active' ? 'text-[var(--success)]' : normalizedStatus === 'open' ? 'text-[var(--accent-strong)]' : 'text-[var(--danger)]';
+            },
+            getStatusBadgeClass: (status) => {
+              const normalizedStatus = String(status || '').trim().toLowerCase();
+              if (normalizedStatus === 'active') return 'bg-[rgba(74,176,112,0.14)] text-[var(--success)]';
+              if (normalizedStatus === 'open') return 'bg-[rgba(214,140,79,0.14)] text-[var(--accent-strong)]';
+              return 'bg-[rgba(220,114,92,0.12)] text-[var(--danger)]';
+            },
+            isModelCircuitOpen: (status) => String(status || '').trim().toLowerCase() === 'open',
+            getModelCooldownUntilRaw: (model) => {
+              for (const fieldName of constants.MODEL_COOLDOWN_UNTIL_FIELDS) {
+                const value = model?.[fieldName];
+                if (String(value || '').trim()) return value;
+              }
+              return '';
+            },
+            getModelCooldownUntilDisplay: (model) => {
+              const cooldownUntilRaw = actions.getModelCooldownUntilRaw(model);
+              if (!cooldownUntilRaw) return '-';
+              return actions.formatLocalDateTime(cooldownUntilRaw);
+            },
+            getModelStatusTagTitle: (model) => {
+              if (!model) return '点击查看状态详情';
+              const isOpen = actions.isModelCircuitOpen(model.status);
+              if (!isOpen) {
+                return `状态：${actions.getModelStatusLabel(model.status)}`;
+              }
+              const cooldownUntilDisplay = actions.getModelCooldownUntilDisplay(model);
+              return `状态：${actions.getModelStatusLabel(model.status)}，到期时间：${cooldownUntilDisplay}`;
+            },
+            handleModelStatusTagClick: (model) => {
+              if (!model) return;
+              const statusLabel = actions.getModelStatusLabel(model.status);
+              if (!actions.isModelCircuitOpen(model.status)) {
+                actions.setNotice(`当前状态：${statusLabel}`, constants.NOTICE_MODE.INFO);
+                return;
+              }
+              const cooldownUntilDisplay = actions.getModelCooldownUntilDisplay(model);
+              actions.setNotice(`当前状态：${statusLabel}，到期时间：${cooldownUntilDisplay}`, constants.NOTICE_MODE.INFO);
+            },
             copyText: async (text) => {
               if (!text) return;
               try {
