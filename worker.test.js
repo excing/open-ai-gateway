@@ -2668,6 +2668,163 @@ describe('Youdao: 仅 chat 与语音生成且模型受限', () => {
   });
 });
 
+describe('Iciba: 仅 chat 与语音生成且模型受限', () => {
+  let app;
+  let mockEnv;
+  let originalFetch;
+
+  beforeEach(() => {
+    mockEnv = createMockEnv();
+    originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      const target = typeof input === 'string' ? input : input?.url || input?.toString?.() || '';
+      if (String(target).includes('http://res.ksyun.iciba.com/resource/amp3/')) {
+        return new Response(new Uint8Array([1, 2, 3, 4]), {
+          status: 200,
+          headers: { 'content-type': 'audio/mpeg' },
+        });
+      }
+      if (typeof originalFetch === 'function') {
+        return originalFetch(input, init);
+      }
+      return new Response('not found', { status: 404 });
+    };
+  });
+
+  afterEach(() => {
+    mockEnv._clear();
+    globalThis.fetch = originalFetch;
+  });
+
+  it('iciba-dict 的 chat 模型检测应成功', async () => {
+    app = createApp({
+      fetch: async (url, options) => {
+        const target = url.toString();
+        assert.ok(target.includes('/_next/data/SIgDISbkU9OFnSzS3LWHc/word.json'));
+        assert.ok(target.includes('w='));
+        assert.strictEqual(options.method, 'GET');
+        return new Response(JSON.stringify({ pageProps: { hello: 'world' } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'iciba',
+        apiKey: 'not-required',
+        baseURL: 'https://www.iciba.com',
+        model: 'iciba-dict',
+        callType: CALL_TYPES.CHAT,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+  });
+
+  it('iciba-suggest 的 chat 模型检测应成功', async () => {
+    app = createApp({
+      fetch: async (url, options) => {
+        const target = url.toString();
+        assert.ok(target.includes('dict.iciba.com/dictionary/word/suggestion'));
+        assert.ok(target.includes('word='));
+        assert.ok(target.includes('nums=5'));
+        assert.strictEqual(options.method, 'GET');
+        return new Response(JSON.stringify({
+          status: 1,
+          message: [{ key: 'live', paraphrase: 'adj.活的', value: 0, means: [] }],
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'iciba',
+        apiKey: 'not-required',
+        baseURL: 'https://www.iciba.com',
+        model: 'iciba-suggest',
+        callType: CALL_TYPES.CHAT,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+  });
+
+  it('iciba-dictvoice 的 audio_gen 模型检测应成功', async () => {
+    app = createApp({
+      fetch: async (url, options) => {
+        const target = url.toString();
+        assert.ok(target.includes('/_next/data/SIgDISbkU9OFnSzS3LWHc/word.json'));
+        assert.ok(target.includes('w=test'));
+        assert.strictEqual(options.method, 'GET');
+        return new Response(JSON.stringify({
+          pageProps: {
+            initialReduxState: {
+              word: {
+                wordInfo: {
+                  baesInfo: {
+                    symbols: [{
+                      ph_en_mp3_bk: 'http://res.ksyun.iciba.com/resource/amp3/oxford/0/26/db/26dbb1063da50734e15c57c9995da7e9.mp3',
+                      ph_am_mp3_bk: 'http://res.ksyun.iciba.com/resource/amp3/1/0/1c/b2/1cb251ec0d568de6a929b520c4aed8d1.mp3',
+                      ph_tts_mp3_bk: 'http://res-tts.ksyun.iciba.com/1/c/b/1cb251ec0d568de6a929b520c4aed8d1.mp3',
+                    }],
+                  },
+                },
+              },
+            },
+          },
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'iciba',
+        apiKey: 'not-required',
+        baseURL: 'https://www.iciba.com',
+        model: 'iciba-dictvoice',
+        callType: CALL_TYPES.AUDIO_GEN,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+  });
+});
+
 describe('extra_body 透传', () => {
   it('executeAIRequest(chat) 应透传 extra_body 到 generateText.providerOptions', async () => {
     let receivedOptions;
