@@ -1,3 +1,5 @@
+import { assertResponseIsOK } from "./provider-errors";
+
 const POLLINATIONS_PROVIDER_NAME = 'pollinations';
 const POLLINATIONS_DEFAULT_BASE_URL = 'https://gen.pollinations.ai';
 const POLLINATIONS_ENDPOINTS = {
@@ -53,9 +55,7 @@ function buildHeaders(sharedHeaders, apiKey, callHeaders) {
 
 async function fetchAsBase64({ fetchFn, url, headers, fallbackMediaType, abortSignal }) {
   const response = await fetchFn(url, { method: 'GET', headers, signal: abortSignal });
-  if (!response.ok) {
-    throw new Error(`Pollinations upstream returned ${response.status}`);
-  }
+  await assertResponseIsOK(response, 'Pollinations upstream returned');
   const mediaType = response.headers.get('content-type') || fallbackMediaType;
   const headersRecord = toRecordHeaders(Object.fromEntries(response.headers.entries()));
   const bytes = new Uint8Array(await response.arrayBuffer());

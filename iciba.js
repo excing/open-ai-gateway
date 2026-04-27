@@ -120,7 +120,7 @@ class IcibaLanguageModelV3 {
         headers: requestHeaders,
         signal: options?.abortSignal,
       });
-      assertResponseIsOK(response, 'Iciba upstream returned');
+      await assertResponseIsOK(response, 'Iciba upstream returned');
       payload = await response.json().catch(() => ({}));
       if (payload?.status !== 1) {
         throw new Error('Iciba suggest upstream error');
@@ -134,7 +134,7 @@ class IcibaLanguageModelV3 {
         headers: requestHeaders,
         signal: options?.abortSignal,
       });
-      assertResponseIsOK(response, 'Iciba upstream returned');
+      await assertResponseIsOK(response, 'Iciba upstream returned');
       payload = await response.json().catch(() => ({}));
       textOutput = JSON.stringify(payload, null, 2);
     }
@@ -191,7 +191,7 @@ class IcibaSpeechModelV3 {
       signal: options?.abortSignal,
     });
 
-    assertResponseIsOK(response, 'Iciba upstream returned');
+    await assertResponseIsOK(response, 'Iciba upstream returned');
 
     const payload = await response.json().catch(() => ({}));
     const symbols = extractIcibaSymbols(payload);
@@ -202,7 +202,7 @@ class IcibaSpeechModelV3 {
 
     const resource = await this.config.fetch(voiceUrl);
 
-    assertResponseIsOK(resource, 'Iciba upstream returned');
+    await assertResponseIsOK(resource, 'Iciba upstream returned');
 
     const audio = new Uint8Array(await resource.arrayBuffer());
     const headers = toHeadersRecord(Object.fromEntries(resource.headers.entries()));

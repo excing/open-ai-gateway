@@ -1,3 +1,5 @@
+import { assertResponseIsOK } from "./provider-errors";
+
 const MICROSOFT_TTS_PROVIDER_NAME = 'microsoft-tts';
 const MICROSOFT_TTS_DEFAULT_MODEL = 'microsoft-tts';
 const MICROSOFT_TTS_PATH = '/tts';
@@ -68,15 +70,7 @@ class MicrosoftTTSSpeechModelV3 {
       signal: options?.abortSignal,
     });
 
-    if (!response.ok) {
-      const contentType = response.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
-        const body = await response.json().catch(() => ({}));
-        const message = body?.message || body?.error || `Microsoft TTS upstream returned ${response.status}`;
-        throw new Error(String(message));
-      }
-      throw new Error(`Microsoft TTS upstream returned ${response.status}`);
-    }
+    await assertResponseIsOK(response, 'Microsoft TTS upstream returned');
 
     const bytes = new Uint8Array(await response.arrayBuffer());
     const headers = toHeadersRecord(Object.fromEntries(response.headers.entries()));

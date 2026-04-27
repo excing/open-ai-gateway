@@ -1,3 +1,5 @@
+import { assertResponseIsOK } from "./provider-errors";
+
 const YOUDAO_PROVIDER_NAME = 'youdao';
 const YOUDAO_DEFAULT_BASE_URL = 'https://dict.youdao.com';
 const YOUDAO_SPEC_VERSION = 'v3';
@@ -112,8 +114,6 @@ class YoudaoLanguageModelV3 {
       url.searchParams.set('num', providerOptions.num || '5');
       url.searchParams.set('ver', '3.0');
       url.searchParams.set('doctype', 'json');
-      url.searchParams.set('cache', 'false');
-      url.searchParams.set('le', String(providerOptions.le || YOUDAO_CHAT_FORM_DEFAULTS.le));
       url.searchParams.set('q', text);
 
       response = await this.config.fetch(url.toString(), {
@@ -128,9 +128,7 @@ class YoudaoLanguageModelV3 {
       const form = new URLSearchParams();
       form.set('q', text);
       form.set('le', String(providerOptions.le || YOUDAO_CHAT_FORM_DEFAULTS.le));
-      form.set('t', String(providerOptions.t || YOUDAO_CHAT_FORM_DEFAULTS.t));
       form.set('client', String(providerOptions.client || YOUDAO_CHAT_FORM_DEFAULTS.client));
-      form.set('sign', String(providerOptions.sign || YOUDAO_CHAT_FORM_DEFAULTS.sign));
       form.set('keyfrom', String(providerOptions.keyfrom || YOUDAO_CHAT_FORM_DEFAULTS.keyfrom));
 
       response = await this.config.fetch(url.toString(), {
@@ -141,9 +139,7 @@ class YoudaoLanguageModelV3 {
       });
     }
 
-    if (!response.ok) {
-      throw new Error(`Youdao upstream returned ${response.status}`);
-    }
+    await assertResponseIsOK(response, 'Youdao upstream returned');
 
     const payload = await response.json().catch(() => ({}));
     let textOutput = '';
@@ -216,9 +212,7 @@ class YoudaoSpeechModelV3 {
       signal: options?.abortSignal,
     });
 
-    if (!response.ok) {
-      throw new Error(`Youdao TTS upstream returned ${response.status}`);
-    }
+    await assertResponseIsOK(response, 'Youdao TTS upstream returned');
 
     const audio = new Uint8Array(await response.arrayBuffer());
     const headers = toHeadersRecord(Object.fromEntries(response.headers.entries()));

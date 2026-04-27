@@ -1,3 +1,5 @@
+import { assertResponseIsOK } from "./provider-errors";
+
 const GOOGLE_TRANSLATE_PROVIDER_NAME = 'google-translate';
 const GOOGLE_TRANSLATE_DEFAULT_BASE_URL = 'https://translate.googleapis.com';
 const GOOGLE_TRANSLATE_SPEC_VERSION = 'v3';
@@ -149,9 +151,7 @@ class GoogleTranslateLanguageModelV3 {
       signal: options?.abortSignal,
     });
 
-    if (!response.ok) {
-      throw new Error(`Google Translate upstream returned ${response.status}`);
-    }
+    await assertResponseIsOK(response, 'Google Translate upstream returned');
 
     const payload = await response.json().catch(() => ({}));
     const textOutput = extractTranslatedText(payload);
@@ -213,9 +213,7 @@ class GoogleTranslateSpeechModelV3 {
       signal: options?.abortSignal,
     });
 
-    if (!response.ok) {
-      throw new Error(`Google Translate TTS upstream returned ${response.status}`);
-    }
+    await assertResponseIsOK(response, 'Google Translate TTS upstream returned');
 
     const audio = new Uint8Array(await response.arrayBuffer());
     const headers = toHeadersRecord(Object.fromEntries(response.headers.entries()));
