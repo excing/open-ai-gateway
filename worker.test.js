@@ -2481,6 +2481,193 @@ describe('Google Translate: 仅 chat 与语音生成且模型受限', () => {
   });
 });
 
+describe('Youdao: 仅 chat 与语音生成且模型受限', () => {
+  let app;
+  let mockEnv;
+
+  beforeEach(() => {
+    mockEnv = createMockEnv();
+  });
+
+  afterEach(() => {
+    mockEnv._clear();
+  });
+
+  it('youdao 的 chat 模型检测应成功', async () => {
+    app = createApp({
+      fetch: async (url, options) => {
+        const target = url.toString();
+        assert.ok(target.includes('/jsonapi_s'));
+        assert.ok(target.includes('doctype=json'));
+        assert.ok(target.includes('jsonversion=4'));
+        assert.strictEqual(options.method, 'POST');
+        const body = String(options.body || '');
+        assert.ok(body.includes('q='));
+        assert.ok(body.includes('le=en'));
+        assert.ok(body.includes('t=1'));
+        assert.ok(body.includes('client=web'));
+        assert.ok(body.includes('keyfrom=webdict'));
+        return new Response(JSON.stringify({ ec: { word: [{ trs: [{ tr: [{ l: { i: ['test'] } }] }] }] } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'youdao',
+        apiKey: 'not-required',
+        baseURL: 'https://dict.youdao.com',
+        model: 'youdao-dict',
+        callType: CALL_TYPES.CHAT,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+  });
+
+  it('youdao 的 audio_gen 模型检测应成功', async () => {
+    app = createApp({
+      fetch: async (url, options) => {
+        const target = url.toString();
+        assert.ok(target.includes('/dictvoice'));
+        assert.ok(target.includes('audio=test'));
+        assert.ok(target.includes('type=1'));
+        assert.strictEqual(options.method, 'GET');
+        return new Response(new Uint8Array([1, 2, 3]), {
+          status: 200,
+          headers: { 'content-type': 'audio/mpeg' },
+        });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'youdao',
+        apiKey: 'not-required',
+        baseURL: 'https://dict.youdao.com',
+        model: 'youdao-dictvoice',
+        callType: CALL_TYPES.AUDIO_GEN,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+  });
+
+  it('youdao 的 chat 非白名单模型应返回不可用', async () => {
+    app = createApp();
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'youdao',
+        apiKey: 'not-required',
+        baseURL: 'https://dict.youdao.com',
+        model: 'not-supported-model',
+        callType: CALL_TYPES.CHAT,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, false);
+    assert.strictEqual(data.data.data_available, false);
+  });
+
+  it('youdao 的 embedding 模型检测应返回不可用', async () => {
+    app = createApp();
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'youdao',
+        apiKey: 'not-required',
+        baseURL: 'https://dict.youdao.com',
+        model: 'youdao-dict',
+        callType: CALL_TYPES.EMBEDDING,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.SERVICE_UNAVAILABLE);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, false);
+    assert.strictEqual(data.data.data_available, false);
+  });
+
+  it('youdao-suggest 的 chat 模型检测应成功并命中 suggest 端点', async () => {
+    app = createApp({
+      fetch: async (url, options) => {
+        const target = url.toString();
+        assert.ok(target.includes('/suggest'));
+        assert.ok(target.includes('num=5'));
+        assert.ok(target.includes('ver=3.0'));
+        assert.ok(target.includes('doctype=json'));
+        assert.ok(target.includes('cache=false'));
+        assert.ok(target.includes('le=en'));
+        assert.ok(target.includes('q='));
+        assert.strictEqual(options.method, 'GET');
+        return new Response(JSON.stringify({
+          result: { msg: 'success', code: 200 },
+          data: { entries: [{ entry: 'dir', explain: 'abbr. director' }], query: 'dir', language: 'en', type: 'dict' },
+        }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: '/api/model/check',
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        provider: 'youdao',
+        apiKey: 'not-required',
+        baseURL: 'https://dict.youdao.com',
+        model: 'youdao-suggest',
+        callType: CALL_TYPES.CHAT,
+        headers: {},
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+  });
+});
+
 describe('extra_body 透传', () => {
   it('executeAIRequest(chat) 应透传 extra_body 到 generateText.providerOptions', async () => {
     let receivedOptions;

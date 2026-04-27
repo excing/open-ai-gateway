@@ -20,6 +20,7 @@ import { createPollinations } from './pollinations.js';
 import { createExacg } from './exacg.js';
 import { createMicrosoftTTS } from './microsoft-tts.js';
 import { createGoogleApisTranslate } from './googleapis-translate.js';
+import { createYoudao } from './youdao.js';
 import { extractMediaResources, getMp3Duration, getMp4Duration } from './media-utils.js';
 
 const CONSTANTS = {
@@ -35,6 +36,7 @@ const CONSTANTS = {
     EXACG: 'exacg',
     MICROSOFT_TTS: 'microsoft-tts',
     GOOGLE_TRANSLATE: 'google-translate',
+    YOUDAO: 'youdao',
   },
   CALL_TYPES: {
     CHAT: 'chat',
@@ -117,6 +119,7 @@ const CONSTANTS = {
     NOT_FOUND: 'Resource not found',
     MODEL_NOT_FOUND: 'No available model found for the requested model identifier',
     CHANNEL_NOT_FOUND: 'Channel not found',
+    CHANNEL_KEY_ALREADY_EXISTS: 'Channel key already exists',
     METHOD_NOT_ALLOWED: 'Method not allowed',
     INVALID_REQUEST_BODY: 'Invalid request body',
     NO_MODEL_AVAILABLE: 'All models for this identifier are currently unavailable (cooldown or disabled)',
@@ -330,6 +333,7 @@ const SCHEMAS = (() => {
     PROVIDERS.EXACG,
     PROVIDERS.MICROSOFT_TTS,
     PROVIDERS.GOOGLE_TRANSLATE,
+    PROVIDERS.YOUDAO,
   ]);
 
   const CallTypeEnum = z.enum([
@@ -1075,6 +1079,7 @@ function createApp(deps = {}) {
     createExacg: deps.providers?.createExacg || createExacg,
     createMicrosoftTTS: deps.providers?.createMicrosoftTTS || createMicrosoftTTS,
     createGoogleApisTranslate: deps.providers?.createGoogleApisTranslate || createGoogleApisTranslate,
+    createYoudao: deps.providers?.createYoudao || createYoudao,
   };
 
   const ai = {
@@ -1186,6 +1191,18 @@ function createApp(deps = {}) {
       }
       case PROVIDERS.GOOGLE_TRANSLATE: {
         const providerInstance = providers.createGoogleApisTranslate({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
+        switch (callType) {
+          case CALL_TYPES.AUDIO_GEN:
+            return providerInstance.speech(modelCode);
+          case CALL_TYPES.MIX:
+          case CALL_TYPES.CHAT:
+            return providerInstance.chat(modelCode);
+          default:
+            return unsupportedCallType();
+        }
+      }
+      case PROVIDERS.YOUDAO: {
+        const providerInstance = providers.createYoudao({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
         switch (callType) {
           case CALL_TYPES.AUDIO_GEN:
             return providerInstance.speech(modelCode);
@@ -1786,7 +1803,7 @@ function createApp(deps = {}) {
 
     const existing = await env.DB.prepare(SQL.SELECT_CHANNEL_BY_KEY).bind(parsed.key).first();
     if (existing) {
-      return errorResponse(ERROR_MESSAGES.FORBIDDEN, HTTP_STATUS.FORBIDDEN);
+      return errorResponse(ERROR_MESSAGES.CHANNEL_KEY_ALREADY_EXISTS, HTTP_STATUS.FORBIDDEN);
     }
 
     const channelId = uuidFn();
@@ -2190,6 +2207,8 @@ function createApp(deps = {}) {
    * - pollinations: GET https://gen.pollinations.ai/v1/models
    * - exacg: 无公开的模型列表 API，返回空数组
    * - microsoft-tts: 无公开的模型列表 API，返回空数组
+   * - google-translate: 无公开的模型列表 API，返回空数组
+   * - youdao: 无公开的模型列表 API，返回空数组
    *
    * @param channel - 渠道数据库行
    * @returns UpstreamModel[] 上游模型列表
@@ -2202,7 +2221,8 @@ function createApp(deps = {}) {
       normalizedProvider === PROVIDERS.ANTHROPIC ||
       normalizedProvider === PROVIDERS.EXACG ||
       normalizedProvider === PROVIDERS.MICROSOFT_TTS ||
-      normalizedProvider === PROVIDERS.GOOGLE_TRANSLATE
+      normalizedProvider === PROVIDERS.GOOGLE_TRANSLATE ||
+      normalizedProvider === PROVIDERS.YOUDAO
     ) {
       return [];
     }
@@ -2287,6 +2307,8 @@ function createApp(deps = {}) {
         return 'https://gen.pollinations.ai/v1';
       case PROVIDERS.GOOGLE_TRANSLATE:
         return 'https://translate.googleapis.com';
+      case PROVIDERS.YOUDAO:
+        return 'https://dict.youdao.com';
       default:
         return '';
     }
