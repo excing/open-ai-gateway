@@ -3001,7 +3001,13 @@ describe('extra_body 透传', () => {
     );
 
     assert.strictEqual(result.text, 'ok');
-    assert.deepStrictEqual(receivedOptions.providerOptions, extraBody);
+    assert.deepStrictEqual(receivedOptions.providerOptions, {
+      ...extraBody,
+      openai: {
+        ...(extraBody.openai || {}),
+        stream_options: { include_usage: true },
+      },
+    });
   });
 
   it('POST /v1/chat/completions stream=true 应透传 extra_body 到 streamText.providerOptions', async () => {
@@ -3067,7 +3073,10 @@ describe('extra_body 透传', () => {
 
     const response = await app.handleRequest(request, mockEnv);
     assert.strictEqual(response.status, HTTP_STATUS.OK);
-    assert.deepStrictEqual(receivedOptions.providerOptions, extraBody);
+    assert.deepStrictEqual(receivedOptions.providerOptions, {
+      ...extraBody,
+      openai: { stream_options: { include_usage: true } },
+    });
     mockEnv._clear();
   });
 
@@ -3102,7 +3111,10 @@ describe('extra_body 透传', () => {
     const data = await response.json();
     assert.strictEqual(response.status, HTTP_STATUS.OK);
     assert.strictEqual(data.success, true);
-    assert.deepStrictEqual(receivedOptions.providerOptions, extraBody);
+    assert.deepStrictEqual(receivedOptions.providerOptions, {
+      ...extraBody,
+      openai: { stream_options: { include_usage: true } },
+    });
     mockEnv._clear();
   });
 
@@ -3124,7 +3136,35 @@ describe('extra_body 透传', () => {
       { prompt: 'hello', providerOptions },
     );
 
-    assert.deepStrictEqual(receivedOptions.providerOptions, providerOptions);
+    assert.deepStrictEqual(receivedOptions.providerOptions, {
+      ...providerOptions,
+      openai: {
+        ...(providerOptions.openai || {}),
+        stream_options: { include_usage: true },
+      },
+    });
+  });
+
+  it('executeAIRequest(chat) 在无 extra_body/providerOptions 时也应显式要求返回 usage', async () => {
+    let receivedOptions;
+    const app = createApp({
+      ai: {
+        generateText: async (options) => {
+          receivedOptions = options;
+          return { text: 'ok', usage: {} };
+        },
+      },
+    });
+
+    await app.executeAIRequest(
+      { modelId: 'mock-model' },
+      CALL_TYPES.CHAT,
+      { prompt: 'hello' },
+    );
+
+    assert.deepStrictEqual(receivedOptions.providerOptions, {
+      openai: { stream_options: { include_usage: true } },
+    });
   });
 });
 

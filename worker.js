@@ -922,6 +922,27 @@ function getProviderOptions(payload) {
   return value;
 }
 
+function withUsageRequired(providerOptions) {
+  const base = (providerOptions && typeof providerOptions === 'object' && !Array.isArray(providerOptions))
+    ? providerOptions
+    : {};
+  const openai = (base.openai && typeof base.openai === 'object' && !Array.isArray(base.openai))
+    ? base.openai
+    : {};
+  return {
+    ...base,
+    openai: {
+      ...openai,
+      stream_options: {
+        ...(openai.stream_options && typeof openai.stream_options === 'object' && !Array.isArray(openai.stream_options)
+          ? openai.stream_options
+          : {}),
+        include_usage: true,
+      },
+    },
+  };
+}
+
 function firstValue(...values) {
   for (const value of values) {
     if (value !== undefined) return value;
@@ -1286,7 +1307,7 @@ function createApp(deps = {}) {
   }
 
   async function executeAIRequest(aiModel, callType, body) {
-    const providerOptions = firstValue(body.extra_body, body.providerOptions);
+    const providerOptions = withUsageRequired(firstValue(body.extra_body, body.providerOptions));
     if (callType === CALL_TYPES.CHAT || callType === CALL_TYPES.MIX) {
       const chatToolConfig = buildChatToolConfig(body);
       const messages = body.messages;
@@ -1738,7 +1759,7 @@ function createApp(deps = {}) {
           tools: chatToolConfig.tools,
           toolChoice: chatToolConfig.toolChoice,
           responseFormat: firstValue(body.responseFormat, body.response_format),
-          providerOptions: firstValue(body.extra_body, body.providerOptions),
+          providerOptions: withUsageRequired(firstValue(body.extra_body, body.providerOptions)),
         }),
         onFinish: async (event) => {
           const latencyMs = nowFn().getTime() - startTime;
@@ -2222,7 +2243,7 @@ function createApp(deps = {}) {
       return jsonResponse({ success: true, data: models }, HTTP_STATUS.OK);
     } catch (error) {
       return jsonResponse({
-        success: true,
+        success: false,
         data: [],
         error: error.message || 'Failed to fetch upstream models',
       }, HTTP_STATUS.OK);

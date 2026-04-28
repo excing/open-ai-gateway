@@ -2333,7 +2333,7 @@
                       syncChannelModelsRaw();
                       const summary = `已获取 ${discoveredModels.length} 个模型，新增 ${mergedResult.appendedCount} 个，跳过 ${mergedResult.skippedCount} 个`;
                       actions.setAsyncTaskState(constants.ASYNC_TASKS.FETCH_CHANNEL_MODELS, constants.ASYNC_STATUS.SUCCESS, summary);
-                      actions.setNotice(summary, constants.NOTICE_MODE.LOG);
+                      actions.setNotice(summary, constants.NOTICE_MODE.SUCCESS);
                       return;
                     }
                     throw new Error(res.data?.error || '获取模型失败');
@@ -2376,7 +2376,7 @@
                     actions.setChannelModelDetectState(index, constants.ASYNC_STATUS.ERROR, result.error_message || 'API 不可访问');
                   }
                 } else {
-                  throw new Error(res.data?.error || '检测失败');
+                  throw new Error(res.data?.error || res.data?.error_message || '检测失败');
                 }
               } catch (error) {
                 actions.setChannelModelDetectState(index, constants.ASYNC_STATUS.ERROR, error.message);
