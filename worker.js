@@ -1266,6 +1266,24 @@ function createApp(deps = {}) {
             return unsupportedCallType();
         }
       }
+      case PROVIDERS.OPENAI_COMPATIBLE: {
+        const providerInstance = providers.createOpenAICompatible({ apiKey, baseURL, headers, name: channelName, includeUsage: true, fetch: getFetchFn(env) });
+        switch (callType) {
+          case CALL_TYPES.IMAGE_GEN:
+            return providerInstance.imageModel(modelCode);
+          case CALL_TYPES.AUDIO_GEN:
+            return providerInstance.speechModel(modelCode);
+          case CALL_TYPES.MIX:
+          case CALL_TYPES.CHAT:
+            return providerInstance.chatModel(modelCode);
+          case CALL_TYPES.EMBEDDING:
+            return providerInstance.embeddingModel(modelCode);
+          case CALL_TYPES.TRANSCRIBE:
+            return providerInstance.transcriptionModel(modelCode);
+          default:
+            return unsupportedCallType();
+        }
+      }
       case PROVIDERS.OPENAI:
       default: {
         const providerInstance = providers.createOpenAI({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
@@ -1281,24 +1299,6 @@ function createApp(deps = {}) {
             return providerInstance.embedding(modelCode);
           case CALL_TYPES.TRANSCRIBE:
             return providerInstance.transcription(modelCode);
-          default:
-            return unsupportedCallType();
-        }
-      }
-      case PROVIDERS.OPENAI_COMPATIBLE: {
-        const providerInstance = providers.createOpenAICompatible({ apiKey, baseURL, headers, name: channelName, includeUsage: true, fetch: getFetchFn(env) });
-        switch (callType) {
-          case CALL_TYPES.IMAGE_GEN:
-            return providerInstance.imageModel(modelCode);
-          case CALL_TYPES.AUDIO_GEN:
-            return providerInstance.speechModel(modelCode);
-          case CALL_TYPES.MIX:
-          case CALL_TYPES.CHAT:
-            return providerInstance.chatModel(modelCode);
-          case CALL_TYPES.EMBEDDING:
-            return providerInstance.embeddingModel(modelCode);
-          case CALL_TYPES.TRANSCRIBE:
-            return providerInstance.transcriptionModel(modelCode);
           default:
             return unsupportedCallType();
         }
