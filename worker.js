@@ -28,6 +28,7 @@ import { extractMediaResources, getMp3Duration, getMp4Duration } from './media-u
 const CONSTANTS = {
   PROVIDERS: {
     OPENAI: 'openai',
+    OPENAI_STREAM: 'openai-stream',
     OPENAI_COMPATIBLE: 'openai-compatible',
     GOOGLE: 'google',
     GEMINI: 'gemini',
@@ -327,6 +328,7 @@ CONSTANTS.PATH_TO_CALL_TYPE = PATH_TO_CALL_TYPE;
 const SCHEMAS = (() => {
   const ProviderEnum = z.enum([
     PROVIDERS.OPENAI,
+    PROVIDERS.OPENAI_STREAM,
     PROVIDERS.OPENAI_COMPATIBLE,
     PROVIDERS.GOOGLE,
     PROVIDERS.GEMINI,
@@ -1285,6 +1287,7 @@ function createApp(deps = {}) {
         }
       }
       case PROVIDERS.OPENAI:
+      case PROVIDERS.OPENAI_STREAM:
       default: {
         const providerInstance = providers.createOpenAI({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
         switch (callType) {
@@ -1796,7 +1799,15 @@ function createApp(deps = {}) {
           body.audio = await normalizeTranscriptionAudioInput(body);
         }
         // ------------- request body 兼容性业务 ENDED -----------------
-        const result = await executeAIRequest(aiModel, selection.model.call_type, body);
+        const isOpenAIStreamNonStreamChat = (
+          userCallType === CALL_TYPES.CHAT
+          && body.stream !== true
+          && normalizeProvider(selection.channel.provider) === PROVIDERS.OPENAI_STREAM
+          && selection.model.call_type === CALL_TYPES.CHAT
+        );
+        const result = isOpenAIStreamNonStreamChat
+          ? await executeOpenAIStreamChatAsNonStream(aiModel, body)
+          : await executeAIRequest(aiModel, selection.model.call_type, body);
         const latencyMs = nowFn().getTime() - startTime;
         const responseBody = selection.model.call_type === CALL_TYPES.MIX
           ? await extractMediaResources({ text: result.text, files: result.files, usage: result.usage })
@@ -1815,6 +1826,39 @@ function createApp(deps = {}) {
     }
 
     return errorResponse(lastError?.message || ERROR_MESSAGES.PROVIDER_ERROR, HTTP_STATUS.INTERNAL_ERROR);
+  }
+
+  async function executeOpenAIStreamChatAsNonStream(aiModel, body) {
+    const chatToolConfig = buildChatToolConfig(body);
+    const streamResult = await ai.streamText(
+      pruneUndefined({
+        model: aiModel,
+        messages: body.messages,
+        prompt: body.prompt,
+        maxOutputTokens: firstValue(body.maxTokens, body.max_tokens),
+        temperature: body.temperature,
+        topP: firstValue(body.topP, body.top_p),
+        frequencyPenalty: firstValue(body.frequencyPenalty, body.frequency_penalty),
+        presencePenalty: firstValue(body.presencePenalty, body.presence_penalty),
+        stopSequences: firstValue(body.stopSequences, body.stop),
+        seed: body.seed,
+        tools: chatToolConfig.tools,
+        toolChoice: chatToolConfig.toolChoice,
+        responseFormat: firstValue(body.responseFormat, body.response_format),
+        providerOptions: firstValue(body.extra_body, body.providerOptions),
+      }),
+    );
+    const textParts = [];
+    for await (const chunk of streamResult.textStream) {
+      textParts.push(chunk);
+    }
+    const text = textParts.join('')?.trim();
+    if (!text) throw new Error("Upstream returned empty or error");
+    return {
+      text,
+      usage: streamResult.usage || {},
+      warnings: streamResult.warnings,
+    };
   }
 
   async function handleModelsList(request, env) {

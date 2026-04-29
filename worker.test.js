@@ -3783,6 +3783,81 @@ describe('openai-compatible provider', () => {
   });
 });
 
+describe('openai-stream provider', () => {
+  it('stream=false 时应使用 streamText 聚合文本返回', async () => {
+    const mockEnv = createMockEnv();
+    mockEnv._addChannel({
+      id: 'ch-openai-stream',
+      name: 'OpenAI Stream Channel',
+      key: 'openai-stream-channel',
+      provider: PROVIDERS.OPENAI_STREAM,
+      api_key: 'sk-stream-only',
+      base_url: '',
+      weight: 1,
+      created_at: '2026-04-15T00:00:00.000Z',
+      updated_at: '2026-04-15T00:00:00.000Z',
+    });
+    mockEnv._addModel({
+      id: 'model-openai-stream',
+      channel_id: 'ch-openai-stream',
+      code: 'gpt-4o-stream-only',
+      name: 'gpt-4o-stream-only',
+      desc: '',
+      aliases: '[]',
+      call_type: CALL_TYPES.CHAT,
+      capabilities: JSON.stringify([CALL_TYPES.CHAT]),
+      input_price: '0',
+      output_price: '0',
+      status: MODEL_STATUS.ACTIVE,
+      weight: 1,
+      avg_latency_ms: 0,
+      success_rate: 1,
+      error_rate: 0,
+      consecutive_failures: 0,
+      cooldown_until: null,
+      last_updated: '2026-04-15T00:00:00.000Z',
+      headers: '{}',
+    });
+
+    let generateCalled = false;
+    const app = createApp({
+      providers: {
+        createOpenAI: () => ({ chat: () => ({ modelCode: 'gpt-4o-stream-only' }) }),
+      },
+      ai: {
+        generateText: async () => {
+          generateCalled = true;
+          throw new Error('should not call generateText');
+        },
+        streamText: async () => ({
+          textStream: ['hello ', 'world'],
+          usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
+        }),
+      },
+    });
+
+    const request = createMockRequest({
+      method: 'POST',
+      pathname: ROUTES.V1_CHAT,
+      headers: { authorization: 'Bearer test-admin-key' },
+      body: {
+        model: 'gpt-4o-stream-only',
+        messages: [{ role: 'user', content: 'say hello' }],
+        stream: false,
+      },
+    });
+
+    const response = await app.handleRequest(request, mockEnv);
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    const data = await response.json();
+    assert.strictEqual(generateCalled, false);
+    assert.strictEqual(data.choices[0].message.content, 'hello world');
+    assert.strictEqual(data.usage.prompt_tokens, 1);
+    assert.strictEqual(data.usage.completion_tokens, 2);
+    assert.strictEqual(data.usage.total_tokens, 3);
+  });
+});
+
 describe('数据库字段升级: channels.weight + 双向成本字段', () => {
   let app;
   let mockEnv;
