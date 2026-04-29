@@ -1286,7 +1286,7 @@ function createApp(deps = {}) {
         }
       }
       case PROVIDERS.OPENAI_COMPATIBLE: {
-        const providerInstance = providers.createOpenAICompatible({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
+        const providerInstance = providers.createOpenAICompatible({ apiKey, baseURL, headers, name: channelName, includeUsage: true, fetch: getFetchFn(env) });
         switch (callType) {
           case CALL_TYPES.IMAGE_GEN:
             return providerInstance.imageModel(modelCode);
@@ -1307,7 +1307,7 @@ function createApp(deps = {}) {
   }
 
   async function executeAIRequest(aiModel, callType, body) {
-    const providerOptions = withUsageRequired(firstValue(body.extra_body, body.providerOptions));
+    const providerOptions = firstValue(body.extra_body, body.providerOptions);
     if (callType === CALL_TYPES.CHAT || callType === CALL_TYPES.MIX) {
       const chatToolConfig = buildChatToolConfig(body);
       const messages = body.messages;
@@ -1317,7 +1317,7 @@ function createApp(deps = {}) {
           model: aiModel,
           messages,
           prompt,
-          maxTokens: firstValue(body.maxTokens, body.max_tokens),
+          maxOutputTokens: firstValue(body.maxTokens, body.max_tokens),
           temperature: body.temperature,
           topP: firstValue(body.topP, body.top_p),
           frequencyPenalty: firstValue(body.frequencyPenalty, body.frequency_penalty),
@@ -1749,7 +1749,7 @@ function createApp(deps = {}) {
           model: fallbackModel,
           messages: body.messages,
           prompt: body.prompt,
-          maxTokens: firstValue(body.maxTokens, body.max_tokens),
+          maxOutputTokens: firstValue(body.maxTokens, body.max_tokens),
           temperature: body.temperature,
           topP: firstValue(body.topP, body.top_p),
           frequencyPenalty: firstValue(body.frequencyPenalty, body.frequency_penalty),
@@ -1759,7 +1759,7 @@ function createApp(deps = {}) {
           tools: chatToolConfig.tools,
           toolChoice: chatToolConfig.toolChoice,
           responseFormat: firstValue(body.responseFormat, body.response_format),
-          providerOptions: withUsageRequired(firstValue(body.extra_body, body.providerOptions)),
+          providerOptions: firstValue(body.extra_body, body.providerOptions),
         }),
         onFinish: async (event) => {
           const latencyMs = nowFn().getTime() - startTime;
