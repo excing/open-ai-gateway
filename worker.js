@@ -19,10 +19,6 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider';
 import { createPollinations } from './pollinations.js';
 import { createExacg } from './exacg.js';
 import { createMicrosoftTTS } from './microsoft-tts.js';
-import { createGoogleApisTranslate } from './googleapis-translate.js';
-import { createYoudao } from './youdao.js';
-import { createIciba } from './iciba.js';
-import { createCustomPubApi } from './custom-pubapi.js';
 import { extractMediaResources, getMp3Duration, getMp4Duration } from './media-utils.js';
 
 const CONSTANTS = {
@@ -38,10 +34,6 @@ const CONSTANTS = {
     POLLINATIONS: 'pollinations',
     EXACG: 'exacg',
     MICROSOFT_TTS: 'microsoft-tts',
-    GOOGLE_TRANSLATE: 'google-translate',
-    YOUDAO: 'youdao',
-    ICIBA: 'iciba',
-    CUSTOM_PUBAPI: 'custom-pubapi',
   },
   CALL_TYPES: {
     CHAT: 'chat',
@@ -338,10 +330,6 @@ const SCHEMAS = (() => {
     PROVIDERS.POLLINATIONS,
     PROVIDERS.EXACG,
     PROVIDERS.MICROSOFT_TTS,
-    PROVIDERS.GOOGLE_TRANSLATE,
-    PROVIDERS.YOUDAO,
-    PROVIDERS.ICIBA,
-    PROVIDERS.CUSTOM_PUBAPI,
   ]);
 
   const CallTypeEnum = z.enum([
@@ -1107,10 +1095,6 @@ function createApp(deps = {}) {
     createPollinations: deps.providers?.createPollinations || createPollinations,
     createExacg: deps.providers?.createExacg || createExacg,
     createMicrosoftTTS: deps.providers?.createMicrosoftTTS || createMicrosoftTTS,
-    createGoogleApisTranslate: deps.providers?.createGoogleApisTranslate || createGoogleApisTranslate,
-    createYoudao: deps.providers?.createYoudao || createYoudao,
-    createIciba: deps.providers?.createIciba || createIciba,
-    createCustomPubApi: deps.providers?.createCustomPubApi || createCustomPubApi,
   };
 
   const ai = {
@@ -1216,54 +1200,6 @@ function createApp(deps = {}) {
         switch (callType) {
           case CALL_TYPES.AUDIO_GEN:
             return providerInstance.speech(modelCode);
-          default:
-            return unsupportedCallType();
-        }
-      }
-      case PROVIDERS.GOOGLE_TRANSLATE: {
-        const providerInstance = providers.createGoogleApisTranslate({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
-        switch (callType) {
-          case CALL_TYPES.AUDIO_GEN:
-            return providerInstance.speech(modelCode);
-          case CALL_TYPES.MIX:
-          case CALL_TYPES.CHAT:
-            return providerInstance.chat(modelCode);
-          default:
-            return unsupportedCallType();
-        }
-      }
-      case PROVIDERS.YOUDAO: {
-        const providerInstance = providers.createYoudao({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
-        switch (callType) {
-          case CALL_TYPES.AUDIO_GEN:
-            return providerInstance.speech(modelCode);
-          case CALL_TYPES.MIX:
-          case CALL_TYPES.CHAT:
-            return providerInstance.chat(modelCode);
-          default:
-            return unsupportedCallType();
-        }
-      }
-      case PROVIDERS.ICIBA: {
-        const providerInstance = providers.createIciba({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
-        switch (callType) {
-          case CALL_TYPES.AUDIO_GEN:
-            return providerInstance.speech(modelCode);
-          case CALL_TYPES.MIX:
-          case CALL_TYPES.CHAT:
-            return providerInstance.chat(modelCode);
-          default:
-            return unsupportedCallType();
-        }
-      }
-      case PROVIDERS.CUSTOM_PUBAPI: {
-        const providerInstance = providers.createCustomPubApi({ apiKey, baseURL, headers, name: channelName, fetch: getFetchFn(env) });
-        switch (callType) {
-          case CALL_TYPES.AUDIO_GEN:
-            return providerInstance.speech(modelCode);
-          case CALL_TYPES.MIX:
-          case CALL_TYPES.CHAT:
-            return providerInstance.chat(modelCode);
           default:
             return unsupportedCallType();
         }
@@ -2305,10 +2241,6 @@ function createApp(deps = {}) {
    * - pollinations: GET https://gen.pollinations.ai/v1/models
    * - exacg: 无公开的模型列表 API，返回空数组
    * - microsoft-tts: 无公开的模型列表 API，返回空数组
-   * - google-translate: 无公开的模型列表 API，返回空数组
-   * - youdao: 无公开的模型列表 API，返回空数组
-   * - iciba: 无公开的模型列表 API，返回空数组
-   * - custom-pubapi: GET {baseURL}/v1/models
    *
    * @param channel - 渠道数据库行
    * @returns UpstreamModel[] 上游模型列表
@@ -2320,10 +2252,7 @@ function createApp(deps = {}) {
     if (
       normalizedProvider === PROVIDERS.ANTHROPIC ||
       normalizedProvider === PROVIDERS.EXACG ||
-      normalizedProvider === PROVIDERS.MICROSOFT_TTS ||
-      normalizedProvider === PROVIDERS.GOOGLE_TRANSLATE ||
-      normalizedProvider === PROVIDERS.YOUDAO ||
-      normalizedProvider === PROVIDERS.ICIBA
+      normalizedProvider === PROVIDERS.MICROSOFT_TTS
     ) {
       return [];
     }
@@ -2406,12 +2335,6 @@ function createApp(deps = {}) {
         return 'https://openrouter.ai/api/v1';
       case PROVIDERS.POLLINATIONS:
         return 'https://gen.pollinations.ai/v1';
-      case PROVIDERS.GOOGLE_TRANSLATE:
-        return 'https://translate.googleapis.com';
-      case PROVIDERS.YOUDAO:
-        return 'https://dict.youdao.com';
-      case PROVIDERS.ICIBA:
-        return 'https://www.iciba.com';
       default:
         return '';
     }
