@@ -1,0 +1,14 @@
+[project]
+name = "litellm-cf-workers-poc"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115.0",
+  "litellm>=1.77.0",
+]
+
+[dependency-groups]
+dev = [
+  "workers-py>=0.0.16",
+  "workers-runtime-sdk>=0.0.16",
+]

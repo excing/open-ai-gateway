@@ -1,4 +1,8 @@
 node_modules
+__pycache__/
+*.py[cod]
+.venv/
+uv.lock
 
 .env.json
 .dev.vars
