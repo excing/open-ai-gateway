@@ -1150,29 +1150,9 @@
                     <p class="mt-1 text-xs text-[var(--text-soft)]">{{ model.code || '未设置 code' }}</p>
                   </div>
                   <div class="toolbar">
-                    <span
-                      class="pill text-xs"
-                      :class="model.detectStatus === constants.ASYNC_STATUS.SUCCESS ? 'text-[var(--success)]' : model.detectStatus === constants.ASYNC_STATUS.ERROR ? 'text-[var(--danger)]' : 'text-[var(--text-soft)]'"
-                    >
-                      {{
-                        model.detectStatus === constants.ASYNC_STATUS.LOADING
-                          ? '检测中'
-                          : model.detectStatus === constants.ASYNC_STATUS.SUCCESS
-                            ? '可用'
-                            : model.detectStatus === constants.ASYNC_STATUS.ERROR
-                              ? '不可用'
-                              : '未检测'
-                      }}
-                    </span>
-                    <button @click="actions.detectChannelModel(index)" class="btn btn-inline btn-secondary text-sm" :disabled="model.detectStatus === constants.ASYNC_STATUS.LOADING">
-                      {{ model.detectStatus === constants.ASYNC_STATUS.LOADING ? '检测中...' : '检测' }}
-                    </button>
                     <button @click="actions.removeChannelModel(index)" class="btn btn-inline btn-ghost text-sm text-[var(--danger)]">移除</button>
                   </div>
                 </div>
-                <p v-if="model.detectMessage" class="mt-3 text-xs" :class="model.detectStatus === constants.ASYNC_STATUS.ERROR ? 'text-[var(--danger)]' : 'text-[var(--text-soft)]'">
-                  {{ model.detectMessage }}
-                </p>
 
                 <div class="mt-4 grid gap-3 sm:grid-cols-2">
                   <input v-model="model.code" @input="actions.syncChannelModelNameFromCode(index)" type="text" class="field" placeholder="模型 code" />
@@ -1405,9 +1385,8 @@
           MODEL: '/api/model',
           LOG: '/api/log',
           CHANNEL_MODELS: '/api/channel/models',
-          MODEL_CHECK: '/api/model/check',
         },
-        PROVIDERS: ['openai-stream', 'openai-compatible', 'openai', 'google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations', 'exacg', 'microsoft-tts'],
+        PROVIDERS: ['openai', 'openai-compatible', 'google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations', 'exacg', 'microsoft-tts'],
         MODEL_STATUS: ['active', 'open', 'disable'],
         LOG_STATUS_LIST: ['success', 'error'],
         LOG_QUERY_DEBOUNCE_MS: 300,
@@ -1490,7 +1469,6 @@
           disable: '已禁用',
         },
         PROVIDER_LABELS: {
-          'openai-stream': 'OpenAI Stream',
           'openai-compatible': 'OpenAI兼容',
           openai: 'OpenAI',
           google: 'Google',
@@ -1555,8 +1533,6 @@
             outputPrice: '0',
             weight: 1,
             headersRaw: constants.EMPTY_OBJECT_JSON,
-            detectStatus: constants.ASYNC_STATUS.IDLE,
-            detectMessage: '',
           });
 
           const createEmptyChannelForm = () => ({
@@ -1704,8 +1680,6 @@
               outputPrice: model.outputPrice ?? model.output_price ?? '0',
               weight: model.weight ?? 1,
               headersRaw: JSON.stringify(model.headers || {}, null, 2),
-              detectStatus: constants.ASYNC_STATUS.IDLE,
-              detectMessage: '',
             }));
           };
 
@@ -2271,12 +2245,6 @@
               state.channelForm.models.unshift(createEmptyChannelModel());
               syncChannelModelsRaw();
             },
-            setChannelModelDetectState: (index, status, message = '') => {
-              const targetModel = state.channelForm.models[index];
-              if (!targetModel) return;
-              targetModel.detectStatus = status;
-              targetModel.detectMessage = message;
-            },
             removeChannelModel: (index) => {
               state.channelForm.models.splice(index, 1);
               if (state.channelForm.models.length === 0) {
@@ -2341,43 +2309,6 @@
                   },
                 );
               } catch (error) {}
-            },
-            detectChannelModel: async (index) => {
-              try {
-                const currentModel = state.channelForm.models[index];
-                if (!currentModel?.code) {
-                  throw new Error('请先填写模型 code');
-                }
-                if (!state.channelForm.apiKey) {
-                  throw new Error('请先填写 API Key');
-                }
-                actions.setChannelModelDetectState(index, constants.ASYNC_STATUS.LOADING, '检测中...');
-                const res = await apiRequest(constants.API.MODEL_CHECK, {
-                  method: constants.METHODS.POST,
-                  body: {
-                    provider: state.channelForm.provider,
-                    apiKey: state.channelForm.apiKey,
-                    baseURL: state.channelForm.baseURL,
-                    model: currentModel.code,
-                    callType: currentModel.callType,
-                    headers: parseJsonInput(currentModel.headersRaw, constants.EMPTY_OBJECT_JSON, '模型请求头'),
-                  },
-                });
-                if (res.status === 200 && res.data?.success) {
-                  const result = res.data.data;
-                  if (result.api_accessible && result.data_available) {
-                    actions.setChannelModelDetectState(index, constants.ASYNC_STATUS.SUCCESS, `可用 (${result.latency_ms}ms)`);
-                  } else if (result.api_accessible) {
-                    actions.setChannelModelDetectState(index, constants.ASYNC_STATUS.ERROR, result.error_message || '无有效数据');
-                  } else {
-                    actions.setChannelModelDetectState(index, constants.ASYNC_STATUS.ERROR, result.error_message || 'API 不可访问');
-                  }
-                } else {
-                  throw new Error(res.data?.error || res.data?.error_message || '检测失败');
-                }
-              } catch (error) {
-                actions.setChannelModelDetectState(index, constants.ASYNC_STATUS.ERROR, error.message);
-              }
             },
             addModelAlias: () => {
               actions.addTokenToList(state.modelForm, 'aliases', 'aliasInput');

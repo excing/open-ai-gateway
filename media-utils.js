@@ -1,10 +1,24 @@
-import { createDownload, DefaultGeneratedFile } from 'ai';
-
 const CONSTANTS = {
   DOWNLOAD_TIMEOUT_MS: 60_000,
 };
 
-const downloadWithAiSdk = createDownload();
+function base64ToUint8Array(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+class GeneratedMediaFile {
+  constructor({ data, mediaType }) {
+    this.mediaType = mediaType;
+    this.base64 = typeof data === 'string' ? data : '';
+    this.uint8Array = typeof data === 'string' ? base64ToUint8Array(data) : data;
+    this.data = this.uint8Array;
+  }
+}
 
 function toMediaBuckets(text, resources, usage) {
   const buckets = { text, files: [], images: [], video: null, videos: [], audios: [], audio: null, usage };
@@ -33,7 +47,7 @@ async function extractMediaResources({ text = '', files = [], usage }) {
   while ((match = base64Regex.exec(text)) !== null) {
     const [_, mediaType, format, b64] = match;
     const mimeType = `${mediaType}/${format}`;
-    resources.push(new DefaultGeneratedFile({ data: b64, mediaType: mimeType }));
+    resources.push(new GeneratedMediaFile({ data: b64, mediaType: mimeType }));
   }
 
   // 不使用数组, 是 set 天然拥有数据去重的功能
@@ -76,7 +90,7 @@ async function extractMediaResources({ text = '', files = [], usage }) {
       }),
     );
 
-    resources.push(...downloadResults.filter(Boolean).map(({ data, mediaType }) => new DefaultGeneratedFile({ data, mediaType })));
+    resources.push(...downloadResults.filter(Boolean).map(({ data, mediaType }) => new GeneratedMediaFile({ data, mediaType })));
   }
 
   return toMediaBuckets(text, resources, usage);
@@ -86,10 +100,16 @@ async function downloadFile(url, timeout = CONSTANTS.DOWNLOAD_TIMEOUT_MS) {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
   try {
-    return await downloadWithAiSdk({
-      url: new URL(url),
-      abortSignal: controller.signal,
+    const response = await fetch(new URL(url), {
+      method: 'GET',
+      signal: controller.signal,
     });
+    if (!response.ok) {
+      throw new Error(`Download returned ${response.status}`);
+    }
+    const mediaType = response.headers.get('content-type') || 'application/octet-stream';
+    const data = new Uint8Array(await response.arrayBuffer());
+    return new GeneratedMediaFile({ data, mediaType });
   } catch (error) {
     console.warn(`资源(${url})下载失败: `, error);
     return null;

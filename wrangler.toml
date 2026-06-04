@@ -8,7 +8,7 @@ workers_dev = true
 directory = "./public"
 binding = "ASSETS"
 not_found_handling = "none"
-run_worker_first = ["/api/*", "/v1/*", "/healthz"]
+run_worker_first = ["/api/*", "/healthz"]
 
 [[d1_databases]]
 binding = "DB" # Worker 中使用的名称

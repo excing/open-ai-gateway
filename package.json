@@ -14,13 +14,8 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "@ai-sdk/anthropic": "^3.0.58",
-    "@ai-sdk/google": "^3.0.43",
-    "@ai-sdk/openai": "^3.0.53",
-    "@ai-sdk/openai-compatible": "^2.0.41",
-    "@openrouter/ai-sdk-provider": "^2.2.5",
-    "ai": "^6.0.116",
-    "ai-fallback": "^2.0.0",
-    "wrangler": "^4.71.0"
+    "drizzle-orm": "^0.45.2",
+    "wrangler": "^4.71.0",
+    "zod": "^4.3.6"
   }
 }
