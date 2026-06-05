@@ -23,6 +23,14 @@ const {
 } = CONSTANTS;
 
 const ADMIN_AUTH_HEADERS = { authorization: 'Bearer test-admin-key' };
+const SUPPORTED_PROVIDER_IDS = ['openai', 'openai-compatible', 'exacg'];
+const REMOVED_PROVIDER_IDS = ['google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations', 'microsoft-tts'];
+
+function extractFrontendProviderIds(html) {
+  const match = html.match(/PROVIDERS:\s*\[([^\]]*)\]/);
+  assert.ok(match);
+  return Array.from(match[1].matchAll(/'([^']+)'/g), (item) => item[1]);
+}
 
 describe('前端模型检测 UI', () => {
   it('public/index.html 应暴露模型检测 API 和两个检测入口', () => {
@@ -32,6 +40,16 @@ describe('前端模型检测 UI', () => {
     assert.ok(html.includes('checkChannelModel'));
     assert.ok(html.includes('checkModelForm'));
     assert.ok(html.includes('formatModelCheckMessage'));
+  });
+
+  it('public/index.html 不应再展示已移除的 provider', () => {
+    const html = readFileSync(new URL('./public/index.html', import.meta.url), 'utf8');
+
+    assert.deepStrictEqual(extractFrontendProviderIds(html), SUPPORTED_PROVIDER_IDS);
+    for (const provider of REMOVED_PROVIDER_IDS) {
+      assert.ok(!html.includes(`'${provider}'`));
+      assert.ok(!html.includes(`${provider}:`));
+    }
   });
 });
 
@@ -1041,7 +1059,7 @@ describe('模型可用性检测 API', () => {
     assert.strictEqual(calls.length, 0);
   });
 
-  it('POST /api/model/check 对未实现 provider 应返回不可用结果', async () => {
+  it('POST /api/model/check 对未知 provider 应返回不可用结果', async () => {
     const app = createApp();
     const response = await app.handleRequest(
       createMockRequest({
@@ -1049,10 +1067,10 @@ describe('模型可用性检测 API', () => {
         pathname: '/api/model/check',
         headers: ADMIN_AUTH_HEADERS,
         body: {
-          provider: PROVIDERS.GOOGLE,
-          apiKey: 'google-key',
+          provider: 'unknown-provider',
+          apiKey: 'unknown-key',
           baseURL: '',
-          model: 'gemini-model',
+          model: 'unknown-model',
           callType: CALL_TYPES.CHAT,
         },
       }),
@@ -1143,6 +1161,16 @@ describe('认证、CORS 与基础路由', () => {
 describe('Schema: provider 与 call_type', () => {
   it('ProviderEnum 应拒绝已移除的 openai-stream', () => {
     assert.throws(() => SCHEMAS.ProviderEnum.parse('openai-stream'));
+  });
+
+  it('ProviderEnum 和常量不应再接受已移除的 provider', () => {
+    const providerValues = Object.values(PROVIDERS);
+
+    assert.deepStrictEqual(providerValues, SUPPORTED_PROVIDER_IDS);
+    for (const provider of REMOVED_PROVIDER_IDS) {
+      assert.ok(!providerValues.includes(provider));
+      assert.throws(() => SCHEMAS.ProviderEnum.parse(provider));
+    }
   });
 
   it('CallTypeEnum 应保留模型元数据类型', () => {
@@ -2030,25 +2058,23 @@ describe('上游模型列表 API', () => {
     assert.strictEqual(calls.length, 0);
   });
 
-  it('未实现 provider 当前应返回 success=false 并预留适配器扩展', async () => {
+  it('未知 provider 当前应返回 success=false', async () => {
     const app = createApp();
 
-    for (const provider of [PROVIDERS.GOOGLE, PROVIDERS.OPENROUTER, PROVIDERS.POLLINATIONS, PROVIDERS.ANTHROPIC]) {
-      const response = await app.handleRequest(
-        createMockRequest({
-          method: 'POST',
-          pathname: '/api/channel/models',
-          headers: ADMIN_AUTH_HEADERS,
-          body: { provider, apiKey: 'key', baseURL: '' },
-        }),
-        mockEnv,
-      );
-      const data = await response.json();
-      assert.strictEqual(response.status, HTTP_STATUS.OK);
-      assert.strictEqual(data.success, false);
-      assert.deepStrictEqual(data.data, []);
-      assert.ok(data.error.includes('Unsupported provider'));
-    }
+    const response = await app.handleRequest(
+      createMockRequest({
+        method: 'POST',
+        pathname: '/api/channel/models',
+        headers: ADMIN_AUTH_HEADERS,
+        body: { provider: 'unknown-provider', apiKey: 'key', baseURL: '' },
+      }),
+      mockEnv,
+    );
+    const data = await response.json();
+    assert.strictEqual(response.status, HTTP_STATUS.OK);
+    assert.strictEqual(data.success, false);
+    assert.deepStrictEqual(data.data, []);
+    assert.ok(data.error.includes('Unsupported provider'));
   });
 
   it('自定义 baseURL 已包含版本路径时应追加 /models，否则追加兼容模型列表路径', async () => {

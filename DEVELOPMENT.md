@@ -16,7 +16,8 @@ Open AI Gateway 当前定位为运行在 Cloudflare Workers 上的管理后台�
 
 **当前边界：**
 - 新 `/v1/*` 不使用 Vercel AI SDK，也不引入新的第三方类库。
-- `exacg` 仅实现 `/v1/images/generations` / `image_gen`，渠道模型 `code` 必须是可转换为数字的 Exacg `model_index`；其他 provider 暂不实现调用、探活和模型列表，仅在适配器注册表中预留扩展入口。
+- 当前有效 provider 仅保留 `openai`、`openai-compatible`、`exacg`；未适配 provider 不再作为渠道配置选项。
+- `exacg` 仅实现 `/v1/images/generations` / `image_gen`，渠道模型 `code` 必须是可转换为数字的 Exacg `model_index`。
 - 未列入 endpoint 表的 `/v1/*` 路径返回 404。
 
 **技术栈：**
@@ -327,14 +328,7 @@ flowchart TD
 type Provider =
   | 'openai'
   | 'openai-compatible'
-  | 'google'
-  | 'gemini'
-  | 'anthropic'
-  | 'claude'
-  | 'openrouter'
-  | 'pollinations'
-  | 'exacg'
-  | 'microsoft-tts';
+  | 'exacg';
 
 type CallType = 'chat' | 'mix' | 'image_gen' | 'audio_gen' | 'video_gen' | 'transcribe' | 'embedding';
 type ModelStatus = 'active' | 'open' | 'disable';
@@ -937,7 +931,7 @@ async function checkModelForm(): Promise<void>;
 
 ### `GET /api/channel/:id/models`
 
-按已保存渠道配置获取上游模型列表。`openai` 和 `openai-compatible` 由 OpenAI-compatible 适配器获取上游 `/models`；`exacg` 已接入适配器但上游无模型列表接口，因此返回 `success: true` 和空数组；其他 provider 返回 `success: false` 和空数组，后续通过新增适配器扩展。
+按已保存渠道配置获取上游模型列表。当前有效 provider 仅为 `openai`、`openai-compatible`、`exacg`：`openai` 和 `openai-compatible` 由 OpenAI-compatible 适配器获取上游 `/models`；`exacg` 已接入适配器但上游无模型列表接口，因此返回 `success: true` 和空数组。
 
 **输出：**
 ```json
@@ -972,7 +966,7 @@ async function checkModelForm(): Promise<void>;
 
 ### `POST /api/model/check`
 
-检测指定平台模型可用性。`openai` 和 `openai-compatible` 按调用类型探活；`exacg` 仅支持 `image_gen` 图片生成探活；其他 provider 返回不可用结果。
+检测指定平台模型可用性。当前有效 provider 仅为 `openai`、`openai-compatible`、`exacg`：`openai` 和 `openai-compatible` 按调用类型探活；`exacg` 仅支持 `image_gen` 图片生成探活。
 
 **输入：**
 ```json

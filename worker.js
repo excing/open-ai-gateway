@@ -11,14 +11,7 @@ const CONSTANTS = {
   PROVIDERS: {
     OPENAI: 'openai',
     OPENAI_COMPATIBLE: 'openai-compatible',
-    GOOGLE: 'google',
-    GEMINI: 'gemini',
-    ANTHROPIC: 'anthropic',
-    CLAUDE: 'claude',
-    OPENROUTER: 'openrouter',
-    POLLINATIONS: 'pollinations',
     EXACG: 'exacg',
-    MICROSOFT_TTS: 'microsoft-tts',
   },
   CALL_TYPES: MODEL_SELECTION_CALL_TYPES,
   MODEL_STATUS: MODEL_SELECTION_MODEL_STATUS,
@@ -121,14 +114,7 @@ const SCHEMAS = (() => {
   const ProviderEnum = z.enum([
     PROVIDERS.OPENAI,
     PROVIDERS.OPENAI_COMPATIBLE,
-    PROVIDERS.GOOGLE,
-    PROVIDERS.GEMINI,
-    PROVIDERS.ANTHROPIC,
-    PROVIDERS.CLAUDE,
-    PROVIDERS.OPENROUTER,
-    PROVIDERS.POLLINATIONS,
     PROVIDERS.EXACG,
-    PROVIDERS.MICROSOFT_TTS,
   ]);
 
   const CallTypeEnum = z.enum([
