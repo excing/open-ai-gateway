@@ -1,5 +1,6 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
+import { readFileSync } from 'node:fs';
 import {
   buildSuccessLogEntry,
   getCooldownDuration,
@@ -22,6 +23,17 @@ const {
 } = CONSTANTS;
 
 const ADMIN_AUTH_HEADERS = { authorization: 'Bearer test-admin-key' };
+
+describe('前端模型检测 UI', () => {
+  it('public/index.html 应暴露模型检测 API 和两个检测入口', () => {
+    const html = readFileSync(new URL('./public/index.html', import.meta.url), 'utf8');
+
+    assert.ok(html.includes("MODEL_CHECK: '/api/model/check'"));
+    assert.ok(html.includes('checkChannelModel'));
+    assert.ok(html.includes('checkModelForm'));
+    assert.ok(html.includes('formatModelCheckMessage'));
+  });
+});
 
 function normalizeSql(sql) {
   return sql.trim().toLowerCase().replaceAll('"', '').replace(/\s+/g, ' ');

@@ -10,6 +10,7 @@ Open AI Gateway 当前定位为运行在 Cloudflare Workers 上的管理后台�
 - `/v1/*`：支持 `openai`、`openai-compatible` provider 以原生 HTTP `fetch` 透传到上游；支持 `exacg` provider 将 OpenAI-compatible 图片生成请求适配为 Exacg `/generate_image` 请求。
 - 上游模型列表：OpenAI-compatible 适配器按 provider/baseURL 获取上游模型列表；Exacg 无模型列表接口，返回空数组。
 - 模型可用性检测：OpenAI-compatible 适配器按调用类型发起最小探活请求；Exacg 适配器仅对 `image_gen` 发起最小图片生成探活请求。
+- 前端模型检测：渠道抽屉和模型编辑抽屉可调用 `/api/model/check` 检测当前模型配置。
 - 状态查看：展示数据库中模型的状态、统计和冷却字段。
 - 历史日志查询：分页查询历史 `request_logs` 数据。
 
@@ -48,6 +49,7 @@ graph TB
         AC10[获取已保存渠道的上游模型 GET /api/channel/:id/models]
         AC11[按连接参数获取上游模型 POST /api/channel/models]
         AC12[检测模型可用性 POST /api/model/check]
+        AC13[前端检测渠道/模型表单配置]
     end
 
     subgraph API 调用方用例
@@ -66,7 +68,7 @@ graph TB
         VC1[查看状态 GET /status]
     end
 
-    A --> AC1 & AC2 & AC3 & AC4 & AC5 & AC6 & AC7 & AC8 & AC9 & AC10 & AC11 & AC12
+    A --> AC1 & AC2 & AC3 & AC4 & AC5 & AC6 & AC7 & AC8 & AC9 & AC10 & AC11 & AC12 & AC13
     U --> UC1 & UC2 & UC3 & UC4 & UC5 & UC6 & UC7 & UC8 & UC9
     V --> VC1
 ```
@@ -199,6 +201,24 @@ sequenceDiagram
     P-->>A: 响应或错误
     A-->>W: ModelCheckResult
     W-->>C: 200 { success: true, data }
+```
+
+### 4.5 前端模型检测
+
+```mermaid
+sequenceDiagram
+    participant U as 管理员
+    participant UI as public/index.html
+    participant W as Worker
+    participant A as Provider Adapter
+
+    U->>UI: 点击渠道模型卡片或模型编辑抽屉中的检测按钮
+    UI->>UI: validateModelCheckPayload()
+    UI->>W: POST /api/model/check + Authorization
+    W->>A: checkAvailability()
+    A-->>W: ModelCheckResult
+    W-->>UI: { success: true, data }
+    UI->>UI: renderModelCheckResult()
 ```
 
 ---
@@ -467,6 +487,12 @@ interface ModelCheckResult {
   data_available: boolean;   // 响应体是否包含当前调用类型需要的数据
   latency_ms: number;        // 探活耗时，非负毫秒
   error_message: string;     // 错误信息，成功为空字符串
+}
+
+interface ModelCheckViewState {
+  status: 'idle' | 'loading' | 'success' | 'error'; // 当前检测 UI 状态
+  message: string;           // 展示给管理员的检测摘要
+  data: ModelCheckResult | null; // 后端原始检测结果，未检测时为 null
 }
 ```
 
@@ -747,6 +773,40 @@ Exacg 请求体映射规则：
 - 响应按正文内容解析 JSON，不依赖上游 `content-type` 必须是 `application/json`。
 - `success: true` 响应中的 `message` 是成功提示，不作为错误；仅 `error` 或 `success: false` 时的 `message` 作为错误信息。
 - 成功响应转换为 OpenAI-compatible 图片生成响应 `{ created, data: [{ url }] }`；日志计费使用 `responseBody.images` 数组统计 `/img` 输出数量。
+
+### 8.9 前端检测函数 `public/index.html`
+
+```ts
+function createEmptyModelCheckState(): ModelCheckViewState;
+function buildChannelModelCheckPayload(model: ChannelModelEditor): {
+  provider: Provider;
+  apiKey: string;
+  baseURL: string;
+  model: string;
+  callType: CallType;
+  headers: Record<string, string>;
+  timeoutMs: number;
+};
+function buildModelFormCheckPayload(): {
+  provider: Provider;
+  apiKey: string;
+  baseURL: string;
+  model: string;
+  callType: CallType;
+  headers: Record<string, string>;
+  timeoutMs: number;
+};
+function formatModelCheckMessage(result: ModelCheckResult): string;
+function setModelCheckState(target: { check: ModelCheckViewState }, status: ModelCheckViewState['status'], message: string, data?: ModelCheckResult | null): void;
+async function checkChannelModel(index: number): Promise<void>;
+async function checkModelForm(): Promise<void>;
+```
+
+前端检测规则：
+- 渠道抽屉检测使用当前渠道表单的 `provider`、`apiKey`、`baseURL` 和当前模型卡片的 `code`、`callType`、`headersRaw`。
+- 模型编辑抽屉检测优先使用当前模型所属渠道；按 code 批量编辑时使用命中的第一条渠道记录。
+- 检测请求不会自动保存渠道或模型，也不会修改模型状态。
+- 检测结果在按钮附近内联展示；`api_accessible && data_available` 表示可用，否则展示后端 `error_message`。
 
 ---
 

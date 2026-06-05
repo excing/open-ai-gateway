@@ -1150,17 +1150,31 @@
                     <p class="mt-1 text-xs text-[var(--text-soft)]">{{ model.code || '未设置 code' }}</p>
                   </div>
                   <div class="toolbar">
+                    <button
+                      @click="actions.checkChannelModel(index)"
+                      :disabled="model.check?.status === constants.ASYNC_STATUS.LOADING"
+                      class="btn btn-inline btn-secondary text-sm"
+                    >
+                      {{ model.check?.status === constants.ASYNC_STATUS.LOADING ? '检测中...' : '检测' }}
+                    </button>
                     <button @click="actions.removeChannelModel(index)" class="btn btn-inline btn-ghost text-sm text-[var(--danger)]">移除</button>
                   </div>
                 </div>
 
                 <div class="mt-4 grid gap-3 sm:grid-cols-2">
                   <input v-model="model.code" @input="actions.syncChannelModelNameFromCode(index)" type="text" class="field" placeholder="模型 code" />
-                  <select v-model="model.callType" class="field-select">
+                  <select v-model="model.callType" @change="actions.resetChannelModelCheck(index)" class="field-select">
                     <option v-for="callType in constants.CALL_TYPES" :key="callType" :value="callType">{{ callType }}</option>
                   </select>
                   <input v-model="model.inputPrice" type="text" class="field" placeholder="输入价格，例如 0、2.5/M、0.02/img、0.5/sec" />
                   <input v-model="model.outputPrice" type="text" class="field" placeholder="输出价格，例如 0、10/M、0.02/img、0.5/sec" />
+                </div>
+
+                <div v-if="model.check?.message" class="mt-3 flex flex-wrap items-center gap-2 text-xs text-[var(--text-soft)]">
+                  <span class="pill text-xs" :class="actions.getModelCheckTagClass(model.check.status)">
+                    {{ actions.getModelCheckStatusLabel(model.check) }}
+                  </span>
+                  <span>{{ model.check.message }}</span>
                 </div>
 
                 <div class="mt-4 flex justify-end">
@@ -1208,7 +1222,7 @@
 
                   <div class="model-form-section">
                     <p class="mb-2 text-sm font-medium text-[var(--text)]">请求头 JSON</p>
-                    <textarea v-model="model.headersRaw" class="field-area" placeholder='{"x-custom":"value"}'></textarea>
+                    <textarea v-model="model.headersRaw" @input="actions.resetChannelModelCheck(index)" class="field-area" placeholder='{"x-custom":"value"}'></textarea>
                   </div>
                 </div>
               </article>
@@ -1270,7 +1284,7 @@
               placeholder="模型 ID"
             />
             <input v-model="state.modelForm.code" @input="actions.syncModelFormNameFromCode" type="text" class="field" placeholder="模型 code" />
-            <select v-model="state.modelForm.callType" class="field-select">
+            <select v-model="state.modelForm.callType" @change="actions.resetModelFormCheck" class="field-select">
               <option v-for="callType in constants.CALL_TYPES" :key="callType" :value="callType">{{ callType }}</option>
             </select>
             <input v-model="state.modelForm.inputPrice" type="text" class="field" placeholder="输入价格，例如 0、2.5/M、0.02/img、0.5/sec" />
@@ -1333,7 +1347,32 @@
 
             <div class="model-form-section">
               <p class="mb-2 text-sm font-medium text-[var(--text)]">请求头 JSON</p>
-              <textarea v-model="state.modelForm.headersRaw" class="field-area" placeholder='{"x-api-version":"2024-01"}'></textarea>
+              <textarea v-model="state.modelForm.headersRaw" @input="actions.resetModelFormCheck" class="field-area" placeholder='{"x-api-version":"2024-01"}'></textarea>
+            </div>
+
+            <div class="model-form-section">
+              <div class="toolbar justify-between">
+                <div>
+                  <p class="text-sm font-medium text-[var(--text)]">可用性检测</p>
+                  <p v-if="state.modelForm.check?.message" class="mt-2 text-xs text-[var(--text-soft)]">
+                    {{ state.modelForm.check.message }}
+                  </p>
+                </div>
+                <button
+                  @click="actions.checkModelForm"
+                  :disabled="state.modelForm.check?.status === constants.ASYNC_STATUS.LOADING"
+                  class="btn btn-inline btn-secondary text-sm"
+                >
+                  {{ state.modelForm.check?.status === constants.ASYNC_STATUS.LOADING ? '检测中...' : '检测模型' }}
+                </button>
+              </div>
+              <span
+                v-if="state.modelForm.check?.message"
+                class="pill mt-3 text-xs"
+                :class="actions.getModelCheckTagClass(state.modelForm.check.status)"
+              >
+                {{ actions.getModelCheckStatusLabel(state.modelForm.check) }}
+              </span>
             </div>
           </div>
 
@@ -1383,6 +1422,7 @@
           CHANNEL: '/api/channel',
           CHANNELS: '/api/channels',
           MODEL: '/api/model',
+          MODEL_CHECK: '/api/model/check',
           LOG: '/api/log',
           CHANNEL_MODELS: '/api/channel/models',
         },
@@ -1418,6 +1458,7 @@
           SECOND: '/sec',
         },
         NOTICE_DURATION_MS: 5000,
+        MODEL_CHECK_TIMEOUT_MS: 30000,
         TOAST_POSITION: {
           GRAVITY: 'top',
           POSITION: 'right',
@@ -1515,6 +1556,12 @@
 
           const normalizeModelCode = (codeValue) => String(codeValue || '').trim().toLowerCase();
 
+          const createEmptyModelCheckState = () => ({
+            status: constants.ASYNC_STATUS.IDLE,
+            message: '',
+            data: null,
+          });
+
           const createEmptyChannelModel = () => ({
             localId: crypto.randomUUID(),
             id: '',
@@ -1533,6 +1580,7 @@
             outputPrice: '0',
             weight: 1,
             headersRaw: constants.EMPTY_OBJECT_JSON,
+            check: createEmptyModelCheckState(),
           });
 
           const createEmptyChannelForm = () => ({
@@ -1568,6 +1616,7 @@
             channelName: '',
             syncScope: constants.MODEL_SYNC_SCOPE.BY_CODE,
             scopeChannelId: '',
+            check: createEmptyModelCheckState(),
           });
 
           const state = reactive({
@@ -1680,6 +1729,7 @@
               outputPrice: model.outputPrice ?? model.output_price ?? '0',
               weight: model.weight ?? 1,
               headersRaw: JSON.stringify(model.headers || {}, null, 2),
+              check: createEmptyModelCheckState(),
             }));
           };
 
@@ -1934,6 +1984,138 @@
                 throw error;
               }
             },
+            getModelCheckTagClass: (status) => {
+              if (status === constants.ASYNC_STATUS.SUCCESS) return 'tag-success';
+              if (status === constants.ASYNC_STATUS.ERROR) return 'tag-error';
+              return 'tag-neutral';
+            },
+            getModelCheckStatusLabel: (check) => {
+              if (check?.status === constants.ASYNC_STATUS.LOADING) return '检测中';
+              if (check?.status === constants.ASYNC_STATUS.SUCCESS) return '可用';
+              if (check?.status === constants.ASYNC_STATUS.ERROR) return '不可用';
+              return '未检测';
+            },
+            formatModelCheckMessage: (result) => {
+              const latency = Number(result?.latency_ms ?? 0);
+              const latencyText = Number.isFinite(latency) ? `${Math.round(latency)} ms` : '-';
+              if (result?.api_accessible && result?.data_available) {
+                return `接口可访问，数据可用，耗时 ${latencyText}`;
+              }
+              const errorMessage = String(result?.error_message || '').trim();
+              if (!result?.api_accessible) return errorMessage || `接口不可访问，耗时 ${latencyText}`;
+              if (!result?.data_available) return errorMessage || `接口可访问，但未返回可用数据，耗时 ${latencyText}`;
+              return errorMessage || '检测未通过';
+            },
+            setModelCheckState: (target, status, message, data = null) => {
+              if (!target) return;
+              if (!target.check) target.check = createEmptyModelCheckState();
+              target.check.status = status;
+              target.check.message = String(message || '');
+              target.check.data = data;
+            },
+            resetModelCheckState: (target) => {
+              actions.setModelCheckState(target, constants.ASYNC_STATUS.IDLE, '', null);
+            },
+            resetChannelModelCheck: (index) => {
+              actions.resetModelCheckState(state.channelForm.models[index]);
+            },
+            resetModelFormCheck: () => {
+              actions.resetModelCheckState(state.modelForm);
+            },
+            buildModelCheckPayload: ({ provider, apiKey, baseURL, model, callType, headersRaw }) => {
+              const normalizedModel = String(model || '').trim();
+              const normalizedCallType = String(callType || '').trim();
+              const normalizedApiKey = String(apiKey || '').trim();
+              if (!normalizedApiKey) throw new Error('请先填写 API Key');
+              if (!normalizedModel) throw new Error('请先填写模型 code');
+              if (!normalizedCallType) throw new Error('请先选择调用类型');
+              return {
+                provider,
+                apiKey: normalizedApiKey,
+                baseURL: String(baseURL || '').trim(),
+                model: normalizedModel,
+                callType: normalizedCallType,
+                headers: parseJsonInput(headersRaw, constants.EMPTY_OBJECT_JSON, '模型请求头'),
+                timeoutMs: constants.MODEL_CHECK_TIMEOUT_MS,
+              };
+            },
+            buildChannelModelCheckPayload: (model) => actions.buildModelCheckPayload({
+              provider: state.channelForm.provider,
+              apiKey: state.channelForm.apiKey,
+              baseURL: state.channelForm.baseURL,
+              model: model?.code,
+              callType: model?.callType,
+              headersRaw: model?.headersRaw,
+            }),
+            findModelFormChannel: () => {
+              const channelId = String(state.modelForm.channelId || state.modelForm.scopeChannelId || '').trim();
+              if (channelId) {
+                const matchedById = state.channels.find((channel) => String(channel.id || '').trim() === channelId);
+                if (matchedById) return matchedById;
+              }
+              const modelId = String(state.modelForm.id || '').trim();
+              const modelCode = String(state.modelForm.code || '').trim();
+              return state.channels.find((channel) =>
+                (channel.models || []).some((model) => {
+                  if (modelId && String(model.id || '').trim() === modelId) return true;
+                  return modelCode && String(model.code || '').trim() === modelCode;
+                }),
+              );
+            },
+            buildModelFormCheckPayload: () => {
+              const channel = actions.findModelFormChannel();
+              if (!channel) throw new Error('未找到当前模型所属渠道，请先刷新渠道列表');
+              return actions.buildModelCheckPayload({
+                provider: channel.provider,
+                apiKey: channel.api_key,
+                baseURL: channel.base_url,
+                model: state.modelForm.code,
+                callType: state.modelForm.callType,
+                headersRaw: state.modelForm.headersRaw,
+              });
+            },
+            requestModelCheck: async (payload) => {
+              const res = await apiRequest(constants.API.MODEL_CHECK, {
+                method: constants.METHODS.POST,
+                body: payload,
+              });
+              if (res.status === 200 && res.data?.success) return res.data.data;
+              throw new Error(res.data?.error || '模型检测失败');
+            },
+            checkChannelModel: async (index) => {
+              const model = state.channelForm.models[index];
+              if (!model) return;
+              try {
+                actions.setModelCheckState(model, constants.ASYNC_STATUS.LOADING, '正在检测模型...');
+                const result = await actions.requestModelCheck(actions.buildChannelModelCheckPayload(model));
+                const status = result?.api_accessible && result?.data_available
+                  ? constants.ASYNC_STATUS.SUCCESS
+                  : constants.ASYNC_STATUS.ERROR;
+                const message = actions.formatModelCheckMessage(result);
+                actions.setModelCheckState(model, status, message, result);
+                actions.setNotice(message, status === constants.ASYNC_STATUS.SUCCESS ? constants.NOTICE_MODE.SUCCESS : constants.NOTICE_MODE.WARNING);
+              } catch (error) {
+                const message = error?.message || '模型检测失败';
+                actions.setModelCheckState(model, constants.ASYNC_STATUS.ERROR, message);
+                actions.setNotice(`模型检测失败: ${message}`, constants.NOTICE_MODE.ERROR);
+              }
+            },
+            checkModelForm: async () => {
+              try {
+                actions.setModelCheckState(state.modelForm, constants.ASYNC_STATUS.LOADING, '正在检测模型...');
+                const result = await actions.requestModelCheck(actions.buildModelFormCheckPayload());
+                const status = result?.api_accessible && result?.data_available
+                  ? constants.ASYNC_STATUS.SUCCESS
+                  : constants.ASYNC_STATUS.ERROR;
+                const message = actions.formatModelCheckMessage(result);
+                actions.setModelCheckState(state.modelForm, status, message, result);
+                actions.setNotice(message, status === constants.ASYNC_STATUS.SUCCESS ? constants.NOTICE_MODE.SUCCESS : constants.NOTICE_MODE.WARNING);
+              } catch (error) {
+                const message = error?.message || '模型检测失败';
+                actions.setModelCheckState(state.modelForm, constants.ASYNC_STATUS.ERROR, message);
+                actions.setNotice(`模型检测失败: ${message}`, constants.NOTICE_MODE.ERROR);
+              }
+            },
             syncNameByCode: (target) => {
               if (!target) return;
               target.name = formatModelNameFromCode(target.code);
@@ -1948,6 +2130,7 @@
               const model = state.channelForm.models[index];
               if (!model) return;
               actions.syncNameByCode(model);
+              actions.resetChannelModelCheck(index);
               syncChannelModelsRaw();
             },
             startEditChannelModelName: (index) => {
@@ -1968,6 +2151,7 @@
             },
             syncModelFormNameFromCode: () => {
               actions.syncNameByCode(state.modelForm);
+              actions.resetModelFormCheck();
             },
             startEditModelFormName: () => {
               if (!String(state.modelForm.name || '').trim()) {
