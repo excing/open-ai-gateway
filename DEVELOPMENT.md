@@ -7,15 +7,15 @@ Open AI Gateway 当前定位为运行在 Cloudflare Workers 上的管理后台�
 **当前能力：**
 - 管理渠道：创建、读取、更新、删除渠道配置。
 - 管理模型：维护渠道模型、别名、能力、价格、状态、权重和请求头。
-- `/v1/*`：仅支持 `openai` 与 `openai-compatible` provider，按 endpoint 选择模型并以原生 HTTP `fetch` 透传到上游。
-- 上游模型列表：通过 OpenAI-compatible 适配器按 provider/baseURL 获取上游模型列表。
-- 模型可用性检测：通过 OpenAI-compatible 适配器发起最小探活请求。
+- `/v1/*`：支持 `openai`、`openai-compatible` provider 以原生 HTTP `fetch` 透传到上游；支持 `exacg` provider 将 OpenAI-compatible 图片生成请求适配为 Exacg `/generate_image` 请求。
+- 上游模型列表：OpenAI-compatible 适配器按 provider/baseURL 获取上游模型列表；Exacg 无模型列表接口，返回空数组。
+- 模型可用性检测：OpenAI-compatible 适配器按调用类型发起最小探活请求；Exacg 适配器仅对 `image_gen` 发起最小图片生成探活请求。
 - 状态查看：展示数据库中模型的状态、统计和冷却字段。
 - 历史日志查询：分页查询历史 `request_logs` 数据。
 
 **当前边界：**
 - 新 `/v1/*` 不使用 Vercel AI SDK，也不引入新的第三方类库。
-- 非 OpenAI-compatible provider 暂不实现调用、探活和模型列表，仅在适配器注册表中预留扩展入口。
+- `exacg` 仅实现 `/v1/images/generations` / `image_gen`，渠道模型 `code` 必须是可转换为数字的 Exacg `model_index`；其他 provider 暂不实现调用、探活和模型列表，仅在适配器注册表中预留扩展入口。
 - 未列入 endpoint 表的 `/v1/*` 路径返回 404。
 
 **技术栈：**
@@ -89,6 +89,7 @@ graph LR
     V1 --> Result[调用结果 call-result.js]
     V1 --> Registry[平台适配器注册表]
     Registry --> OpenAICompat[OpenAI-compatible Adapter]
+    Registry --> ExacgAdapter[Exacg Adapter]
     Auth --> Repo[Drizzle Repository]
     Repo --> Channel[渠道 CRUD]
     Repo --> Model[模型 CRUD]
@@ -101,7 +102,9 @@ graph LR
     Selection --> D1
     Result --> D1
     OpenAICompat --> Provider[OpenAI-compatible Upstream]
+    ExacgAdapter --> ExacgProvider[Exacg Upstream]
     Upstream --> OpenAICompat
+    Upstream --> ExacgAdapter
 ```
 
 ---
@@ -156,7 +159,7 @@ sequenceDiagram
     participant W as Worker
     participant V1 as v1/index.js
     participant DB as D1
-    participant A as OpenAI-compatible Adapter
+    participant A as Provider Adapter
     participant P as 上游 Provider
 
     C->>W: POST /v1/chat/completions + Authorization
@@ -186,7 +189,7 @@ sequenceDiagram
 sequenceDiagram
     participant C as 管理员客户端
     participant W as Worker
-    participant A as OpenAI-compatible Adapter
+    participant A as Provider Adapter
     participant P as 上游 Provider
 
     C->>W: POST /api/model/check + Authorization
@@ -425,7 +428,7 @@ interface V1ProxyInput {
 }
 
 interface ProviderAdapter {
-  id: string;                // 适配器 ID，例如 openai-compatible
+  id: string;                // 适配器 ID，例如 openai-compatible 或 exacg
   supports(provider: Provider): boolean; // 判断 provider 是否由该适配器处理
   defaultBaseURL(provider: Provider): string; // provider 默认 baseURL
   listModels(input: ProviderConnection): Promise<UpstreamModel[]>; // 获取上游模型列表
@@ -434,8 +437,8 @@ interface ProviderAdapter {
 }
 
 interface ProviderConnection {
-  provider: Provider;        // 指定平台，当前仅 openai/openai-compatible
-  apiKey: string;            // 上游 API Key，不能为空
+  provider: Provider;        // 指定平台；openai/openai-compatible 走 OpenAI-compatible 适配器，exacg 走 Exacg 适配器
+  apiKey: string;            // 上游 API Key；管理端连接检测要求非空，v1 调用时可由 provider 适配器决定是否发送
   baseURL: string;           // 上游基础 URL，空字符串时使用适配器默认值
   headers?: Record<string, string>; // 额外上游请求头，来自模型配置或探活输入
 }
@@ -448,7 +451,7 @@ interface AdapterInvokeInput {
 
 interface AdapterInvokeResult {
   response: Response;        // 上游响应，成功时直接透传给客户端
-  responseBody?: Record<string, unknown>; // 成功响应 JSON，供日志计费用量计算；非 JSON 可为空
+  responseBody?: Record<string, unknown>; // 成功响应 JSON，供日志计费用量计算；图片响应需提供 images 数组用于 /img 计费
 }
 
 interface ModelCheckInput extends ProviderConnection {
@@ -691,6 +694,60 @@ function buildCheckRequest(input: ModelCheckInput): { path: string; method: 'POS
 function hasAvailableCheckData(callType: CallType, response: Response, responseBody?: Record<string, unknown>): Promise<boolean>;
 ```
 
+### 8.8 Exacg 适配器 `v1/adapters/exacg.js`
+
+```ts
+const EXACG_ADAPTER_ID = 'exacg';
+const EXACG_DEFAULT_BASE_URL = 'https://sd.exacg.cc/api/v1';
+const EXACG_ENDPOINTS: { GENERATE_IMAGE: '/generate_image' };
+const EXACG_PROVIDER_OPTIONS_KEYS: ['providerOptions', 'provider_options'];
+const EXACG_PROVIDER_OPTIONS_NAMESPACE = 'exacg';
+const EXACG_OPTION_FIELDS: ['negative_prompt', 'steps', 'cfg', 'image_source'];
+const EXACG_DEFAULT_NEGATIVE_PROMPT: string;
+const EXACG_RESPONSE_KEYS: { DATA: 'data'; ERROR: 'error'; IMAGE_URL: 'image_url'; MESSAGE: 'message'; SUCCESS: 'success' };
+const EXACG_REQUEST_DEFAULTS: { SEED: 0; STEPS: 30; CHECK_PROMPT: string; TIMEOUT_PREFIX: string };
+
+function createExacgAdapter(deps: { fetch?: typeof fetch; now?: () => Date }): ProviderAdapter;
+function supportsExacg(provider: Provider): boolean;
+function trimTrailingSlashes(value: string): string;
+function getExacgBaseURL(connection: ProviderConnection): string;
+function buildExacgURL(baseURL: string, endpointPath: string): string;
+function parseJsonObject(value: unknown, fallback: Record<string, string>): Record<string, string>;
+function buildExacgHeaders(connection: ProviderConnection): Headers;
+function parseExacgSize(size?: unknown): { width?: number; height?: number };
+function isPlainObject(value: unknown): boolean;
+function getExacgProviderOptions(requestBody: Record<string, unknown>): Record<string, unknown>;
+function parseExacgModelIndex(modelCode: string): number;
+function assignDefinedExacgOptions(body: Record<string, unknown>, providerOptions: Record<string, unknown>): void;
+function buildExacgGenerateBody(modelCode: string, requestBody: Record<string, unknown>): Record<string, unknown>;
+async function readExacgJson(response: Response): Promise<Record<string, unknown>>;
+function extractExacgErrorMessage(responseBody?: Record<string, unknown>): string;
+function extractExacgImageURL(responseBody?: Record<string, unknown>): string;
+async function readExacgProviderErrorMessage(response: Response, responseBody?: Record<string, unknown>): Promise<string>;
+function getEpochSeconds(now: Date): number;
+function buildOpenAIImageGenerationBody(input: AdapterInvokeInput, imageURL: string, now: Date): Record<string, unknown>;
+function getSelectionConnection(selection: SelectedChannelModel): ProviderConnection;
+function assertExacgImageEndpoint(endpoint: V1EndpointDefinition): void;
+function assertJsonRequestBody(requestBody: Record<string, unknown> | FormData): void;
+async function invokeExacg(fetchFn: typeof fetch, nowFn: () => Date, input: AdapterInvokeInput): Promise<AdapterInvokeResult>;
+async function listExacgModels(input: ProviderConnection): Promise<UpstreamModel[]>;
+function buildExacgCheckRequest(input: ModelCheckInput): { url: string; method: 'POST'; body: BodyInit; headers: Headers };
+function buildUnavailableCheckResult(input: ModelCheckInput, errorMessage: string, latencyMs: number): ModelCheckResult;
+async function checkExacgAvailability(fetchFn: typeof fetch, nowFn: () => Date, input: ModelCheckInput): Promise<ModelCheckResult>;
+```
+
+Exacg 请求体映射规则：
+- `requestBody.model` 只用于网关模型选择，实际上游 `model_index` 来自命中的 `channel_models.code`，且必须为数字。
+- `requestBody.prompt` 透传为 `prompt`；缺省时使用空字符串，探活时使用固定最小 prompt。
+- `requestBody.size` 支持 `"{width}x{height}"` 字符串；解析成功时写入 `width` 和 `height`。
+- `requestBody.seed` 缺省为 `0`。
+- `steps` 缺省为 `30`；调用方传入 `providerOptions.exacg.steps` 或 `provider_options.exacg.steps` 时覆盖默认值。
+- `negative_prompt` 有内置默认值；调用方传入 Exacg 私有 `negative_prompt` 时覆盖默认值。
+- `requestBody.providerOptions.exacg` 与 `requestBody.provider_options.exacg` 均可携带 Exacg 私有参数；当前仅映射 `negative_prompt`、`steps`、`cfg`、`image_source`。
+- 响应按正文内容解析 JSON，不依赖上游 `content-type` 必须是 `application/json`。
+- `success: true` 响应中的 `message` 是成功提示，不作为错误；仅 `error` 或 `success: false` 时的 `message` 作为错误信息。
+- 成功响应转换为 OpenAI-compatible 图片生成响应 `{ created, data: [{ url }] }`；日志计费使用 `responseBody.images` 数组统计 `/img` 输出数量。
+
 ---
 
 ## 9. API 输入输出说明
@@ -820,7 +877,7 @@ function hasAvailableCheckData(callType: CallType, response: Response, responseB
 
 ### `GET /api/channel/:id/models`
 
-按已保存渠道配置获取上游模型列表。当前仅 `openai` 和 `openai-compatible` 由 OpenAI-compatible 适配器实现；其他 provider 返回 `success: false` 和空数组，后续通过新增适配器扩展。
+按已保存渠道配置获取上游模型列表。`openai` 和 `openai-compatible` 由 OpenAI-compatible 适配器获取上游 `/models`；`exacg` 已接入适配器但上游无模型列表接口，因此返回 `success: true` 和空数组；其他 provider 返回 `success: false` 和空数组，后续通过新增适配器扩展。
 
 **输出：**
 ```json
@@ -855,7 +912,7 @@ function hasAvailableCheckData(callType: CallType, response: Response, responseB
 
 ### `POST /api/model/check`
 
-检测指定平台模型可用性。当前仅 `openai` 和 `openai-compatible` 可检测。
+检测指定平台模型可用性。`openai` 和 `openai-compatible` 按调用类型探活；`exacg` 仅支持 `image_gen` 图片生成探活；其他 provider 返回不可用结果。
 
 **输入：**
 ```json
@@ -911,12 +968,38 @@ function hasAvailableCheckData(callType: CallType, response: Response, responseB
 
 所有调用入口都需要 `Authorization: Bearer {ADMIN_KEY}`。请求体必须包含 `model`。`x-channel-id` 可选，用于限定只在指定渠道中选择模型。成功时透传上游响应；失败时按候选模型 fallback，并记录失败日志。
 
+当命中的渠道 provider 为 `exacg` 时，仅支持 `POST /v1/images/generations`。网关会将请求体转换为 Exacg `/generate_image`：
+- `model` 匹配网关模型或别名；实际发送给 Exacg 的 `model_index` 使用命中模型的 `code`。
+- `prompt`、`size`、`seed` 参与上游请求；`size` 只接受 `宽x高` 形式，无法解析时不发送宽高。
+- `seed` 默认发送 `0`。
+- `steps` 默认发送 `30`；调用方传入 Exacg 私有 `steps` 时覆盖默认值。
+- `negative_prompt` 默认发送内置负向提示词；调用方传入 Exacg 私有 `negative_prompt` 时覆盖默认值。
+- `providerOptions.exacg` 或 `provider_options.exacg` 可传 `negative_prompt`、`steps`、`cfg`、`image_source`。
+- 成功输出为 `{ "created": 1810000000, "data": [{ "url": "https://..." }] }`。
+
 **输入示例：**
 ```json
 {
   "model": "my-gpt",
   "messages": [{ "role": "user", "content": "hello" }],
   "temperature": 0.2
+}
+```
+
+**Exacg 图片生成输入示例：**
+```json
+{
+  "model": "anime-image",
+  "prompt": "a clean anime portrait",
+  "size": "768x512",
+  "seed": 42,
+  "providerOptions": {
+    "exacg": {
+      "negative_prompt": "low quality",
+      "steps": 24,
+      "cfg": 7
+    }
+  }
 }
 ```
 
@@ -1026,6 +1109,7 @@ handleProviderModels(channel, env):
   adapter = getProviderAdapter(channel.provider)
   try:
     data = adapter.listModels(channel)
+    # Exacg 无模型列表接口，适配器返回 []
     return { success: true, data }
   catch error:
     return { success: false, data: [], error: error.message }
@@ -1038,11 +1122,31 @@ handleModelCheck(request, env):
   body = parse JSON
   validate provider, apiKey, model, callType, timeoutMs
   adapter = getProviderAdapter(body.provider)
+  # Exacg 仅支持 image_gen 探活，其他 callType 由适配器返回不可用错误
   result = adapter.checkAvailability(body)
   return { success: true, data: result }
 ```
 
-### 10.7 模型选择
+### 10.7 Exacg 图片生成适配
+
+```text
+invokeExacg(fetchFn, nowFn, input):
+  assert endpoint.callType == image_gen
+  connection = selected channel api_key/base_url + selected model headers
+  request = buildExacgGenerateBody(selection.model.code, input.requestBody)
+  response = fetch(buildExacgURL(connection.baseURL, /generate_image), POST JSON)
+  json = readExacgJson(response)
+  if response not ok or json.error exists:
+    throw upstream error
+  imageURL = extractExacgImageURL(json)
+  body = buildOpenAIImageGenerationBody(input, imageURL, nowFn())
+  return {
+    response: JSON Response(body),
+    responseBody: { usage: {}, images: body.data }
+  }
+```
+
+### 10.8 模型选择
 
 ```text
 selectChannelModels(db, options):
@@ -1066,7 +1170,7 @@ selectChannelModels(db, options):
   sort selections by score descending
 ```
 
-### 10.8 调用结果处理
+### 10.9 调用结果处理
 
 ```text
 recordCallSuccess(db, input):

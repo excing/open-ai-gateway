@@ -8,6 +8,7 @@ import {
 } from './call-result.js';
 import { createGatewayRepository } from './db-repository.js';
 import { calculateModelScore, selectChannelModels } from './model-selection.js';
+import { buildExacgGenerateBody, extractExacgErrorMessage } from './v1/adapters/exacg.js';
 import { createApp, CONSTANTS, SCHEMAS } from './worker.js';
 
 const {
@@ -761,6 +762,95 @@ describe('V1 OpenAI-compatible 网关', () => {
     assert.strictEqual(mockEnv._models.get('m-v1-fallback-b').request_count, 1);
   });
 
+  it('POST /v1/images/generations 应通过 Exacg 适配器生成图片并记录图片用量', async () => {
+    const calls = [];
+    addChannelWithModel(mockEnv, {
+      channelId: 'ch-v1-exacg',
+      channelName: 'Exacg',
+      provider: PROVIDERS.EXACG,
+      baseURL: 'https://exacg.example.com/api/v1/',
+      modelId: 'm-v1-exacg',
+      modelCode: '7',
+      callType: CALL_TYPES.IMAGE_GEN,
+    });
+    Object.assign(mockEnv._models.get('m-v1-exacg'), {
+      aliases: JSON.stringify(['public-image-model']),
+      output_price: '0.02/img',
+      headers: JSON.stringify({ 'x-exacg-channel': 'yes' }),
+    });
+    app = createApp({
+      fetch: createMockFetch(
+        {
+          'exacg.example.com/api/v1/generate_image': {
+            body: JSON.stringify({
+              data: {
+                image_id: 0,
+                image_url: 'https://cdn.example.com/generated.png',
+                model_name: 'Miaomiao Harem vPred Dogma 1.1',
+                points_used: 1,
+                remaining_points: 5068,
+              },
+              message: '图像生成成功',
+              success: true,
+            }),
+            headers: { 'content-type': 'text/plain; charset=utf-8' },
+          },
+        },
+        (url, options) => calls.push({ url, options }),
+      ),
+      now: () => new Date('2026-04-12T00:00:00.000Z'),
+      uuid: () => 'v1-exacg-log',
+    });
+
+    const response = await app.handleRequest(
+      createMockRequest({
+        method: 'POST',
+        pathname: '/v1/images/generations',
+        headers: ADMIN_AUTH_HEADERS,
+        body: {
+          model: 'public-image-model',
+          prompt: 'a clean anime portrait',
+          size: '768x512',
+          seed: 42,
+          providerOptions: {
+            exacg: {
+              negative_prompt: 'low quality',
+              steps: 24,
+              cfg: 7,
+              image_source: 'https://cdn.example.com/source.png',
+            },
+          },
+        },
+      }),
+      mockEnv,
+    );
+    const data = await response.json();
+    const upstreamBody = JSON.parse(calls[0].options.body);
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK, JSON.stringify(data));
+    assert.strictEqual(calls[0].url, 'https://exacg.example.com/api/v1/generate_image');
+    assert.strictEqual(calls[0].options.headers.get('authorization'), 'Bearer sk-test');
+    assert.strictEqual(calls[0].options.headers.get('x-exacg-channel'), 'yes');
+    assert.deepStrictEqual(upstreamBody, {
+      prompt: 'a clean anime portrait',
+      seed: 42,
+      model_index: 7,
+      width: 768,
+      height: 512,
+      negative_prompt: 'low quality',
+      steps: 24,
+      cfg: 7,
+      image_source: 'https://cdn.example.com/source.png',
+    });
+    assert.strictEqual(data.created, Math.floor(new Date('2026-04-12T00:00:00.000Z').getTime() / 1000));
+    assert.deepStrictEqual(data.data, [{ url: 'https://cdn.example.com/generated.png' }]);
+    assert.strictEqual(mockEnv._logs.length, 1);
+    assert.strictEqual(mockEnv._logs[0].status, LOG_STATUS.SUCCESS);
+    assert.strictEqual(mockEnv._logs[0].request_model, 'public-image-model');
+    assert.strictEqual(mockEnv._logs[0].output_quantity, 1);
+    assert.strictEqual(mockEnv._models.get('m-v1-exacg').request_count, 1);
+  });
+
   it('/v1 未知 endpoint 应返回 404', async () => {
     const response = await app.handleRequest(
       createMockRequest({
@@ -846,6 +936,99 @@ describe('模型可用性检测 API', () => {
     assert.strictEqual(upstreamBody.model, 'check-model');
   });
 
+  it('POST /api/model/check 应通过 Exacg 适配器发起图片生成探活请求', async () => {
+    const calls = [];
+    const app = createApp({
+      fetch: createMockFetch(
+        {
+          'exacg.example.com/api/v1/generate_image': {
+            body: JSON.stringify({
+              data: { image_url: 'https://cdn.example.com/check.png' },
+              message: '图像生成成功',
+              success: true,
+            }),
+            headers: { 'content-type': 'text/plain; charset=utf-8' },
+          },
+        },
+        (url, options) => calls.push({ url, options }),
+      ),
+      now: (() => {
+        const values = [
+          new Date('2026-04-12T00:00:00.000Z'),
+          new Date('2026-04-12T00:00:00.075Z'),
+        ];
+        return () => values.shift() || new Date('2026-04-12T00:00:00.075Z');
+      })(),
+    });
+
+    const response = await app.handleRequest(
+      createMockRequest({
+        method: 'POST',
+        pathname: '/api/model/check',
+        headers: ADMIN_AUTH_HEADERS,
+        body: {
+          provider: PROVIDERS.EXACG,
+          apiKey: 'exacg-key',
+          baseURL: 'https://exacg.example.com/api/v1/',
+          model: '8',
+          callType: CALL_TYPES.IMAGE_GEN,
+          headers: { 'x-check': 'yes' },
+          timeoutMs: 1000,
+        },
+      }),
+      mockEnv,
+    );
+    const data = await response.json();
+    const upstreamBody = JSON.parse(calls[0].options.body);
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK, JSON.stringify(data));
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.model_code, '8');
+    assert.strictEqual(data.data.call_type, CALL_TYPES.IMAGE_GEN);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+    assert.strictEqual(data.data.latency_ms, 75);
+    assert.strictEqual(data.data.error_message, '');
+    assert.strictEqual(calls[0].url, 'https://exacg.example.com/api/v1/generate_image');
+    assert.strictEqual(calls[0].options.headers.get('authorization'), 'Bearer exacg-key');
+    assert.strictEqual(calls[0].options.headers.get('x-check'), 'yes');
+    assert.strictEqual(upstreamBody.model_index, 8);
+    assert.strictEqual(upstreamBody.seed, 0);
+    assert.strictEqual(upstreamBody.steps, 30);
+    assert.ok(String(upstreamBody.prompt).length > 0);
+  });
+
+  it('POST /api/model/check 对 Exacg 非图片调用类型应返回不可用结果且不请求上游', async () => {
+    const calls = [];
+    const app = createApp({
+      fetch: createMockFetch({}, (url) => calls.push(url)),
+    });
+
+    const response = await app.handleRequest(
+      createMockRequest({
+        method: 'POST',
+        pathname: '/api/model/check',
+        headers: ADMIN_AUTH_HEADERS,
+        body: {
+          provider: PROVIDERS.EXACG,
+          apiKey: 'exacg-key',
+          baseURL: 'https://exacg.example.com/api/v1',
+          model: '8',
+          callType: CALL_TYPES.CHAT,
+        },
+      }),
+      mockEnv,
+    );
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK, JSON.stringify(data));
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, false);
+    assert.strictEqual(data.data.data_available, false);
+    assert.ok(data.data.error_message.includes('Unsupported Exacg call type'));
+    assert.strictEqual(calls.length, 0);
+  });
+
   it('POST /api/model/check 对未实现 provider 应返回不可用结果', async () => {
     const app = createApp();
     const response = await app.handleRequest(
@@ -870,6 +1053,50 @@ describe('模型可用性检测 API', () => {
     assert.strictEqual(data.data.api_accessible, false);
     assert.strictEqual(data.data.data_available, false);
     assert.ok(data.data.error_message.includes('Unsupported provider'));
+  });
+});
+
+describe('exacg adapter: 请求体转换', () => {
+  it('buildExacgGenerateBody 未传 steps 时应使用默认值 30', () => {
+    const body = buildExacgGenerateBody('9', { prompt: 'portrait' });
+
+    assert.strictEqual(body.prompt, 'portrait');
+    assert.strictEqual(body.seed, 0);
+    assert.strictEqual(body.model_index, 9);
+    assert.strictEqual(body.steps, 30);
+  });
+
+  it('buildExacgGenerateBody 应支持 provider_options.exacg 并忽略非法 size', () => {
+    assert.deepStrictEqual(
+      buildExacgGenerateBody('9', {
+        prompt: 'portrait',
+        size: 'bad-size',
+        provider_options: {
+          exacg: {
+            negative_prompt: 'blur',
+            steps: 20,
+          },
+        },
+      }),
+      {
+        prompt: 'portrait',
+        seed: 0,
+        model_index: 9,
+        negative_prompt: 'blur',
+        steps: 20,
+      },
+    );
+  });
+
+  it('buildExacgGenerateBody 应拒绝空值和非数字 model_index', () => {
+    assert.throws(() => buildExacgGenerateBody('', { prompt: 'test' }), /model_index must be numeric/);
+    assert.throws(() => buildExacgGenerateBody('not-number', { prompt: 'test' }), /model_index must be numeric/);
+  });
+
+  it('extractExacgErrorMessage 不应把 success=true 的 message 当成错误', () => {
+    assert.strictEqual(extractExacgErrorMessage({ success: true, message: '图像生成成功' }), '');
+    assert.strictEqual(extractExacgErrorMessage({ success: false, message: '余额不足' }), '余额不足');
+    assert.strictEqual(extractExacgErrorMessage({ error: { message: 'invalid key' } }), 'invalid key');
   });
 });
 
@@ -1768,7 +1995,30 @@ describe('上游模型列表 API', () => {
     assert.strictEqual(data.data[0].id, 'gpt-4o');
   });
 
-  it('非 OpenAI-compatible provider 当前应返回 success=false 并预留适配器扩展', async () => {
+  it('POST /api/channel/models 对 Exacg 应返回空模型列表且不请求上游', async () => {
+    const calls = [];
+    const app = createApp({
+      fetch: createMockFetch({}, (url) => calls.push(url)),
+    });
+
+    const response = await app.handleRequest(
+      createMockRequest({
+        method: 'POST',
+        pathname: '/api/channel/models',
+        headers: ADMIN_AUTH_HEADERS,
+        body: { provider: PROVIDERS.EXACG, apiKey: 'exacg-key', baseURL: 'https://exacg.example.com/api/v1' },
+      }),
+      mockEnv,
+    );
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK, JSON.stringify(data));
+    assert.strictEqual(data.success, true);
+    assert.deepStrictEqual(data.data, []);
+    assert.strictEqual(calls.length, 0);
+  });
+
+  it('未实现 provider 当前应返回 success=false 并预留适配器扩展', async () => {
     const app = createApp();
 
     for (const provider of [PROVIDERS.GOOGLE, PROVIDERS.OPENROUTER, PROVIDERS.POLLINATIONS, PROVIDERS.ANTHROPIC]) {
