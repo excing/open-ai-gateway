@@ -506,19 +506,17 @@ function createMockFetch(mockResponses = {}, onCall = () => {}) {
 
     for (const [pattern, response] of Object.entries(mockResponses)) {
       if (urlString.includes(pattern)) {
-        return {
-          ok: response.ok !== false,
-          status: response.status || 200,
-          json: async () => response.data || response,
-        };
+        const status = response.status || (response.ok === false ? 500 : 200);
+        const body = response.body ?? response.data ?? response;
+        const headers = new Headers(response.headers || { 'content-type': 'application/json' });
+        return new Response(typeof body === 'string' ? body : JSON.stringify(body), { status, headers });
       }
     }
 
-    return {
-      ok: true,
+    return new Response(JSON.stringify({ object: 'list', data: [] }), {
       status: 200,
-      json: async () => ({ object: 'list', data: [] }),
-    };
+      headers: { 'content-type': 'application/json' },
+    });
   };
 }
 
@@ -564,12 +562,18 @@ function addChannelWithModel(mockEnv, overrides = {}) {
   return { channelId, modelId };
 }
 
-describe('已移除接口', () => {
+describe('V1 OpenAI-compatible 网关', () => {
   let app;
   let mockEnv;
 
   beforeEach(() => {
-    app = createApp();
+    app = createApp({
+      now: () => new Date('2026-04-12T00:00:00.000Z'),
+      uuid: (() => {
+        let index = 0;
+        return () => `v1-log-${++index}`;
+      })(),
+    });
     mockEnv = createMockEnv();
   });
 
@@ -577,48 +581,295 @@ describe('已移除接口', () => {
     mockEnv._clear();
   });
 
-  it('/v1/* 应返回 404', async () => {
-    const cases = [
-      { method: 'GET', pathname: '/v1/models' },
-      { method: 'POST', pathname: '/v1/chat/completions' },
-      { method: 'POST', pathname: '/v1/images/generations' },
-      { method: 'POST', pathname: '/v1/video/generations' },
-      { method: 'POST', pathname: '/v1/audio/speech' },
-      { method: 'POST', pathname: '/v1/audio/transcriptions' },
-      { method: 'POST', pathname: '/v1/embeddings' },
-    ];
+  it('GET /v1/models 应返回未禁用模型的 code 与 aliases 并去重', async () => {
+    addChannelWithModel(mockEnv, {
+      channelId: 'ch-v1-list-a',
+      channelName: 'OpenAI A',
+      channelKey: 'openai-a',
+      modelId: 'm-v1-list-a',
+      modelCode: 'gpt-4o',
+    });
+    Object.assign(mockEnv._models.get('m-v1-list-a'), {
+      aliases: JSON.stringify(['my-gpt', 'gpt-4o', '', '  ']),
+    });
+    addChannelWithModel(mockEnv, {
+      channelId: 'ch-v1-list-b',
+      channelName: 'OpenAI B',
+      channelKey: 'openai-b',
+      modelId: 'm-v1-list-b',
+      modelCode: 'gpt-4o',
+    });
+    Object.assign(mockEnv._models.get('m-v1-list-b'), {
+      aliases: JSON.stringify(['my-gpt', 'mirror']),
+    });
+    addChannelWithModel(mockEnv, {
+      channelId: 'ch-v1-list-disabled',
+      channelKey: 'openai-disabled',
+      modelId: 'm-v1-list-disabled',
+      modelCode: 'disabled-model',
+      status: MODEL_STATUS.DISABLE,
+    });
 
-    for (const item of cases) {
-      const response = await app.handleRequest(
-        createMockRequest({
-          ...item,
-          headers: ADMIN_AUTH_HEADERS,
-          body: { model: 'gpt-4o' },
-        }),
-        mockEnv,
-      );
-      const data = await response.json();
-      assert.strictEqual(response.status, HTTP_STATUS.NOT_FOUND, item.pathname);
-      assert.strictEqual(data.success, false);
-      assert.strictEqual(data.error, ERROR_MESSAGES.NOT_FOUND);
-    }
+    const response = await app.handleRequest(
+      createMockRequest({
+        method: 'GET',
+        pathname: '/v1/models',
+        headers: ADMIN_AUTH_HEADERS,
+      }),
+      mockEnv,
+    );
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK, JSON.stringify(data));
+    assert.strictEqual(data.object, 'list');
+    assert.deepStrictEqual(data.data.map((item) => item.id).sort(), ['gpt-4o', 'mirror', 'my-gpt']);
   });
 
-  it('POST /api/model/check 应返回 404', async () => {
+  it('POST /v1/chat/completions 应选择别名模型、重写上游 model 并记录成功', async () => {
+    const calls = [];
+    addChannelWithModel(mockEnv, {
+      channelId: 'ch-v1-chat',
+      channelName: 'Compatible',
+      provider: PROVIDERS.OPENAI_COMPATIBLE,
+      baseURL: 'https://compatible.example.com/v1',
+      modelId: 'm-v1-chat',
+      modelCode: 'real-chat-model',
+    });
+    Object.assign(mockEnv._models.get('m-v1-chat'), {
+      aliases: JSON.stringify(['public-chat-model']),
+      input_price: '2/M',
+      output_price: '3/M',
+      headers: JSON.stringify({ 'x-upstream-model': 'yes' }),
+    });
+    app = createApp({
+      fetch: createMockFetch(
+        {
+          'compatible.example.com/v1/chat/completions': {
+            data: {
+              id: 'chatcmpl-test',
+              object: 'chat.completion',
+              model: 'real-chat-model',
+              choices: [{ message: { role: 'assistant', content: 'ok' } }],
+              usage: { prompt_tokens: 1000, completion_tokens: 200, total_tokens: 1200 },
+            },
+          },
+        },
+        (url, options) => calls.push({ url, options }),
+      ),
+      now: () => new Date('2026-04-12T00:00:00.000Z'),
+      uuid: () => 'v1-success-log',
+    });
+
     const response = await app.handleRequest(
       createMockRequest({
         method: 'POST',
-        pathname: '/api/model/check',
+        pathname: '/v1/chat/completions',
         headers: ADMIN_AUTH_HEADERS,
-        body: { provider: PROVIDERS.OPENAI, apiKey: 'sk-test', baseURL: '', model: 'gpt-4o', callType: CALL_TYPES.CHAT },
+        body: {
+          model: 'public-chat-model',
+          messages: [{ role: 'user', content: 'hello' }],
+          temperature: 0.2,
+        },
+      }),
+      mockEnv,
+    );
+    const data = await response.json();
+
+    const upstreamBody = JSON.parse(calls[0].options.body);
+    assert.strictEqual(response.status, HTTP_STATUS.OK, JSON.stringify(data));
+    assert.strictEqual(data.id, 'chatcmpl-test');
+    assert.strictEqual(calls[0].url, 'https://compatible.example.com/v1/chat/completions');
+    assert.strictEqual(calls[0].options.headers.get('authorization'), 'Bearer sk-test');
+    assert.strictEqual(calls[0].options.headers.get('x-upstream-model'), 'yes');
+    assert.strictEqual(upstreamBody.model, 'real-chat-model');
+    assert.strictEqual(upstreamBody.temperature, 0.2);
+    assert.strictEqual(mockEnv._logs.length, 1);
+    assert.strictEqual(mockEnv._logs[0].status, LOG_STATUS.SUCCESS);
+    assert.strictEqual(mockEnv._logs[0].request_model, 'public-chat-model');
+    assert.strictEqual(mockEnv._logs[0].input_quantity, 1000);
+    assert.strictEqual(mockEnv._logs[0].output_quantity, 200);
+    assert.strictEqual(mockEnv._models.get('m-v1-chat').request_count, 1);
+  });
+
+  it('POST /v1/chat/completions 上游失败时应记录失败并 fallback 到下一个候选', async () => {
+    const calls = [];
+    addChannelWithModel(mockEnv, {
+      channelId: 'ch-v1-fallback-a',
+      channelKey: 'fallback-a',
+      channelName: 'Fallback A',
+      provider: PROVIDERS.OPENAI_COMPATIBLE,
+      baseURL: 'https://first.example.com/v1',
+      modelId: 'm-v1-fallback-a',
+      modelCode: 'shared-model',
+      modelWeight: 10,
+    });
+    addChannelWithModel(mockEnv, {
+      channelId: 'ch-v1-fallback-b',
+      channelKey: 'fallback-b',
+      channelName: 'Fallback B',
+      provider: PROVIDERS.OPENAI_COMPATIBLE,
+      baseURL: 'https://second.example.com/v1',
+      modelId: 'm-v1-fallback-b',
+      modelCode: 'shared-model',
+      modelWeight: 1,
+    });
+    app = createApp({
+      fetch: createMockFetch(
+        {
+          'first.example.com/v1/chat/completions': {
+            ok: false,
+            status: 500,
+            data: { error: { message: 'first failed' } },
+          },
+          'second.example.com/v1/chat/completions': {
+            data: {
+              id: 'chatcmpl-fallback',
+              object: 'chat.completion',
+              choices: [{ message: { role: 'assistant', content: 'ok' } }],
+              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            },
+          },
+        },
+        (url) => calls.push(url),
+      ),
+      now: () => new Date('2026-04-12T00:00:00.000Z'),
+      uuid: (() => {
+        let index = 0;
+        return () => `v1-fallback-log-${++index}`;
+      })(),
+    });
+
+    const response = await app.handleRequest(
+      createMockRequest({
+        method: 'POST',
+        pathname: '/v1/chat/completions',
+        headers: ADMIN_AUTH_HEADERS,
+        body: { model: 'shared-model', messages: [{ role: 'user', content: 'hello' }] },
+      }),
+      mockEnv,
+    );
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK, JSON.stringify(data));
+    assert.strictEqual(data.id, 'chatcmpl-fallback');
+    assert.deepStrictEqual(calls, [
+      'https://first.example.com/v1/chat/completions',
+      'https://second.example.com/v1/chat/completions',
+    ]);
+    assert.deepStrictEqual(mockEnv._logs.map((log) => log.status), [LOG_STATUS.ERROR, LOG_STATUS.SUCCESS]);
+    assert.strictEqual(mockEnv._models.get('m-v1-fallback-a').consecutive_failures, 1);
+    assert.strictEqual(mockEnv._models.get('m-v1-fallback-b').request_count, 1);
+  });
+
+  it('/v1 未知 endpoint 应返回 404', async () => {
+    const response = await app.handleRequest(
+      createMockRequest({
+        method: 'POST',
+        pathname: '/v1/files',
+        headers: ADMIN_AUTH_HEADERS,
+        body: { model: 'gpt-4o' },
       }),
       mockEnv,
     );
     const data = await response.json();
 
     assert.strictEqual(response.status, HTTP_STATUS.NOT_FOUND);
-    assert.strictEqual(data.success, false);
     assert.strictEqual(data.error, ERROR_MESSAGES.NOT_FOUND);
+  });
+});
+
+describe('模型可用性检测 API', () => {
+  let mockEnv;
+
+  beforeEach(() => {
+    mockEnv = createMockEnv();
+  });
+
+  afterEach(() => {
+    mockEnv._clear();
+  });
+
+  it('POST /api/model/check 应通过 OpenAI-compatible 适配器发起最小探活请求', async () => {
+    const calls = [];
+    const app = createApp({
+      fetch: createMockFetch(
+        {
+          'compatible.example.com/v1/chat/completions': {
+            data: {
+              id: 'chatcmpl-check',
+              choices: [{ message: { role: 'assistant', content: 'OK' } }],
+            },
+          },
+        },
+        (url, options) => calls.push({ url, options }),
+      ),
+      now: (() => {
+        const values = [
+          new Date('2026-04-12T00:00:00.000Z'),
+          new Date('2026-04-12T00:00:00.123Z'),
+        ];
+        return () => values.shift() || new Date('2026-04-12T00:00:00.123Z');
+      })(),
+    });
+
+    const response = await app.handleRequest(
+      createMockRequest({
+        method: 'POST',
+        pathname: '/api/model/check',
+        headers: ADMIN_AUTH_HEADERS,
+        body: {
+          provider: PROVIDERS.OPENAI_COMPATIBLE,
+          apiKey: 'sk-check',
+          baseURL: 'https://compatible.example.com/v1',
+          model: 'check-model',
+          callType: CALL_TYPES.CHAT,
+          headers: { 'x-check': 'yes' },
+          timeoutMs: 1000,
+        },
+      }),
+      mockEnv,
+    );
+    const data = await response.json();
+    const upstreamBody = JSON.parse(calls[0].options.body);
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK, JSON.stringify(data));
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.model_code, 'check-model');
+    assert.strictEqual(data.data.call_type, CALL_TYPES.CHAT);
+    assert.strictEqual(data.data.api_accessible, true);
+    assert.strictEqual(data.data.data_available, true);
+    assert.strictEqual(data.data.latency_ms, 123);
+    assert.strictEqual(data.data.error_message, '');
+    assert.strictEqual(calls[0].url, 'https://compatible.example.com/v1/chat/completions');
+    assert.strictEqual(calls[0].options.headers.get('authorization'), 'Bearer sk-check');
+    assert.strictEqual(calls[0].options.headers.get('x-check'), 'yes');
+    assert.strictEqual(upstreamBody.model, 'check-model');
+  });
+
+  it('POST /api/model/check 对未实现 provider 应返回不可用结果', async () => {
+    const app = createApp();
+    const response = await app.handleRequest(
+      createMockRequest({
+        method: 'POST',
+        pathname: '/api/model/check',
+        headers: ADMIN_AUTH_HEADERS,
+        body: {
+          provider: PROVIDERS.GOOGLE,
+          apiKey: 'google-key',
+          baseURL: '',
+          model: 'gemini-model',
+          callType: CALL_TYPES.CHAT,
+        },
+      }),
+      mockEnv,
+    );
+    const data = await response.json();
+
+    assert.strictEqual(response.status, HTTP_STATUS.OK, JSON.stringify(data));
+    assert.strictEqual(data.success, true);
+    assert.strictEqual(data.data.api_accessible, false);
+    assert.strictEqual(data.data.data_available, false);
+    assert.ok(data.data.error_message.includes('Unsupported provider'));
   });
 });
 
@@ -1517,71 +1768,10 @@ describe('上游模型列表 API', () => {
     assert.strictEqual(data.data[0].id, 'gpt-4o');
   });
 
-  it('Google 上游模型列表应使用 key 查询参数认证', async () => {
-    let capturedUrl = '';
-    const app = createApp({
-      fetch: createMockFetch(
-        {
-          'generativelanguage.googleapis.com/v1beta/models': [
-            { name: 'models/gemini-2.5-pro' },
-          ],
-        },
-        (url) => {
-          capturedUrl = url;
-        },
-      ),
-    });
-
-    const response = await app.handleRequest(
-      createMockRequest({
-        method: 'POST',
-        pathname: '/api/channel/models',
-        headers: ADMIN_AUTH_HEADERS,
-        body: { provider: PROVIDERS.GOOGLE, apiKey: 'google-key', baseURL: '' },
-      }),
-      mockEnv,
-    );
-    const data = await response.json();
-
-    assert.strictEqual(response.status, HTTP_STATUS.OK);
-    assert.strictEqual(data.success, true);
-    assert.ok(capturedUrl.includes('key=google-key'));
-    assert.strictEqual(data.data[0].id, 'models/gemini-2.5-pro');
-  });
-
-  it('OpenRouter 与 Pollinations 应使用各自默认模型列表地址', async () => {
-    const calls = [];
-    const app = createApp({
-      fetch: createMockFetch(
-        {
-          'openrouter.ai/api/v1/models': { object: 'list', data: [{ id: 'openrouter-model' }] },
-          'gen.pollinations.ai/v1/models': { object: 'list', data: [{ id: 'pollinations-model' }] },
-        },
-        (url) => calls.push(url),
-      ),
-    });
-
-    for (const provider of [PROVIDERS.OPENROUTER, PROVIDERS.POLLINATIONS]) {
-      const response = await app.handleRequest(
-        createMockRequest({
-          method: 'POST',
-          pathname: '/api/channel/models',
-          headers: ADMIN_AUTH_HEADERS,
-          body: { provider, apiKey: 'key', baseURL: '' },
-        }),
-        mockEnv,
-      );
-      assert.strictEqual(response.status, HTTP_STATUS.OK);
-    }
-
-    assert.ok(calls.some((url) => url.includes('openrouter.ai/api/v1/models')));
-    assert.ok(calls.some((url) => url.includes('gen.pollinations.ai/v1/models')));
-  });
-
-  it('无公开模型列表的 provider 应返回空数组', async () => {
+  it('非 OpenAI-compatible provider 当前应返回 success=false 并预留适配器扩展', async () => {
     const app = createApp();
 
-    for (const provider of [PROVIDERS.ANTHROPIC, PROVIDERS.EXACG, PROVIDERS.MICROSOFT_TTS]) {
+    for (const provider of [PROVIDERS.GOOGLE, PROVIDERS.OPENROUTER, PROVIDERS.POLLINATIONS, PROVIDERS.ANTHROPIC]) {
       const response = await app.handleRequest(
         createMockRequest({
           method: 'POST',
@@ -1593,8 +1783,9 @@ describe('上游模型列表 API', () => {
       );
       const data = await response.json();
       assert.strictEqual(response.status, HTTP_STATUS.OK);
-      assert.strictEqual(data.success, true);
+      assert.strictEqual(data.success, false);
       assert.deepStrictEqual(data.data, []);
+      assert.ok(data.error.includes('Unsupported provider'));
     }
   });
 

@@ -2,18 +2,21 @@
 
 ## 1. 项目概述
 
-Open AI Gateway 当前定位为运行在 Cloudflare Workers 上的管理后台服务，用于维护 AI 渠道、渠道模型、历史请求日志和运行状态。面向调用方的模型代理接口已经移除，Worker 不再发起聊天、图片、音频、视频、转写、向量化等模型调用。
+Open AI Gateway 当前定位为运行在 Cloudflare Workers 上的管理后台和 OpenAI 兼容网关服务，用于维护 AI 渠道、渠道模型、历史请求日志和运行状态，并向调用方提供 `/v1/*` OpenAI-compatible 代理入口。
 
 **当前能力：**
 - 管理渠道：创建、读取、更新、删除渠道配置。
 - 管理模型：维护渠道模型、别名、能力、价格、状态、权重和请求头。
-- 上游模型列表：通过直接 `fetch` 按 provider/baseURL 获取上游模型列表。
+- `/v1/*`：仅支持 `openai` 与 `openai-compatible` provider，按 endpoint 选择模型并以原生 HTTP `fetch` 透传到上游。
+- 上游模型列表：通过 OpenAI-compatible 适配器按 provider/baseURL 获取上游模型列表。
+- 模型可用性检测：通过 OpenAI-compatible 适配器发起最小探活请求。
 - 状态查看：展示数据库中模型的状态、统计和冷却字段。
 - 历史日志查询：分页查询历史 `request_logs` 数据。
 
-**已移除入口：**
-- `/v1/*`：全部返回 404，不再存在代理、模型选择、fallback、流式响应、计费写入链路。
-- `/api/model/check`：返回 404，不再发起模型可用性检测。
+**当前边界：**
+- 新 `/v1/*` 不使用 Vercel AI SDK，也不引入新的第三方类库。
+- 非 OpenAI-compatible provider 暂不实现调用、探活和模型列表，仅在适配器注册表中预留扩展入口。
+- 未列入 endpoint 表的 `/v1/*` 路径返回 404。
 
 **技术栈：**
 - 后端：Cloudflare Workers + Cloudflare D1 + Drizzle ORM + Zod。
@@ -28,6 +31,7 @@ Open AI Gateway 当前定位为运行在 Cloudflare Workers 上的管理后台�
 graph TB
     subgraph 用户角色
         A[管理员]
+        U[API 调用方]
         V[访客]
     end
 
@@ -43,13 +47,27 @@ graph TB
         AC9[查看日志 GET /api/log]
         AC10[获取已保存渠道的上游模型 GET /api/channel/:id/models]
         AC11[按连接参数获取上游模型 POST /api/channel/models]
+        AC12[检测模型可用性 POST /api/model/check]
+    end
+
+    subgraph API 调用方用例
+        UC1[列出网关模型 GET /v1/models]
+        UC2[聊天 POST /v1/chat/completions]
+        UC3[文本补全 POST /v1/completions]
+        UC4[Responses POST /v1/responses]
+        UC5[图片生成 POST /v1/images/generations]
+        UC6[音频生成 POST /v1/audio/speech]
+        UC7[音频转写 POST /v1/audio/transcriptions]
+        UC8[向量化 POST /v1/embeddings]
+        UC9[视频生成 POST /v1/video/generations]
     end
 
     subgraph 访客用例
         VC1[查看状态 GET /status]
     end
 
-    A --> AC1 & AC2 & AC3 & AC4 & AC5 & AC6 & AC7 & AC8 & AC9 & AC10 & AC11
+    A --> AC1 & AC2 & AC3 & AC4 & AC5 & AC6 & AC7 & AC8 & AC9 & AC10 & AC11 & AC12
+    U --> UC1 & UC2 & UC3 & UC4 & UC5 & UC6 & UC7 & UC8 & UC9
     V --> VC1
 ```
 
@@ -63,18 +81,27 @@ graph LR
     Worker --> Router[路由分发]
     Router --> Status[状态接口 /status]
     Router --> Admin[管理接口 /api/*]
-    Router --> Removed[已移除接口 404]
+    Router --> V1[V1 入口 v1/index.js]
+    Router --> NotFound[未知接口 404]
     Admin --> Auth[Bearer ADMIN_KEY 鉴权]
+    V1 --> V1Auth[Bearer ADMIN_KEY 鉴权]
+    V1 --> Selection[模型选择 model-selection.js]
+    V1 --> Result[调用结果 call-result.js]
+    V1 --> Registry[平台适配器注册表]
+    Registry --> OpenAICompat[OpenAI-compatible Adapter]
     Auth --> Repo[Drizzle Repository]
     Repo --> Channel[渠道 CRUD]
     Repo --> Model[模型 CRUD]
     Repo --> Logs[日志查询]
-    Auth --> Upstream[上游模型列表 fetch]
+    Auth --> Upstream[模型列表/探活委托给适配器]
     Channel --> D1[(Cloudflare D1)]
     Model --> D1
     Logs --> D1
     Status --> D1
-    Upstream --> Provider[Provider Models Endpoint]
+    Selection --> D1
+    Result --> D1
+    OpenAICompat --> Provider[OpenAI-compatible Upstream]
+    Upstream --> OpenAICompat
 ```
 
 ---
@@ -114,10 +141,60 @@ sequenceDiagram
     C->>W: GET /api/channel/:id/models + Authorization
     W->>W: authenticate()
     W->>DB: repo.getChannelById()
-    W->>W: normalizeProvider() + getDefaultBaseURL() + buildModelsUrl()
-    W->>P: GET models URL
+    W->>W: getProviderAdapter(provider)
+    W->>P: adapter.listModels()
     P-->>W: JSON
-    W->>W: fetchModelsFromUpstream()
+    W->>W: normalizeModelList()
+    W-->>C: 200 { success: true, data }
+```
+
+### 4.3 `/v1` OpenAI-compatible 代理
+
+```mermaid
+sequenceDiagram
+    participant C as API 调用方
+    participant W as Worker
+    participant V1 as v1/index.js
+    participant DB as D1
+    participant A as OpenAI-compatible Adapter
+    participant P as 上游 Provider
+
+    C->>W: POST /v1/chat/completions + Authorization
+    W->>V1: handleV1Request()
+    V1->>V1: authenticateGatewayRequest()
+    V1->>V1: resolveV1Endpoint()
+    V1->>DB: selectChannelModels(model, callType, channelId?)
+    loop 候选模型
+        V1->>A: adapter.invoke(endpoint, requestBody, selection)
+        A->>P: fetch upstream endpoint
+        alt 上游成功
+            P-->>A: 2xx Response
+            A-->>V1: Response + billingBody
+            V1->>DB: recordCallSuccess()
+            V1-->>C: 透传上游响应
+        else 上游失败
+            P-->>A: error Response
+            A-->>V1: ProviderError
+            V1->>DB: recordCallFailure()
+        end
+    end
+```
+
+### 4.4 模型可用性检测
+
+```mermaid
+sequenceDiagram
+    participant C as 管理员客户端
+    participant W as Worker
+    participant A as OpenAI-compatible Adapter
+    participant P as 上游 Provider
+
+    C->>W: POST /api/model/check + Authorization
+    W->>W: authenticate()
+    W->>A: checkAvailability(provider, apiKey, baseURL, model, callType)
+    A->>P: fetch 最小探活请求
+    P-->>A: 响应或错误
+    A-->>W: ModelCheckResult
     W-->>C: 200 { success: true, data }
 ```
 
@@ -131,15 +208,22 @@ flowchart TD
     B -->|是| C[204 CORS]
     B -->|否| D{GET /status?}
     D -->|是| E[handleStatus]
-    D -->|否| F{路径以 /api 开头?}
-    F -->|否| Z[404]
+    D -->|否| V{路径以 /v1 开头?}
+    V -->|是| V2{网关鉴权通过?}
+    V2 -->|否| H[401]
+    V2 -->|是| V3{匹配 V1 endpoint?}
+    V3 -->|模型列表| V4[列出 code 与 alias]
+    V3 -->|模型调用| V5[选择模型并调用适配器]
+    V3 -->|未匹配| Z[404]
+    V -->|否| F{路径以 /api 开头?}
+    F -->|否| Z
     F -->|是| G{管理员鉴权通过?}
     G -->|否| H[401]
     G -->|是| I{匹配管理路由?}
     I -->|渠道| J[渠道处理函数]
     I -->|模型| K[模型处理函数]
     I -->|日志| L[日志处理函数]
-    I -->|上游模型| M[上游模型处理函数]
+    I -->|上游模型/探活| M[适配器处理函数]
     I -->|未匹配| Z
 ```
 
@@ -156,7 +240,7 @@ flowchart TD
 | `key` | TEXT | NOT NULL, UNIQUE | 渠道业务键。仅允许小写字母、数字和短横线，长度 1-50。 |
 | `provider` | TEXT | NOT NULL, DEFAULT `openai` | 上游平台标识。用于上游模型列表 URL 和认证方式分支。 |
 | `api_key` | TEXT | NOT NULL | 上游 API Key。允许空字符串，但按连接获取模型时必须提供非空值。 |
-| `base_url` | TEXT | DEFAULT `''` | 自定义上游基础地址。为空时使用 `getDefaultBaseURL(provider)`。 |
+| `base_url` | TEXT | DEFAULT `''` | 自定义上游基础地址。为空时使用当前 provider 适配器的默认 baseURL。 |
 | `weight` | REAL | NOT NULL, DEFAULT `1.0` | 渠道权重，保留为模型配置元数据，范围 0-100。 |
 | `created_at` | TEXT | NOT NULL | ISO 时间字符串。创建渠道时写入。 |
 | `updated_at` | TEXT | NOT NULL | ISO 时间字符串。更新渠道时写入。 |
@@ -232,6 +316,16 @@ type Provider =
 type CallType = 'chat' | 'mix' | 'image_gen' | 'audio_gen' | 'video_gen' | 'transcribe' | 'embedding';
 type ModelStatus = 'active' | 'open' | 'disable';
 type LogStatus = 'success' | 'error';
+type V1EndpointKey =
+  | 'models'
+  | 'chat_completions'
+  | 'completions'
+  | 'responses'
+  | 'image_generations'
+  | 'audio_speech'
+  | 'audio_transcriptions'
+  | 'embeddings'
+  | 'video_generations';
 
 interface ChannelModelInput {
   code: string;              // 上游模型代码，创建时必填
@@ -311,6 +405,65 @@ interface RequestLogEntry {
   input_cost: number;       // 输入成本，按十亿倍缩放
   output_cost: number;      // 输出成本，按十亿倍缩放
   total_cost: number;       // 总成本，按十亿倍缩放
+}
+
+interface V1EndpointDefinition {
+  key: V1EndpointKey;        // endpoint 稳定标识，用于适配器拆分处理
+  path: string;              // 客户端访问路径，必须以 /v1/ 开头
+  method: 'GET' | 'POST';    // 支持的 HTTP 方法
+  callType?: CallType;       // 需要模型选择的 endpoint 对应调用类型；/v1/models 为空
+}
+
+interface V1ProxyInput {
+  request: Request;          // 原始客户端请求
+  env: Env;                  // Worker 环境，必须包含 DB 和 ADMIN_KEY
+  ctx?: ExecutionContext;    // Worker 执行上下文，可为空
+  endpoint: V1EndpointDefinition; // 已解析 endpoint
+  requestBody: Record<string, unknown> | FormData; // 解析后的请求体
+  requestModel: string;      // 客户端传入的 model，用于模型选择和日志
+  channelId: string;         // x-channel-id，可为空字符串
+}
+
+interface ProviderAdapter {
+  id: string;                // 适配器 ID，例如 openai-compatible
+  supports(provider: Provider): boolean; // 判断 provider 是否由该适配器处理
+  defaultBaseURL(provider: Provider): string; // provider 默认 baseURL
+  listModels(input: ProviderConnection): Promise<UpstreamModel[]>; // 获取上游模型列表
+  checkAvailability(input: ModelCheckInput): Promise<ModelCheckResult>; // 模型探活
+  invoke(input: AdapterInvokeInput): Promise<AdapterInvokeResult>; // 调用上游模型 endpoint
+}
+
+interface ProviderConnection {
+  provider: Provider;        // 指定平台，当前仅 openai/openai-compatible
+  apiKey: string;            // 上游 API Key，不能为空
+  baseURL: string;           // 上游基础 URL，空字符串时使用适配器默认值
+  headers?: Record<string, string>; // 额外上游请求头，来自模型配置或探活输入
+}
+
+interface AdapterInvokeInput {
+  endpoint: V1EndpointDefinition; // 当前 endpoint
+  selection: SelectedChannelModel; // 已选择渠道与模型
+  requestBody: Record<string, unknown> | FormData; // 已解析客户端请求体
+}
+
+interface AdapterInvokeResult {
+  response: Response;        // 上游响应，成功时直接透传给客户端
+  responseBody?: Record<string, unknown>; // 成功响应 JSON，供日志计费用量计算；非 JSON 可为空
+}
+
+interface ModelCheckInput extends ProviderConnection {
+  model: string;             // 待检测的上游模型代码
+  callType: CallType;        // 检测调用类型
+  timeoutMs: number;         // 探活超时时间，1-120000ms
+}
+
+interface ModelCheckResult {
+  model_code: string;        // 被检测模型代码
+  call_type: CallType;       // 被检测调用类型
+  api_accessible: boolean;   // 上游 API 是否返回 2xx
+  data_available: boolean;   // 响应体是否包含当前调用类型需要的数据
+  latency_ms: number;        // 探活耗时，非负毫秒
+  error_message: string;     // 错误信息，成功为空字符串
 }
 ```
 
@@ -445,11 +598,9 @@ async function parseRequestBody(request: Request): Promise<{ success: true; body
 function buildModelInsertBindings(modelId: string, channelId: string, model: ChannelModelInput, timestamp: string): unknown[];
 function invalidRequestBodyResponse(parseErrorMessage?: string): Response;
 function formatValidationError(error: unknown): string;
-function buildModelsUrl(baseURL: string): string;
 function extractBearerToken(request: Request): string | null;
 function extractPathParam(pathname: string, prefix: string): string | null;
 function buildPaginatedResponse<T>(data: T[], total: number, pagination: { page: number; limit: number }): { data: T[]; total: number; page: number; limit: number; total_pages: number };
-function normalizeProvider(provider: string): string;
 function nowIso(nowFn: () => Date): string;
 async function depsFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>;
 async function getRequestBody(body: BodyInit | null | undefined): Promise<string>;
@@ -482,11 +633,62 @@ function createApp(deps?: {
   handleStatus(env: Env): Promise<Response>;
   handleGetChannelModels(channelId: string, env: Env): Promise<Response>;
   handleGetChannelModelsByConnection(request: Request, env: Env): Promise<Response>;
-  getChannelModels(channel: ChannelConnection, env: Env): Promise<Response>;
-  fetchUpstreamModels(channel: ChannelConnection, env: Env): Promise<UpstreamModel[]>;
-  fetchModelsFromUpstream(url: string, headers: Record<string, string>, env: Env): Promise<UpstreamModel[]>;
-  getDefaultBaseURL(provider: string): string;
+  handleModelCheck(request: Request, env: Env): Promise<Response>;
 };
+```
+
+### 8.6 V1 入口模块 `v1/index.js`
+
+```ts
+const V1_ROUTES: Record<V1EndpointKey, string>; // OpenAI-compatible endpoint 路径表
+const V1_ENDPOINTS: V1EndpointDefinition[];     // endpoint 定义表，新增 endpoint 必须先加入此表
+const MODEL_CHECK_LIMITS: { DEFAULT_TIMEOUT_MS: 30000; MIN_TIMEOUT_MS: 1; MAX_TIMEOUT_MS: 120000 };
+
+function createV1Gateway(deps: {
+  fetch?: typeof fetch;       // 上游请求函数，测试可注入
+  now?: () => Date;           // 当前时间函数，测试可注入
+  uuid?: () => string;        // 日志 ID 函数，测试可注入
+  repository?: ReturnType<typeof createGatewayRepository>; // 测试可注入仓储
+}): {
+  handleV1Request(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response>;
+  handleV1Models(request: Request, env: Env): Promise<Response>;
+  handleV1Proxy(request: Request, env: Env, ctx: ExecutionContext | undefined, endpoint: V1EndpointDefinition): Promise<Response>;
+  handleProviderModels(channel: ProviderConnection, env: Env): Promise<Response>;
+  handleProviderModelsByRequest(request: Request, env: Env): Promise<Response>;
+  handleModelCheck(request: Request, env: Env): Promise<Response>;
+  listConfiguredModels(env: Env): Promise<UpstreamModel[]>;
+};
+
+function authenticateGatewayRequest(request: Request, env: Env): boolean;
+function resolveV1Endpoint(pathname: string, method: string): V1EndpointDefinition | null;
+function parseV1RequestBody(request: Request, endpoint: V1EndpointDefinition): Promise<Record<string, unknown> | FormData>;
+function readModelFromBody(body: Record<string, unknown> | FormData): string;
+function getProviderAdapter(provider: Provider, env: Env): ProviderAdapter; // createV1Gateway 内部函数
+function normalizeProvider(provider: string): Provider;
+function parseJsonObject(value: string, fallback: Record<string, string>): Record<string, string>;
+function buildOpenAIModelList(rows: Array<ChannelModelRow & { channel_name: string }>, now: Date): UpstreamModel[];
+```
+
+### 8.7 OpenAI-compatible 适配器 `v1/adapters/openai-compatible.js`
+
+```ts
+const OPENAI_COMPATIBLE_PROVIDERS: ['openai', 'openai-compatible'];
+const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1';
+const OPENAI_OBJECTS: { LIST: 'list'; MODEL: 'model' };
+
+function createOpenAICompatibleAdapter(deps: { fetch?: typeof fetch; now?: () => Date }): ProviderAdapter;
+function supportsOpenAICompatible(provider: Provider): boolean;
+function getOpenAICompatibleBaseURL(connection: ProviderConnection): string;
+function buildOpenAICompatibleURL(baseURL: string, endpointPath: string): string;
+function buildOpenAIHeaders(connection: ProviderConnection, contentType?: string): Headers;
+function cloneBodyWithModel(body: Record<string, unknown> | FormData, modelCode: string): BodyInit;
+function normalizeOpenAIUsage(responseBody?: Record<string, unknown>): Record<string, unknown>;
+function normalizeBillingBody(endpoint: V1EndpointDefinition, responseBody?: Record<string, unknown>): Record<string, unknown> | undefined;
+async function invokeOpenAICompatible(fetchFn: typeof fetch, input: AdapterInvokeInput): Promise<AdapterInvokeResult>;
+async function listOpenAICompatibleModels(fetchFn: typeof fetch, input: ProviderConnection): Promise<UpstreamModel[]>;
+async function checkOpenAICompatibleAvailability(fetchFn: typeof fetch, nowFn: () => Date, input: ModelCheckInput): Promise<ModelCheckResult>;
+function buildCheckRequest(input: ModelCheckInput): { path: string; method: 'POST'; body: BodyInit; headers: Headers };
+function hasAvailableCheckData(callType: CallType, response: Response, responseBody?: Record<string, unknown>): Promise<boolean>;
 ```
 
 ---
@@ -618,7 +820,7 @@ function createApp(deps?: {
 
 ### `GET /api/channel/:id/models`
 
-按已保存渠道配置获取上游模型列表。Anthropic、Exacg、Microsoft TTS 当前没有公开模型列表，返回空数组。
+按已保存渠道配置获取上游模型列表。当前仅 `openai` 和 `openai-compatible` 由 OpenAI-compatible 适配器实现；其他 provider 返回 `success: false` 和空数组，后续通过新增适配器扩展。
 
 **输出：**
 ```json
@@ -651,13 +853,89 @@ function createApp(deps?: {
 }
 ```
 
-### 已移除接口
+### `POST /api/model/check`
+
+检测指定平台模型可用性。当前仅 `openai` 和 `openai-compatible` 可检测。
+
+**输入：**
+```json
+{
+  "provider": "openai-compatible",
+  "apiKey": "sk-...",
+  "baseURL": "https://compatible.example.com/v1",
+  "model": "gpt-4o",
+  "callType": "chat",
+  "headers": {},
+  "timeoutMs": 30000
+}
+```
+
+**输出：**
+```json
+{
+  "success": true,
+  "data": {
+    "model_code": "gpt-4o",
+    "call_type": "chat",
+    "api_accessible": true,
+    "data_available": true,
+    "latency_ms": 123,
+    "error_message": ""
+  }
+}
+```
+
+### `GET /v1/models`
+
+返回网关已配置且未禁用的模型标识。`code` 和 `aliases` 作为同级模型项输出，按最终 ID 去重。
+
+**输出：**
+```json
+{
+  "object": "list",
+  "data": [
+    { "id": "gpt-4o", "object": "model", "created": 1810000000, "owned_by": "OpenAI" },
+    { "id": "my-gpt", "object": "model", "created": 1810000000, "owned_by": "OpenAI" }
+  ]
+}
+```
+
+### `POST /v1/chat/completions`
+### `POST /v1/completions`
+### `POST /v1/responses`
+### `POST /v1/images/generations`
+### `POST /v1/audio/speech`
+### `POST /v1/audio/transcriptions`
+### `POST /v1/embeddings`
+### `POST /v1/video/generations`
+
+所有调用入口都需要 `Authorization: Bearer {ADMIN_KEY}`。请求体必须包含 `model`。`x-channel-id` 可选，用于限定只在指定渠道中选择模型。成功时透传上游响应；失败时按候选模型 fallback，并记录失败日志。
+
+**输入示例：**
+```json
+{
+  "model": "my-gpt",
+  "messages": [{ "role": "user", "content": "hello" }],
+  "temperature": 0.2
+}
+```
+
+**输出示例：**
+```json
+{
+  "id": "chatcmpl-1",
+  "object": "chat.completion",
+  "model": "gpt-4o",
+  "choices": []
+}
+```
+
+### 未实现接口
 
 以下入口必须返回 404：
 
 ```text
-GET/POST/PUT/DELETE /v1/*
-POST /api/model/check
+未列入 V1_ENDPOINTS 的 /v1/*
 ```
 
 ---
@@ -690,9 +968,11 @@ routeAdminApi(request, env):
   if POST /api/channel:
     return handleCreateChannel()
   if POST /api/channel/models:
-    return handleGetChannelModelsByConnection()
+    return v1.handleProviderModels()
   if GET /api/channel/:id/models:
-    return handleGetChannelModels()
+    return v1.handleProviderModels()
+  if POST /api/model/check:
+    return v1.handleModelCheck()
   if /api/channel/:id:
     dispatch GET/PUT/DELETE
   if /api/model/:id:
@@ -702,24 +982,67 @@ routeAdminApi(request, env):
   return 404
 ```
 
-### 10.3 上游模型列表
+### 10.3 V1 路由
 
 ```text
-fetchUpstreamModels(channel, env):
-  provider = normalizeProvider(channel.provider)
-  if provider has no public models endpoint:
-    return []
-  baseURL = channel.base_url or getDefaultBaseURL(provider)
-  url = buildModelsUrl(baseURL)
-  headers = { content-type: application/json }
-  if provider == google:
-    append key query parameter
-  else:
-    set Authorization Bearer header
-  return fetchModelsFromUpstream(url, headers, env)
+handleV1Request(request, env, ctx):
+  if authenticateGatewayRequest is false:
+    return 401
+  endpoint = resolveV1Endpoint(pathname, method)
+  if endpoint is null:
+    return 404
+  if endpoint.key == models:
+    return handleV1Models()
+  return handleV1Proxy(request, env, ctx, endpoint)
 ```
 
-### 10.4 模型选择
+### 10.4 V1 调用代理
+
+```text
+handleV1Proxy(request, env, ctx, endpoint):
+  body = parseV1RequestBody(request, endpoint)
+  requestModel = readModelFromBody(body)
+  if requestModel is empty:
+    return 400
+  selections = selectChannelModels(env.DB, { model: requestModel, callType: endpoint.callType, channelId })
+  if selections is empty:
+    return 503
+  for selection in selections:
+    adapter = getProviderAdapter(selection.channel.provider)
+    start = now()
+    try:
+      result = adapter.invoke({ endpoint, selection, requestBody: body })
+      recordCallSuccess(env.DB, { requestBody: { model: requestModel }, responseBody: result.responseBody, selection, callType, latencyMs })
+      return result.response
+    catch error:
+      recordCallFailure(env.DB, { requestBody: { model: requestModel }, selection, callType, latencyMs, error })
+  return last upstream error response or 500 JSON
+```
+
+### 10.5 上游模型列表
+
+```text
+handleProviderModels(channel, env):
+  adapter = getProviderAdapter(channel.provider)
+  try:
+    data = adapter.listModels(channel)
+    return { success: true, data }
+  catch error:
+    return { success: false, data: [], error: error.message }
+```
+
+### 10.6 模型可用性检测
+
+```text
+handleModelCheck(request, env):
+  body = parse JSON
+  validate provider, apiKey, model, callType, timeoutMs
+  adapter = getProviderAdapter(body.provider)
+  result = adapter.checkAvailability(body)
+  return { success: true, data: result }
+```
+
+### 10.7 模型选择
 
 ```text
 selectChannelModels(db, options):
@@ -743,7 +1066,7 @@ selectChannelModels(db, options):
   sort selections by score descending
 ```
 
-### 10.5 调用结果处理
+### 10.8 调用结果处理
 
 ```text
 recordCallSuccess(db, input):

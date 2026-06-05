@@ -5,6 +5,7 @@ import {
   CALL_TYPES as MODEL_SELECTION_CALL_TYPES,
   MODEL_STATUS as MODEL_SELECTION_MODEL_STATUS,
 } from './model-selection.js';
+import { createV1Gateway, V1_ROUTES as V1_GATEWAY_ROUTES } from './v1/index.js';
 
 const CONSTANTS = {
   PROVIDERS: {
@@ -32,6 +33,7 @@ const CONSTANTS = {
     UNAUTHORIZED: 401,
     FORBIDDEN: 403,
     NOT_FOUND: 404,
+    SERVICE_UNAVAILABLE: 503,
     INTERNAL_ERROR: 500,
   },
   ERROR_MESSAGES: {
@@ -41,6 +43,7 @@ const CONSTANTS = {
     CHANNEL_NOT_FOUND: 'Channel not found',
     CHANNEL_KEY_ALREADY_EXISTS: 'Channel key already exists',
     INVALID_REQUEST_BODY: 'Invalid request body',
+    NO_MODEL_AVAILABLE: 'All models for this identifier are currently unavailable (cooldown, disabled, or unsupported provider)',
     INTERNAL_ERROR: 'Internal server error',
   },
   CORS_HEADERS: {
@@ -58,6 +61,16 @@ const CONSTANTS = {
   },
   ROUTES: {
     STATUS: '/status',
+    V1_PREFIX: V1_GATEWAY_ROUTES.PREFIX,
+    V1_MODELS: V1_GATEWAY_ROUTES.MODELS,
+    V1_CHAT: V1_GATEWAY_ROUTES.CHAT_COMPLETIONS,
+    V1_COMPLETIONS: V1_GATEWAY_ROUTES.COMPLETIONS,
+    V1_RESPONSES: V1_GATEWAY_ROUTES.RESPONSES,
+    V1_IMAGES: V1_GATEWAY_ROUTES.IMAGE_GENERATIONS,
+    V1_VIDEO: V1_GATEWAY_ROUTES.VIDEO_GENERATIONS,
+    V1_AUDIO: V1_GATEWAY_ROUTES.AUDIO_SPEECH,
+    V1_TRANSCRIBE: V1_GATEWAY_ROUTES.AUDIO_TRANSCRIPTIONS,
+    V1_EMBEDDINGS: V1_GATEWAY_ROUTES.EMBEDDINGS,
     API_PREFIX: '/api',
     API_CHANNEL: '/api/channel',
     API_CHANNEL_PREFIX: '/api/channel/',
@@ -65,13 +78,9 @@ const CONSTANTS = {
     API_CHANNELS: '/api/channels',
     API_MODEL: '/api/model',
     API_MODEL_PREFIX: '/api/model/',
-    API_MODEL_CHECK_REMOVED: '/api/model/check',
+    API_MODEL_CHECK: '/api/model/check',
     API_LOG: '/api/log',
     API_CHANNEL_MODELS_SUFFIX: '/models',
-  },
-  UPSTREAM_MODEL_OBJECTS: {
-    LIST: 'list',
-    MODEL: 'model',
   },
   HEADERS: {
     AUTHORIZATION: 'authorization',
@@ -80,7 +89,6 @@ const CONSTANTS = {
   BEARER_PREFIX: 'Bearer ',
   JSON_CONTENT_TYPE: 'application/json',
   MULTIPART_CONTENT_TYPE: 'multipart/form-data',
-  UPSTREAM_OPENAI_MODELS_SUFFIX: '/v1/models',
 };
 
 const {
@@ -93,12 +101,10 @@ const {
   CORS_HEADERS,
   METHODS,
   ROUTES,
-  UPSTREAM_MODEL_OBJECTS,
   HEADERS,
   BEARER_PREFIX,
   JSON_CONTENT_TYPE,
   MULTIPART_CONTENT_TYPE,
-  UPSTREAM_OPENAI_MODELS_SUFFIX,
 } = CONSTANTS;
 
 const MODEL_SYNC_SCOPES = {
@@ -197,12 +203,6 @@ const SCHEMAS = (() => {
     end_date: z.string().optional(),
   });
 
-  const UpstreamModelListSchema = z.object({
-    provider: ProviderEnum.default(PROVIDERS.OPENAI),
-    apiKey: z.string().min(1),
-    baseURL: z.string().url().or(z.literal('')).default(''),
-  });
-
   return {
     ProviderEnum,
     CallTypeEnum,
@@ -211,7 +211,6 @@ const SCHEMAS = (() => {
     UpdateModelSchema: UpdateChannelModelSchema.omit({ id: true }),
     PaginationSchema,
     LogQuerySchema,
-    UpstreamModelListSchema,
   };
 })();
 
@@ -221,7 +220,6 @@ const {
   UpdateModelSchema,
   PaginationSchema,
   LogQuerySchema,
-  UpstreamModelListSchema,
 } = SCHEMAS;
 
 const generateUUID = () => crypto.randomUUID();
@@ -321,20 +319,6 @@ function extractPathParam(pathname, prefix) {
   return value.length > 0 ? value : null;
 }
 
-function normalizeProvider(provider) {
-  if (provider === PROVIDERS.GEMINI) return PROVIDERS.GOOGLE;
-  if (provider === PROVIDERS.CLAUDE) return PROVIDERS.ANTHROPIC;
-  return provider;
-}
-
-function buildModelsUrl(baseURL) {
-  const normalizedBaseURL = (baseURL || '').replace(/\/+$/, '');
-  if (/\/v\d+(?:[a-z]+\d*)?$/i.test(normalizedBaseURL)) {
-    return `${normalizedBaseURL}${ROUTES.API_CHANNEL_MODELS_SUFFIX}`;
-  }
-  return `${normalizedBaseURL}${UPSTREAM_OPENAI_MODELS_SUFFIX}`;
-}
-
 function toChannelUpdateRow(parsed, updatedAt) {
   return {
     name: parsed.name,
@@ -387,8 +371,8 @@ async function getRequestBody(body) {
 function createApp(deps = {}) {
   const nowFn = deps.now || (() => new Date());
   const uuidFn = deps.uuid || generateUUID;
-  const getFetchFn = (env) => (env?.ENV === 'dev' && deps.fetch ? deps.fetch : fetch);
   const getRepo = (env) => deps.repository || createGatewayRepository(env.DB);
+  const v1Gateway = createV1Gateway({ fetch: deps.fetch, now: nowFn, uuid: uuidFn, repository: deps.repository });
 
   const authenticate = (request, env) => {
     const token = extractBearerToken(request);
@@ -620,84 +604,21 @@ function createApp(deps = {}) {
   async function handleGetChannelModels(channelId, env) {
     const channel = await getRepo(env).getChannelById(channelId);
     if (!channel) return errorResponse(ERROR_MESSAGES.CHANNEL_NOT_FOUND, HTTP_STATUS.NOT_FOUND);
-    return getChannelModels(channel, env);
+    return v1Gateway.handleProviderModels(channel, env);
   }
 
   async function handleGetChannelModelsByConnection(request, env) {
-    const parsedRequestBody = await parseRequestBody(request);
-    if (!parsedRequestBody.success) return invalidRequestBodyResponse(parsedRequestBody.error);
-
-    let parsed;
-    try {
-      parsed = UpstreamModelListSchema.parse(parsedRequestBody.body);
-    } catch (error) {
-      return invalidRequestBodyResponse(formatValidationError(error));
-    }
-    return getChannelModels({ provider: parsed.provider, api_key: parsed.apiKey, base_url: parsed.baseURL }, env);
+    return v1Gateway.handleProviderModelsByRequest(request, env);
   }
 
-  async function getChannelModels(channel, env) {
-    try {
-      return jsonResponse({ success: true, data: await fetchUpstreamModels(channel, env) }, HTTP_STATUS.OK);
-    } catch (error) {
-      return jsonResponse({ success: false, data: [], error: error.message || 'Failed to fetch upstream models' }, HTTP_STATUS.OK);
-    }
-  }
-
-  async function fetchUpstreamModels(channel, env) {
-    const normalizedProvider = normalizeProvider(channel.provider);
-    if ([PROVIDERS.ANTHROPIC, PROVIDERS.EXACG, PROVIDERS.MICROSOFT_TTS].includes(normalizedProvider)) return [];
-
-    const modelsURL = buildModelsUrl(channel.base_url || getDefaultBaseURL(normalizedProvider));
-    const headers = { [HEADERS.CONTENT_TYPE]: JSON_CONTENT_TYPE };
-    if (normalizedProvider === PROVIDERS.GOOGLE) {
-      const url = new URL(modelsURL);
-      url.searchParams.set('key', channel.api_key);
-      return fetchModelsFromUpstream(url.toString(), headers, env);
-    }
-    headers[HEADERS.AUTHORIZATION] = BEARER_PREFIX + channel.api_key;
-    return fetchModelsFromUpstream(modelsURL, headers, env);
-  }
-
-  async function fetchModelsFromUpstream(url, headers, env) {
-    const response = await getFetchFn(env)(url, { method: METHODS.GET, headers });
-    if (!response.ok) throw new Error(`Upstream returned ${response.status}`);
-    const data = await response.json();
-
-    if (data.object === UPSTREAM_MODEL_OBJECTS.LIST && Array.isArray(data.data)) {
-      return data.data.map((model) => ({
-        id: model.id,
-        object: model.object || UPSTREAM_MODEL_OBJECTS.MODEL,
-        created: model.created || 0,
-        owned_by: model.owned_by || 'unknown',
-      }));
-    }
-    if (Array.isArray(data)) {
-      return data.map((model) => ({ id: model.id || model.name || model, object: UPSTREAM_MODEL_OBJECTS.MODEL, created: 0, owned_by: 'unknown' }));
-    }
-    return [];
-  }
-
-  function getDefaultBaseURL(provider) {
-    switch (provider) {
-      case PROVIDERS.OPENAI:
-      case PROVIDERS.OPENAI_COMPATIBLE:
-        return 'https://api.openai.com/v1';
-      case PROVIDERS.GOOGLE:
-        return 'https://generativelanguage.googleapis.com/v1beta';
-      case PROVIDERS.OPENROUTER:
-        return 'https://openrouter.ai/api/v1';
-      case PROVIDERS.POLLINATIONS:
-        return 'https://gen.pollinations.ai/v1';
-      default:
-        return '';
-    }
+  async function handleModelCheck(request, env) {
+    return v1Gateway.handleModelCheck(request, env);
   }
 
   async function routeAdminApi(request, env) {
     const { pathname } = new URL(request.url);
     if (!isAdmin(request, env)) return errorResponse(ERROR_MESSAGES.UNAUTHORIZED, HTTP_STATUS.UNAUTHORIZED);
-    if (pathname === ROUTES.API_MODEL_CHECK_REMOVED) return errorResponse(ERROR_MESSAGES.NOT_FOUND, HTTP_STATUS.NOT_FOUND);
+    if (pathname === ROUTES.API_MODEL_CHECK && request.method === METHODS.POST) return handleModelCheck(request, env);
     if (pathname === ROUTES.API_CHANNELS && request.method === METHODS.GET) return handleListChannels(request, env);
     if (pathname === ROUTES.API_LOG && request.method === METHODS.GET) return handleGetLogs(request, env);
     if (pathname === ROUTES.API_CHANNEL && request.method === METHODS.POST) return handleCreateChannel(request, env);
@@ -726,6 +647,7 @@ function createApp(deps = {}) {
   async function routeRequest(request, env, ctx) {
     const { pathname } = new URL(request.url);
     if (pathname === ROUTES.STATUS && request.method === METHODS.GET) return handleStatus(env);
+    if (pathname.startsWith(ROUTES.V1_PREFIX)) return v1Gateway.handleV1Request(request, env, ctx);
     if (pathname.startsWith(ROUTES.API_PREFIX)) return routeAdminApi(request, env, ctx);
     return errorResponse(ERROR_MESSAGES.NOT_FOUND, HTTP_STATUS.NOT_FOUND);
   }
@@ -759,10 +681,8 @@ function createApp(deps = {}) {
     handleStatus,
     handleGetChannelModels,
     handleGetChannelModelsByConnection,
-    getChannelModels,
-    fetchUpstreamModels,
-    fetchModelsFromUpstream,
-    getDefaultBaseURL,
+    handleModelCheck,
+    handleV1Request: v1Gateway.handleV1Request,
   };
 }
 
