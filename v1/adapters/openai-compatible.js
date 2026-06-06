@@ -250,7 +250,7 @@ async function convertSSEToChatCompletion(response, fallbackModel) {
 }
 
 async function invokeOpenAICompatible(fetchFn, input) {
-  const finalInput = buildFrontendRequest(input);
+  const finalInput = await buildFrontendRequest(input, { fetch: fetchFn });
   const connection = getSelectionConnection(finalInput.selection);
   const baseURL = getOpenAICompatibleBaseURL(connection);
   const isMultipart = isFormDataBody(finalInput.requestBody);

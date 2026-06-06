@@ -5,23 +5,117 @@ const CHAT_COMPLETIONS_METHOD = 'POST';
 const JSON_CONTENT_TYPE = 'application/json';
 const MARKDOWN_IMAGE_REGEX = /!\[[^\]]*\]\((https?:\/\/[^\s)]+|data:[^)]+)\)/g;
 const DATA_URL_REGEX = /^data:[^;,]+;base64,(.+)$/i;
+const IMAGE_EDIT_ENDPOINT_KEY = 'image_edits';
+const DEFAULT_IMAGE_MIME = 'image/png';
 
 function imageGenToChatRequestBody(body) {
   const source = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
   return {
     model: source.model,
     messages: [{ role: 'user', content: String(source.prompt || '').trim() }],
-    // modalities: ['text', 'image'],
     stream: false,
   };
 }
 
-export const buildFrontendRequest = (input) => {
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunkSize = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+async function blobToDataUrl(blob) {
+  const buffer = await blob.arrayBuffer();
+  const mime = blob.type || DEFAULT_IMAGE_MIME;
+  return `data:${mime};base64,${arrayBufferToBase64(buffer)}`;
+}
+
+async function fetchUrlAsDataUrl(fetchFn, url) {
+  const response = await fetchFn(url);
+  if (!response.ok) throw new Error(`Failed to fetch image ${url}: ${response.status}`);
+  const mime = response.headers.get('content-type') || DEFAULT_IMAGE_MIME;
+  const buffer = await response.arrayBuffer();
+  return `data:${mime};base64,${arrayBufferToBase64(buffer)}`;
+}
+
+async function normalizeToDataUrl(value, fetchFn) {
+  if (value == null) return null;
+  if (typeof Blob !== 'undefined' && value instanceof Blob) return blobToDataUrl(value);
+  const str = String(value).trim();
+  if (!str) return null;
+  if (str.startsWith('data:')) return str;
+  if (/^https?:\/\//i.test(str)) return fetchUrlAsDataUrl(fetchFn, str);
+  return `data:${DEFAULT_IMAGE_MIME};base64,${str}`;
+}
+
+function collectFormDataImages(form) {
+  const images = [];
+  for (const key of ['image', 'image[]']) {
+    for (const value of form.getAll(key)) images.push(value);
+  }
+  return images;
+}
+
+function collectJsonImages(value) {
+  if (value == null) return [];
+  if (Array.isArray(value)) return value.filter((item) => item != null);
+  return [value];
+}
+
+function readFromFormData(body) {
+  const images = collectFormDataImages(body);
+  const mask = body.get('mask');
+  return {
+    model: String(body.get('model') || ''),
+    prompt: String(body.get('prompt') || '').trim(),
+    images,
+    mask: mask || null,
+  };
+}
+
+function readFromJson(body) {
+  const source = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
+  return {
+    model: source.model,
+    prompt: String(source.prompt || '').trim(),
+    images: collectJsonImages(source.image),
+    mask: source.mask ?? null,
+  };
+}
+
+function isFormDataInstance(value) {
+  return typeof FormData !== 'undefined' && value instanceof FormData;
+}
+
+async function imageEditToChatRequestBody(body, fetchFn) {
+  const parsed = isFormDataInstance(body) ? readFromFormData(body) : readFromJson(body);
+  const attachments = [...parsed.images];
+  if (parsed.mask != null) attachments.push(parsed.mask);
+  const content = [{ type: 'text', text: parsed.prompt }];
+  for (const item of attachments) {
+    const url = await normalizeToDataUrl(item, fetchFn);
+    if (url) content.push({ type: 'image_url', image_url: { url } });
+  }
+  return {
+    model: parsed.model,
+    messages: [{ role: 'user', content }],
+    stream: false,
+  };
+}
+
+export const buildFrontendRequest = async (input, deps = {}) => {
   const userCallType = input?.endpoint?.callType;
   const modelCallType = input?.selection?.model?.call_type;
   if (!userCallType || !modelCallType || userCallType === modelCallType) return input;
   if (modelCallType !== CALL_TYPES.CHAT) return input;
   if (userCallType === CALL_TYPES.IMAGE_GEN) {
+    const fetchFn = deps.fetch || fetch;
+    const requestBody = input.endpoint.key === IMAGE_EDIT_ENDPOINT_KEY
+      ? await imageEditToChatRequestBody(input.requestBody, fetchFn)
+      : imageGenToChatRequestBody(input.requestBody);
     return {
       ...input,
       endpoint: {
@@ -30,7 +124,7 @@ export const buildFrontendRequest = (input) => {
         method: CHAT_COMPLETIONS_METHOD,
         callType: CALL_TYPES.CHAT,
       },
-      requestBody: imageGenToChatRequestBody(input.requestBody),
+      requestBody,
     };
   }
   return input;
