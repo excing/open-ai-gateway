@@ -189,12 +189,6 @@ function pushFromMarkdown(images, text) {
     const entry = toImageDataEntry(match[1]);
     if (entry) images.push(entry);
   }
-  if (images.length > before) return;
-  const trimmed = text.trim();
-  if (/^(https?:\/\/|data:)/i.test(trimmed)) {
-    const entry = toImageDataEntry(trimmed);
-    if (entry) images.push(entry);
-  }
 }
 
 function extractImagesFromChoice(choice) {
