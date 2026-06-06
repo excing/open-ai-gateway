@@ -10,7 +10,12 @@ const BEARER_PREFIX = 'Bearer ';
 const OPENAI_OBJECTS = {
   LIST: 'list',
   MODEL: 'model',
+  CHAT_COMPLETION: 'chat.completion',
 };
+
+const EVENT_STREAM_CONTENT_TYPE = 'text/event-stream';
+const SSE_DATA_PREFIX = 'data:';
+const SSE_DONE_MARKER = '[DONE]';
 
 const OPENAI_CHECK = {
   PROMPT: 'Say "OK" if you can read this message.',
@@ -143,6 +148,106 @@ function getSelectionConnection(selection) {
   };
 }
 
+function isStreamRequested(body) {
+  if (isFormDataBody(body)) {
+    const value = body.get('stream');
+    return value === 'true' || value === true;
+  }
+  return body?.stream === true;
+}
+
+function isEventStreamResponse(response) {
+  return (response.headers.get('content-type') || '').toLowerCase().includes(EVENT_STREAM_CONTENT_TYPE);
+}
+
+function isChatLikeEndpoint(endpoint) {
+  return endpoint.callType === CALL_TYPES.CHAT || endpoint.callType === CALL_TYPES.MIX;
+}
+
+async function readSSEChunks(response) {
+  const text = await response.clone().text();
+  const chunks = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line.startsWith(SSE_DATA_PREFIX)) continue;
+    const payload = line.slice(SSE_DATA_PREFIX.length).trim();
+    if (!payload || payload === SSE_DONE_MARKER) continue;
+    try {
+      chunks.push(JSON.parse(payload));
+    } catch {
+      // Skip malformed SSE payloads.
+    }
+  }
+  return chunks;
+}
+
+function mergeToolCallDeltas(existing, deltas) {
+  const result = Array.isArray(existing) ? existing.slice() : [];
+  for (const delta of deltas) {
+    const index = typeof delta.index === 'number' ? delta.index : result.length;
+    const current = result[index] || { index, id: '', type: 'function', function: { name: '', arguments: '' } };
+    if (delta.id) current.id = delta.id;
+    if (delta.type) current.type = delta.type;
+    if (delta.function) {
+      if (delta.function.name) current.function.name = (current.function.name || '') + delta.function.name;
+      if (delta.function.arguments) current.function.arguments = (current.function.arguments || '') + delta.function.arguments;
+    }
+    result[index] = current;
+  }
+  return result;
+}
+
+function aggregateChatCompletionFromSSE(chunks, fallbackModel) {
+  const choices = new Map();
+  let id = '';
+  let created = 0;
+  let model = fallbackModel;
+  let systemFingerprint;
+  let usage;
+
+  for (const chunk of chunks) {
+    if (chunk.id) id = chunk.id;
+    if (chunk.created) created = chunk.created;
+    if (chunk.model) model = chunk.model;
+    if (chunk.system_fingerprint) systemFingerprint = chunk.system_fingerprint;
+    if (chunk.usage) usage = chunk.usage;
+    if (!Array.isArray(chunk.choices)) continue;
+    for (const choice of chunk.choices) {
+      const index = typeof choice.index === 'number' ? choice.index : 0;
+      const acc = choices.get(index) || { index, message: { role: 'assistant', content: '' }, finish_reason: null };
+      const delta = choice.delta || {};
+      if (delta.role) acc.message.role = delta.role;
+      if (typeof delta.content === 'string') acc.message.content += delta.content;
+      if (Array.isArray(delta.tool_calls)) {
+        acc.message.tool_calls = mergeToolCallDeltas(acc.message.tool_calls, delta.tool_calls);
+      }
+      if (choice.finish_reason) acc.finish_reason = choice.finish_reason;
+      choices.set(index, acc);
+    }
+  }
+
+  const aggregated = {
+    id: id || `chatcmpl-${Date.now()}`,
+    object: OPENAI_OBJECTS.CHAT_COMPLETION,
+    created: created || Math.floor(Date.now() / 1000),
+    model,
+    choices: Array.from(choices.values()).sort((a, b) => a.index - b.index),
+  };
+  if (systemFingerprint) aggregated.system_fingerprint = systemFingerprint;
+  if (usage) aggregated.usage = usage;
+  return aggregated;
+}
+
+async function convertSSEToChatCompletion(response, fallbackModel) {
+  const chunks = await readSSEChunks(response);
+  const body = aggregateChatCompletionFromSSE(chunks, fallbackModel);
+  const headers = new Headers(response.headers);
+  headers.set('content-type', JSON_CONTENT_TYPE);
+  headers.delete('content-length');
+  headers.delete('transfer-encoding');
+  return { response: new Response(JSON.stringify(body), { status: response.status, headers }), responseBody: body };
+}
+
 async function invokeOpenAICompatible(fetchFn, input) {
   const connection = getSelectionConnection(input.selection);
   const baseURL = getOpenAICompatibleBaseURL(connection);
@@ -152,10 +257,15 @@ async function invokeOpenAICompatible(fetchFn, input) {
     headers: buildOpenAIHeaders(connection, isMultipart ? '' : JSON_CONTENT_TYPE),
     body: cloneBodyWithModel(input.requestBody, input.selection.model.code),
   });
-  const responseBody = await readJsonIfPossible(response);
   if (!response.ok) {
-    throw new ProviderResponseError(response, await readProviderErrorMessage(response, responseBody));
+    const errorBody = await readJsonIfPossible(response);
+    throw new ProviderResponseError(response, await readProviderErrorMessage(response, errorBody));
   }
+  if (!isStreamRequested(input.requestBody) && isChatLikeEndpoint(input.endpoint) && isEventStreamResponse(response)) {
+    const converted = await convertSSEToChatCompletion(response, input.selection.model.code);
+    return { response: converted.response, responseBody: normalizeBillingBody(input.endpoint, converted.responseBody) };
+  }
+  const responseBody = await readJsonIfPossible(response);
   return { response, responseBody: normalizeBillingBody(input.endpoint, responseBody) };
 }
 
