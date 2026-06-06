@@ -1164,7 +1164,7 @@
                 <div class="mt-4 grid gap-3 sm:grid-cols-2">
                   <input v-model="model.code" @input="actions.syncChannelModelNameFromCode(index)" type="text" class="field" placeholder="模型 code" />
                   <select v-model="model.callType" @change="actions.resetChannelModelCheck(index)" class="field-select">
-                    <option v-for="callType in constants.CALL_TYPES" :key="callType" :value="callType">{{ callType }}</option>
+                    <option v-for="callType in constants.CALL_TYPES" :key="callType" :value="callType">{{ constants.CALL_TYPE_LABELS[callType] }}</option>
                   </select>
                   <input v-model="model.inputPrice" type="text" class="field" placeholder="输入价格，例如 0、2.5/M、0.02/img、0.5/sec" />
                   <input v-model="model.outputPrice" type="text" class="field" placeholder="输出价格，例如 0、10/M、0.02/img、0.5/sec" />
@@ -1404,7 +1404,7 @@
         DEFAULT_LIMIT: '50',
         EMPTY_ARRAY_JSON: '[]',
         EMPTY_OBJECT_JSON: '{}',
-        CALL_TYPES: ['chat', 'image_gen', 'audio_gen', 'video_gen', 'transcribe', 'embedding'],
+        CALL_TYPES: ['chat', 'image_gen', 'image_edit', 'audio_gen', 'video_gen', 'transcribe', 'embedding'],
         VIEWS: {
           STATUS: 'status',
           CHANNELS: 'channels',
@@ -1426,7 +1426,7 @@
           LOG: '/api/log',
           CHANNEL_MODELS: '/api/channel/models',
         },
-        PROVIDERS: ['openai', 'openai-compatible', 'exacg'],
+        PROVIDERS: ['openai-compatible', 'exacg', 'openai'],
         MODEL_STATUS: ['active', 'open', 'disable'],
         LOG_STATUS_LIST: ['success', 'error'],
         LOG_QUERY_DEBOUNCE_MS: 300,
@@ -1439,6 +1439,7 @@
         CALL_TYPE_LABELS: {
           chat: '对话',
           image_gen: '图像生成',
+          image_edit: '图像编辑',
           audio_gen: '音频生成',
           video_gen: '视频生成',
           transcribe: '转写',

@@ -131,7 +131,7 @@ function normalizeOpenAIUsage(responseBody) {
 function normalizeBillingBody(endpoint, responseBody) {
   if (!responseBody) return undefined;
   const usage = normalizeOpenAIUsage(responseBody);
-  if (endpoint.callType === CALL_TYPES.IMAGE_GEN) {
+  if (endpoint.callType === CALL_TYPES.IMAGE_GEN || endpoint.callType === CALL_TYPES.IMAGE_EDIT) {
     return { usage, images: Array.isArray(responseBody.data) ? responseBody.data : responseBody.images || [] };
   }
   if (endpoint.callType === CALL_TYPES.VIDEO_GEN) {
@@ -338,6 +338,17 @@ function createSilentWav() {
   return new Uint8Array(buffer);
 }
 
+function createTinyPng() {
+  return new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+    0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+    0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
+    0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
+    0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
+    0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+  ]);
+}
+
 function buildJsonCheck(path, body, connection) {
   return {
     path,
@@ -364,6 +375,15 @@ function buildCheckRequest(input) {
       n: 1,
       size: OPENAI_CHECK.IMAGE_SIZE,
     }, input);
+  }
+  if (input.callType === CALL_TYPES.IMAGE_EDIT) {
+    const form = new FormData();
+    form.append('model', model);
+    form.append('prompt', OPENAI_CHECK.IMAGE_PROMPT);
+    form.append('n', '1');
+    form.append('size', OPENAI_CHECK.IMAGE_SIZE);
+    form.append('image', new Blob([createTinyPng()], { type: 'image/png' }), 'check.png');
+    return { path: '/v1/images/edits', method: 'POST', headers: buildOpenAIHeaders(input, ''), body: form };
   }
   if (input.callType === CALL_TYPES.AUDIO_GEN) {
     return buildJsonCheck('/v1/audio/speech', {
@@ -399,7 +419,7 @@ function hasTextChoice(responseBody) {
 
 async function hasAvailableCheckData(callType, response, responseBody) {
   if (callType === CALL_TYPES.CHAT) return hasTextChoice(responseBody);
-  if (callType === CALL_TYPES.IMAGE_GEN) return Array.isArray(responseBody?.data) && responseBody.data.length > 0;
+  if (callType === CALL_TYPES.IMAGE_GEN || callType === CALL_TYPES.IMAGE_EDIT) return Array.isArray(responseBody?.data) && responseBody.data.length > 0;
   if (callType === CALL_TYPES.VIDEO_GEN) return Array.isArray(responseBody?.data || responseBody?.videos) && (responseBody.data || responseBody.videos).length > 0;
   if (callType === CALL_TYPES.EMBEDDING) {
     const embedding = responseBody?.data?.[0]?.embedding || responseBody?.embedding;

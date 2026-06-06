@@ -5,6 +5,7 @@ import { channelModels, channels } from './db-schema.js';
 const CALL_TYPES = {
   CHAT: 'chat',
   IMAGE_GEN: 'image_gen',
+  IMAGE_EDIT: 'image_edit',
   AUDIO_GEN: 'audio_gen',
   VIDEO_GEN: 'video_gen',
   TRANSCRIBE: 'transcribe',
@@ -17,7 +18,7 @@ const MODEL_STATUS = {
   DISABLE: 'disable',
 };
 
-const CHAT_FALLBACK_CALL_TYPES = new Set([CALL_TYPES.IMAGE_GEN]);
+const CHAT_FALLBACK_CALL_TYPES = new Set([CALL_TYPES.IMAGE_GEN, CALL_TYPES.IMAGE_EDIT]);
 
 const SCORE_WEIGHTS = {
   WEIGHT_FACTOR: 10,

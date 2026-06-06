@@ -23,7 +23,7 @@ const {
 } = CONSTANTS;
 
 const ADMIN_AUTH_HEADERS = { authorization: 'Bearer test-admin-key' };
-const SUPPORTED_PROVIDER_IDS = ['openai', 'openai-compatible', 'exacg'];
+const SUPPORTED_PROVIDER_IDS = ['openai-compatible', 'exacg', 'openai'];
 const REMOVED_PROVIDER_IDS = ['google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations', 'microsoft-tts'];
 
 function extractFrontendProviderIds(html) {

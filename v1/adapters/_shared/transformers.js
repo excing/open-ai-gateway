@@ -5,8 +5,9 @@ const CHAT_COMPLETIONS_METHOD = 'POST';
 const JSON_CONTENT_TYPE = 'application/json';
 const MARKDOWN_IMAGE_REGEX = /!\[[^\]]*\]\((https?:\/\/[^\s)]+|data:[^)]+)\)/g;
 const DATA_URL_REGEX = /^data:[^;,]+;base64,(.+)$/i;
-const IMAGE_EDIT_ENDPOINT_KEY = 'image_edits';
 const DEFAULT_IMAGE_MIME = 'image/png';
+
+const IMAGE_USER_CALL_TYPES = new Set([CALL_TYPES.IMAGE_GEN, CALL_TYPES.IMAGE_EDIT]);
 
 function imageGenToChatRequestBody(body) {
   const source = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
@@ -111,23 +112,21 @@ export const buildFrontendRequest = async (input, deps = {}) => {
   const modelCallType = input?.selection?.model?.call_type;
   if (!userCallType || !modelCallType || userCallType === modelCallType) return input;
   if (modelCallType !== CALL_TYPES.CHAT) return input;
-  if (userCallType === CALL_TYPES.IMAGE_GEN) {
-    const fetchFn = deps.fetch || fetch;
-    const requestBody = input.endpoint.key === IMAGE_EDIT_ENDPOINT_KEY
-      ? await imageEditToChatRequestBody(input.requestBody, fetchFn)
-      : imageGenToChatRequestBody(input.requestBody);
-    return {
-      ...input,
-      endpoint: {
-        ...input.endpoint,
-        path: CHAT_COMPLETIONS_PATH,
-        method: CHAT_COMPLETIONS_METHOD,
-        callType: CALL_TYPES.CHAT,
-      },
-      requestBody,
-    };
-  }
-  return input;
+  if (!IMAGE_USER_CALL_TYPES.has(userCallType)) return input;
+  const fetchFn = deps.fetch || fetch;
+  const requestBody = userCallType === CALL_TYPES.IMAGE_EDIT
+    ? await imageEditToChatRequestBody(input.requestBody, fetchFn)
+    : imageGenToChatRequestBody(input.requestBody);
+  return {
+    ...input,
+    endpoint: {
+      ...input.endpoint,
+      path: CHAT_COMPLETIONS_PATH,
+      method: CHAT_COMPLETIONS_METHOD,
+      callType: CALL_TYPES.CHAT,
+    },
+    requestBody,
+  };
 };
 
 function toImageDataEntry(value) {
@@ -222,7 +221,7 @@ function isChatCompletionShape(body) {
 }
 
 export const buildFrontendResponse = (userCallType, response, responseBody) => {
-  if (userCallType === CALL_TYPES.IMAGE_GEN && isChatCompletionShape(responseBody)) {
+  if (IMAGE_USER_CALL_TYPES.has(userCallType) && isChatCompletionShape(responseBody)) {
     const newBody = chatToImageGenBody(responseBody);
     if (!newBody.data.length) {
       throw new Error('No image data extracted from chat completion response');
