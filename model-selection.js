@@ -17,6 +17,8 @@ const MODEL_STATUS = {
   DISABLE: 'disable',
 };
 
+const CHAT_FALLBACK_CALL_TYPES = new Set([CALL_TYPES.IMAGE_GEN]);
+
 const SCORE_WEIGHTS = {
   WEIGHT_FACTOR: 10,
   CHANNEL_WEIGHT_FACTOR: 10,
@@ -67,7 +69,8 @@ async function selectChannelModels(db, { model, callType, channelId = '', now = 
   if (!results.length) return [];
 
   return results
-    .filter((row) => row.call_type === callType)
+    .filter((row) => row.call_type === callType
+      || (CHAT_FALLBACK_CALL_TYPES.has(callType) && row.call_type === CALL_TYPES.CHAT))
     .map((row) => ({
       channel: {
         id: row.ch_id,

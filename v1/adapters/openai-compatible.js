@@ -1,4 +1,5 @@
 import { CALL_TYPES } from '../../model-selection.js';
+import { buildFrontendRequest, buildFrontendResponse } from './_shared/transformers.js';
 
 const OPENAI_COMPATIBLE_ADAPTER_ID = 'openai-compatible';
 const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1';
@@ -249,24 +250,33 @@ async function convertSSEToChatCompletion(response, fallbackModel) {
 }
 
 async function invokeOpenAICompatible(fetchFn, input) {
-  const connection = getSelectionConnection(input.selection);
+  const finalInput = buildFrontendRequest(input);
+  const connection = getSelectionConnection(finalInput.selection);
   const baseURL = getOpenAICompatibleBaseURL(connection);
-  const isMultipart = isFormDataBody(input.requestBody);
-  const response = await fetchFn(buildOpenAICompatibleURL(baseURL, input.endpoint.path), {
-    method: input.endpoint.method,
+  const isMultipart = isFormDataBody(finalInput.requestBody);
+  const response = await fetchFn(buildOpenAICompatibleURL(baseURL, finalInput.endpoint.path), {
+    method: finalInput.endpoint.method,
     headers: buildOpenAIHeaders(connection, isMultipart ? '' : JSON_CONTENT_TYPE),
-    body: cloneBodyWithModel(input.requestBody, input.selection.model.code),
+    body: cloneBodyWithModel(finalInput.requestBody, finalInput.selection.model.code),
   });
   if (!response.ok) {
     const errorBody = await readJsonIfPossible(response);
     throw new ProviderResponseError(response, await readProviderErrorMessage(response, errorBody));
   }
-  if (!isStreamRequested(input.requestBody) && isChatLikeEndpoint(input.endpoint) && isEventStreamResponse(response)) {
-    const converted = await convertSSEToChatCompletion(response, input.selection.model.code);
-    return { response: converted.response, responseBody: normalizeBillingBody(input.endpoint, converted.responseBody) };
+  let upstreamResponse = response;
+  let upstreamBody;
+  if (!isStreamRequested(finalInput.requestBody) && isChatLikeEndpoint(finalInput.endpoint) && isEventStreamResponse(response)) {
+    const converted = await convertSSEToChatCompletion(response, finalInput.selection.model.code);
+    upstreamResponse = converted.response;
+    upstreamBody = converted.responseBody;
+  } else {
+    upstreamBody = await readJsonIfPossible(response);
   }
-  const responseBody = await readJsonIfPossible(response);
-  return { response, responseBody: normalizeBillingBody(input.endpoint, responseBody) };
+  const transformed = buildFrontendResponse(input.endpoint.callType, upstreamResponse, upstreamBody);
+  return {
+    response: transformed.response,
+    responseBody: normalizeBillingBody(input.endpoint, transformed.responseBody),
+  };
 }
 
 function normalizeOpenAIModelList(data) {
