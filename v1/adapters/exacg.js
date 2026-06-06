@@ -10,6 +10,10 @@ const EXACG_PROVIDER_OPTIONS_KEYS = ['providerOptions', 'provider_options'];
 const EXACG_PROVIDER_OPTIONS_NAMESPACE = EXACG_ADAPTER_ID;
 const EXACG_OPTION_FIELDS = ['negative_prompt', 'steps', 'cfg', 'image_source'];
 const EXACG_DEFAULT_NEGATIVE_PROMPT = 'lowres, {bad}, error, fewer, extra, missing, worst quality, jpeg artifacts, bad quality, watermark, unfinished, displeasing, chromatic aberration, signature, extra digits, artistic error, username, scan, [abstract]';
+const EXACG_RANDOM_SEED_SENTINEL = -1;
+const EXACG_RANDOM_SEED_MIN = 1;
+const EXACG_RANDOM_SEED_MAX = 2 ** 31 - 1;
+const EXACG_RANDOM_SEED_RANGE = EXACG_RANDOM_SEED_MAX - EXACG_RANDOM_SEED_MIN + 1;
 const EXACG_RESPONSE_KEYS = {
   DATA: 'data',
   ERROR: 'error',
@@ -18,7 +22,6 @@ const EXACG_RESPONSE_KEYS = {
   SUCCESS: 'success',
 };
 const EXACG_REQUEST_DEFAULTS = {
-  SEED: 0,
   STEPS: 30,
   CHECK_PROMPT: 'a white circle on black background',
   TIMEOUT_PREFIX: 'Model check timed out after ',
@@ -114,12 +117,30 @@ function assignDefinedExacgOptions(body, providerOptions) {
   }
 }
 
-function buildExacgGenerateBody(modelCode, requestBody = {}) {
+function shouldRandomizeExacgSeed(seed) {
+  if (seed === undefined || seed === null) return true;
+  if (typeof seed === 'number') return seed === EXACG_RANDOM_SEED_SENTINEL;
+  if (typeof seed === 'string') return seed.trim() === String(EXACG_RANDOM_SEED_SENTINEL);
+  return false;
+}
+
+function generateExacgRandomSeed(randomFn = Math.random) {
+  const randomValue = Number(randomFn());
+  const finiteRandomValue = Number.isFinite(randomValue) ? randomValue : 0;
+  const boundedRandomValue = Math.min(Math.max(finiteRandomValue, 0), 1 - Number.EPSILON);
+  return Math.floor(boundedRandomValue * EXACG_RANDOM_SEED_RANGE) + EXACG_RANDOM_SEED_MIN;
+}
+
+function resolveExacgSeed(seed, randomSeedFn = generateExacgRandomSeed) {
+  return shouldRandomizeExacgSeed(seed) ? randomSeedFn() : seed;
+}
+
+function buildExacgGenerateBody(modelCode, requestBody = {}, randomSeedFn = generateExacgRandomSeed) {
   const providerOptions = getExacgProviderOptions(requestBody);
   const size = parseExacgSize(requestBody.size);
   const body = {
     prompt: String(requestBody.prompt ?? ''),
-    seed: requestBody.seed ?? EXACG_REQUEST_DEFAULTS.SEED,
+    seed: resolveExacgSeed(requestBody.seed, randomSeedFn),
     steps: EXACG_REQUEST_DEFAULTS.STEPS,
     model_index: parseExacgModelIndex(modelCode),
     negative_prompt: EXACG_DEFAULT_NEGATIVE_PROMPT,
@@ -331,6 +352,10 @@ export {
   EXACG_OPTION_FIELDS,
   EXACG_PROVIDER_OPTIONS_KEYS,
   EXACG_PROVIDER_OPTIONS_NAMESPACE,
+  EXACG_RANDOM_SEED_MAX,
+  EXACG_RANDOM_SEED_MIN,
+  EXACG_RANDOM_SEED_RANGE,
+  EXACG_RANDOM_SEED_SENTINEL,
   EXACG_RESPONSE_KEYS,
   EXACG_REQUEST_DEFAULTS,
   buildExacgCheckRequest,
@@ -342,6 +367,7 @@ export {
   createExacgAdapter,
   extractExacgErrorMessage,
   extractExacgImageURL,
+  generateExacgRandomSeed,
   getExacgBaseURL,
   getExacgProviderOptions,
   invokeExacg,
@@ -349,5 +375,7 @@ export {
   parseExacgModelIndex,
   parseExacgSize,
   readExacgJson,
+  resolveExacgSeed,
+  shouldRandomizeExacgSeed,
   supportsExacg,
 };

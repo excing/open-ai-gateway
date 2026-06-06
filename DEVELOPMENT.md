@@ -725,7 +725,11 @@ const EXACG_PROVIDER_OPTIONS_NAMESPACE = 'exacg';
 const EXACG_OPTION_FIELDS: ['negative_prompt', 'steps', 'cfg', 'image_source'];
 const EXACG_DEFAULT_NEGATIVE_PROMPT: string;
 const EXACG_RESPONSE_KEYS: { DATA: 'data'; ERROR: 'error'; IMAGE_URL: 'image_url'; MESSAGE: 'message'; SUCCESS: 'success' };
-const EXACG_REQUEST_DEFAULTS: { SEED: 0; STEPS: 30; CHECK_PROMPT: string; TIMEOUT_PREFIX: string };
+const EXACG_RANDOM_SEED_SENTINEL: -1; // 调用方传入该值时，网关必须改为随机正整数，禁止直接发送给上游。
+const EXACG_RANDOM_SEED_MIN: 1; // 随机 seed 的最小值，避免发送 0 或负数导致 Exacg 上游报错。
+const EXACG_RANDOM_SEED_MAX: 2147483647; // 随机 seed 的最大值，限制在 32-bit signed integer 正数范围内。
+const EXACG_RANDOM_SEED_RANGE: number; // 随机 seed 可用区间长度，用于把 Math.random() 映射到闭区间 [MIN, MAX]。
+const EXACG_REQUEST_DEFAULTS: { STEPS: 30; CHECK_PROMPT: string; TIMEOUT_PREFIX: string };
 
 function createExacgAdapter(deps: { fetch?: typeof fetch; now?: () => Date }): ProviderAdapter;
 function supportsExacg(provider: Provider): boolean;
@@ -739,7 +743,10 @@ function isPlainObject(value: unknown): boolean;
 function getExacgProviderOptions(requestBody: Record<string, unknown>): Record<string, unknown>;
 function parseExacgModelIndex(modelCode: string): number;
 function assignDefinedExacgOptions(body: Record<string, unknown>, providerOptions: Record<string, unknown>): void;
-function buildExacgGenerateBody(modelCode: string, requestBody: Record<string, unknown>): Record<string, unknown>;
+function shouldRandomizeExacgSeed(seed: unknown): boolean;
+function generateExacgRandomSeed(randomFn?: () => number): number;
+function resolveExacgSeed(seed: unknown, randomSeedFn?: () => number): unknown;
+function buildExacgGenerateBody(modelCode: string, requestBody: Record<string, unknown>, randomSeedFn?: () => number): Record<string, unknown>;
 async function readExacgJson(response: Response): Promise<Record<string, unknown>>;
 function extractExacgErrorMessage(responseBody?: Record<string, unknown>): string;
 function extractExacgImageURL(responseBody?: Record<string, unknown>): string;
@@ -760,7 +767,7 @@ Exacg 请求体映射规则：
 - `requestBody.model` 只用于网关模型选择，实际上游 `model_index` 来自命中的 `channel_models.code`，且必须为数字。
 - `requestBody.prompt` 透传为 `prompt`；缺省时使用空字符串，探活时使用固定最小 prompt。
 - `requestBody.size` 支持 `"{width}x{height}"` 字符串；解析成功时写入 `width` 和 `height`。
-- `requestBody.seed` 缺省为 `0`。
+- `requestBody.seed` 未设置、为 `null` 或为 `-1` 时，网关生成 `1..2147483647` 的随机正整数发送给上游；其他显式 seed 保持透传。
 - `steps` 缺省为 `30`；调用方传入 `providerOptions.exacg.steps` 或 `provider_options.exacg.steps` 时覆盖默认值。
 - `negative_prompt` 有内置默认值；调用方传入 Exacg 私有 `negative_prompt` 时覆盖默认值。
 - `requestBody.providerOptions.exacg` 与 `requestBody.provider_options.exacg` 均可携带 Exacg 私有参数；当前仅映射 `negative_prompt`、`steps`、`cfg`、`image_source`。
@@ -1025,7 +1032,7 @@ async function checkModelForm(): Promise<void>;
 当命中的渠道 provider 为 `exacg` 时，仅支持 `POST /v1/images/generations`。网关会将请求体转换为 Exacg `/generate_image`：
 - `model` 匹配网关模型或别名；实际发送给 Exacg 的 `model_index` 使用命中模型的 `code`。
 - `prompt`、`size`、`seed` 参与上游请求；`size` 只接受 `宽x高` 形式，无法解析时不发送宽高。
-- `seed` 默认发送 `0`。
+- `seed` 未传或传 `-1` 时，网关生成 `1..2147483647` 的随机正整数发送给上游，避免 Exacg 上游因 `0` 或 `-1` 报错。
 - `steps` 默认发送 `30`；调用方传入 Exacg 私有 `steps` 时覆盖默认值。
 - `negative_prompt` 默认发送内置负向提示词；调用方传入 Exacg 私有 `negative_prompt` 时覆盖默认值。
 - `providerOptions.exacg` 或 `provider_options.exacg` 可传 `negative_prompt`、`steps`、`cfg`、`image_source`。

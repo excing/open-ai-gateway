@@ -9,7 +9,12 @@ import {
 } from './call-result.js';
 import { createGatewayRepository } from './db-repository.js';
 import { calculateModelScore, selectChannelModels } from './model-selection.js';
-import { buildExacgGenerateBody, extractExacgErrorMessage } from './v1/adapters/exacg.js';
+import {
+  EXACG_RANDOM_SEED_MAX,
+  EXACG_RANDOM_SEED_MIN,
+  buildExacgGenerateBody,
+  extractExacgErrorMessage,
+} from './v1/adapters/exacg.js';
 import { createApp, CONSTANTS, SCHEMAS } from './worker.js';
 
 const {
@@ -25,11 +30,18 @@ const {
 const ADMIN_AUTH_HEADERS = { authorization: 'Bearer test-admin-key' };
 const SUPPORTED_PROVIDER_IDS = ['openai-compatible', 'exacg', 'openai'];
 const REMOVED_PROVIDER_IDS = ['google', 'gemini', 'anthropic', 'claude', 'openrouter', 'pollinations', 'microsoft-tts'];
+const EXACG_TEST_RANDOM_SEED = 123456789;
 
 function extractFrontendProviderIds(html) {
   const match = html.match(/PROVIDERS:\s*\[([^\]]*)\]/);
   assert.ok(match);
   return Array.from(match[1].matchAll(/'([^']+)'/g), (item) => item[1]);
+}
+
+function assertExacgRandomSeed(seed) {
+  assert.strictEqual(Number.isSafeInteger(seed), true);
+  assert.ok(seed >= EXACG_RANDOM_SEED_MIN);
+  assert.ok(seed <= EXACG_RANDOM_SEED_MAX);
 }
 
 describe('前端模型检测 UI', () => {
@@ -1023,7 +1035,7 @@ describe('模型可用性检测 API', () => {
     assert.strictEqual(calls[0].options.headers.get('authorization'), 'Bearer exacg-key');
     assert.strictEqual(calls[0].options.headers.get('x-check'), 'yes');
     assert.strictEqual(upstreamBody.model_index, 8);
-    assert.strictEqual(upstreamBody.seed, 0);
+    assertExacgRandomSeed(upstreamBody.seed);
     assert.strictEqual(upstreamBody.steps, 30);
     assert.ok(String(upstreamBody.prompt).length > 0);
   });
@@ -1087,13 +1099,21 @@ describe('模型可用性检测 API', () => {
 });
 
 describe('exacg adapter: 请求体转换', () => {
-  it('buildExacgGenerateBody 未传 steps 时应使用默认值 30', () => {
-    const body = buildExacgGenerateBody('9', { prompt: 'portrait' });
+  it('buildExacgGenerateBody 未传 seed 时应使用随机正整数，未传 steps 时应使用默认值 30', () => {
+    const body = buildExacgGenerateBody('9', { prompt: 'portrait' }, () => EXACG_TEST_RANDOM_SEED);
 
     assert.strictEqual(body.prompt, 'portrait');
-    assert.strictEqual(body.seed, 0);
+    assert.strictEqual(body.seed, EXACG_TEST_RANDOM_SEED);
     assert.strictEqual(body.model_index, 9);
     assert.strictEqual(body.steps, 30);
+  });
+
+  it('buildExacgGenerateBody seed 为 -1 时应改用随机正整数', () => {
+    const numericBody = buildExacgGenerateBody('9', { prompt: 'portrait', seed: -1 }, () => EXACG_TEST_RANDOM_SEED);
+    const stringBody = buildExacgGenerateBody('9', { prompt: 'portrait', seed: '-1' }, () => EXACG_TEST_RANDOM_SEED);
+
+    assert.strictEqual(numericBody.seed, EXACG_TEST_RANDOM_SEED);
+    assert.strictEqual(stringBody.seed, EXACG_TEST_RANDOM_SEED);
   });
 
   it('buildExacgGenerateBody 应支持 provider_options.exacg 并忽略非法 size', () => {
@@ -1107,10 +1127,10 @@ describe('exacg adapter: 请求体转换', () => {
             steps: 20,
           },
         },
-      }),
+      }, () => EXACG_TEST_RANDOM_SEED),
       {
         prompt: 'portrait',
-        seed: 0,
+        seed: EXACG_TEST_RANDOM_SEED,
         model_index: 9,
         negative_prompt: 'blur',
         steps: 20,
