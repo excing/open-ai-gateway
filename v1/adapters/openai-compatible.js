@@ -161,7 +161,7 @@ function isEventStreamResponse(response) {
 }
 
 function isChatLikeEndpoint(endpoint) {
-  return endpoint.callType === CALL_TYPES.CHAT || endpoint.callType === CALL_TYPES.MIX;
+  return endpoint.callType === CALL_TYPES.CHAT;
 }
 
 async function readSSEChunks(response) {
@@ -339,7 +339,7 @@ function buildJsonCheck(path, body, connection) {
 
 function buildCheckRequest(input) {
   const model = input.model;
-  if (input.callType === CALL_TYPES.CHAT || input.callType === CALL_TYPES.MIX) {
+  if (input.callType === CALL_TYPES.CHAT) {
     return buildJsonCheck('/v1/chat/completions', {
       model,
       messages: [{ role: 'user', content: OPENAI_CHECK.PROMPT }],
@@ -388,7 +388,7 @@ function hasTextChoice(responseBody) {
 }
 
 async function hasAvailableCheckData(callType, response, responseBody) {
-  if (callType === CALL_TYPES.CHAT || callType === CALL_TYPES.MIX) return hasTextChoice(responseBody);
+  if (callType === CALL_TYPES.CHAT) return hasTextChoice(responseBody);
   if (callType === CALL_TYPES.IMAGE_GEN) return Array.isArray(responseBody?.data) && responseBody.data.length > 0;
   if (callType === CALL_TYPES.VIDEO_GEN) return Array.isArray(responseBody?.data || responseBody?.videos) && (responseBody.data || responseBody.videos).length > 0;
   if (callType === CALL_TYPES.EMBEDDING) {

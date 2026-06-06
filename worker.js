@@ -119,7 +119,6 @@ const SCHEMAS = (() => {
 
   const CallTypeEnum = z.enum([
     CALL_TYPES.CHAT,
-    CALL_TYPES.MIX,
     CALL_TYPES.IMAGE_GEN,
     CALL_TYPES.AUDIO_GEN,
     CALL_TYPES.VIDEO_GEN,

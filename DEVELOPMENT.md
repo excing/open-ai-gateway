@@ -330,7 +330,7 @@ type Provider =
   | 'openai-compatible'
   | 'exacg';
 
-type CallType = 'chat' | 'mix' | 'image_gen' | 'audio_gen' | 'video_gen' | 'transcribe' | 'embedding';
+type CallType = 'chat' | 'image_gen' | 'audio_gen' | 'video_gen' | 'transcribe' | 'embedding';
 type ModelStatus = 'active' | 'open' | 'disable';
 type LogStatus = 'success' | 'error';
 type V1EndpointKey =
@@ -376,7 +376,7 @@ interface UpstreamModel {
 
 interface ModelSelectionInput {
   model: string;             // 用户请求的模型标识，可匹配 channel_models.code 或 aliases
-  callType: CallType;        // 用户请求的调用类型；只返回相同 call_type 或 mix 模型
+  callType: CallType;        // 用户请求的调用类型；只返回相同 call_type 的模型
   channelId?: string;        // 可选渠道 ID；传入时只在该渠道内选择
   now?: Date;                // 当前时间；用于过滤 cooldown_until，默认 new Date()
 }
@@ -563,7 +563,7 @@ async function selectChannelModels(
 - `model` 匹配 `channel_models.code` 或 `channel_models.aliases`。
 - 排除 `status = disable` 的模型。
 - 排除 `cooldown_until >= now` 的模型。
-- 只保留 `call_type = callType` 或 `call_type = mix` 的模型。
+- 只保留 `call_type = callType` 的模型。
 - 按 `calculateModelScore()` 从高到低排序。
 - `channelId` 有值时，只在指定渠道中选择。
 
@@ -1211,7 +1211,7 @@ selectChannelModels(db, options):
     cooldown_until is null OR cooldown_until is before nowValue
     if options.channelId exists, channel_id equals options.channelId
 
-  matched = rows where call_type equals options.callType OR call_type equals mix
+  matched = rows where call_type equals options.callType
   for each row in matched:
     score =
       model.weight * 10

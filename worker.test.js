@@ -1175,7 +1175,7 @@ describe('Schema: provider 与 call_type', () => {
 
   it('CallTypeEnum 应保留模型元数据类型', () => {
     assert.strictEqual(SCHEMAS.CallTypeEnum.parse(CALL_TYPES.IMAGE_GEN), CALL_TYPES.IMAGE_GEN);
-    assert.strictEqual(SCHEMAS.CallTypeEnum.parse(CALL_TYPES.MIX), CALL_TYPES.MIX);
+    assert.strictEqual(SCHEMAS.CallTypeEnum.parse(CALL_TYPES.CHAT), CALL_TYPES.CHAT);
   });
 });
 
@@ -1224,13 +1224,13 @@ describe('model-selection: 选择渠道和模型', () => {
       channelId: 'ch-b',
       channelKey: 'channel-b',
       channelName: 'Channel B',
-      modelId: 'm-mix',
-      modelCode: 'mix-code',
+      modelId: 'm-chat-b',
+      modelCode: 'chat-code-b',
       channelWeight: 5,
       modelWeight: 2,
-      callType: CALL_TYPES.MIX,
+      callType: CALL_TYPES.CHAT,
     });
-    Object.assign(mockEnv._models.get('m-mix'), {
+    Object.assign(mockEnv._models.get('m-chat-b'), {
       aliases: JSON.stringify(['shared-alias']),
       avg_latency_ms: 0,
       success_rate: 0.8,
@@ -1274,7 +1274,7 @@ describe('model-selection: 选择渠道和模型', () => {
       now: new Date('2026-04-12T00:00:00.000Z'),
     });
 
-    assert.deepStrictEqual(selections.map((item) => item.model.id), ['m-mix', 'm-chat']);
+    assert.deepStrictEqual(selections.map((item) => item.model.id), ['m-chat-b', 'm-chat']);
     assert.deepStrictEqual(selections.map((item) => item.channel.id), ['ch-b', 'ch-a']);
     assert.strictEqual(selections[0].score, 110);
     assert.strictEqual(selections[1].score, 69.8);

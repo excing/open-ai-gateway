@@ -4,7 +4,6 @@ import { channelModels, channels } from './db-schema.js';
 
 const CALL_TYPES = {
   CHAT: 'chat',
-  MIX: 'mix',
   IMAGE_GEN: 'image_gen',
   AUDIO_GEN: 'audio_gen',
   VIDEO_GEN: 'video_gen',
@@ -68,7 +67,7 @@ async function selectChannelModels(db, { model, callType, channelId = '', now = 
   if (!results.length) return [];
 
   return results
-    .filter((row) => row.call_type === callType || row.call_type === CALL_TYPES.MIX)
+    .filter((row) => row.call_type === callType)
     .map((row) => ({
       channel: {
         id: row.ch_id,
