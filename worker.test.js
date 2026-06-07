@@ -10,6 +10,7 @@ import {
 import { createGatewayRepository } from './db-repository.js';
 import { calculateModelScore, selectChannelModels } from './model-selection.js';
 import {
+  EXACG_DEFAULT_MODEL_MAX_INDEX,
   EXACG_RANDOM_SEED_MAX,
   EXACG_RANDOM_SEED_MIN,
   buildExacgGenerateBody,
@@ -283,6 +284,7 @@ function createMockEnv() {
   return {
     ADMIN_KEY: 'test-admin-key',
     ENV: 'dev',
+    EXACG_MODEL_MAX_INDEX: 15,
     DB: {
       prepare: (sql) => {
         const normalizedSql = normalizeSql(sql);
@@ -873,10 +875,11 @@ describe('V1 OpenAI-compatible 网关', () => {
     assert.strictEqual(calls[0].url, 'https://exacg.example.com/api/v1/generate_image');
     assert.strictEqual(calls[0].options.headers.get('authorization'), 'Bearer sk-test');
     assert.strictEqual(calls[0].options.headers.get('x-exacg-channel'), 'yes');
-    assert.deepStrictEqual(upstreamBody, {
+    const { model_index, ...restUpstreamBody } = upstreamBody;
+    assert.ok(Number.isSafeInteger(model_index) && model_index >= 0 && model_index < EXACG_DEFAULT_MODEL_MAX_INDEX);
+    assert.deepStrictEqual(restUpstreamBody, {
       prompt: 'a clean anime portrait',
       seed: 42,
-      model_index: 7,
       width: 768,
       height: 512,
       negative_prompt: 'low quality',
@@ -1034,7 +1037,7 @@ describe('模型可用性检测 API', () => {
     assert.strictEqual(calls[0].url, 'https://exacg.example.com/api/v1/generate_image');
     assert.strictEqual(calls[0].options.headers.get('authorization'), 'Bearer exacg-key');
     assert.strictEqual(calls[0].options.headers.get('x-check'), 'yes');
-    assert.strictEqual(upstreamBody.model_index, 8);
+    assert.ok(Number.isSafeInteger(upstreamBody.model_index) && upstreamBody.model_index >= 0 && upstreamBody.model_index < EXACG_DEFAULT_MODEL_MAX_INDEX);
     assertExacgRandomSeed(upstreamBody.seed);
     assert.strictEqual(upstreamBody.steps, 30);
     assert.ok(String(upstreamBody.prompt).length > 0);
@@ -1100,47 +1103,41 @@ describe('模型可用性检测 API', () => {
 
 describe('exacg adapter: 请求体转换', () => {
   it('buildExacgGenerateBody 未传 seed 时应使用随机正整数，未传 steps 时应使用默认值 30', () => {
-    const body = buildExacgGenerateBody('9', { prompt: 'portrait' }, () => EXACG_TEST_RANDOM_SEED);
+    const body = buildExacgGenerateBody({ prompt: 'portrait' }, 15, () => EXACG_TEST_RANDOM_SEED, () => 7);
 
     assert.strictEqual(body.prompt, 'portrait');
     assert.strictEqual(body.seed, EXACG_TEST_RANDOM_SEED);
-    assert.strictEqual(body.model_index, 9);
+    assert.strictEqual(body.model_index, 7);
     assert.strictEqual(body.steps, 30);
   });
 
   it('buildExacgGenerateBody seed 为 -1 时应改用随机正整数', () => {
-    const numericBody = buildExacgGenerateBody('9', { prompt: 'portrait', seed: -1 }, () => EXACG_TEST_RANDOM_SEED);
-    const stringBody = buildExacgGenerateBody('9', { prompt: 'portrait', seed: '-1' }, () => EXACG_TEST_RANDOM_SEED);
+    const numericBody = buildExacgGenerateBody({ prompt: 'portrait', seed: -1 }, 15, () => EXACG_TEST_RANDOM_SEED);
+    const stringBody = buildExacgGenerateBody({ prompt: 'portrait', seed: '-1' }, 15, () => EXACG_TEST_RANDOM_SEED);
 
     assert.strictEqual(numericBody.seed, EXACG_TEST_RANDOM_SEED);
     assert.strictEqual(stringBody.seed, EXACG_TEST_RANDOM_SEED);
   });
 
   it('buildExacgGenerateBody 应支持 provider_options.exacg 并忽略非法 size', () => {
-    assert.deepStrictEqual(
-      buildExacgGenerateBody('9', {
-        prompt: 'portrait',
-        size: 'bad-size',
-        provider_options: {
-          exacg: {
-            negative_prompt: 'blur',
-            steps: 20,
-          },
+    const body = buildExacgGenerateBody({
+      prompt: 'portrait',
+      size: 'bad-size',
+      provider_options: {
+        exacg: {
+          negative_prompt: 'blur',
+          steps: 20,
         },
-      }, () => EXACG_TEST_RANDOM_SEED),
-      {
-        prompt: 'portrait',
-        seed: EXACG_TEST_RANDOM_SEED,
-        model_index: 9,
-        negative_prompt: 'blur',
-        steps: 20,
       },
-    );
-  });
+    }, 15, () => EXACG_TEST_RANDOM_SEED, () => 7);
 
-  it('buildExacgGenerateBody 应拒绝空值和非数字 model_index', () => {
-    assert.throws(() => buildExacgGenerateBody('', { prompt: 'test' }), /model_index must be numeric/);
-    assert.throws(() => buildExacgGenerateBody('not-number', { prompt: 'test' }), /model_index must be numeric/);
+    assert.strictEqual(body.prompt, 'portrait');
+    assert.strictEqual(body.seed, EXACG_TEST_RANDOM_SEED);
+    assert.strictEqual(body.model_index, 7);
+    assert.strictEqual(body.negative_prompt, 'blur');
+    assert.strictEqual(body.steps, 20);
+    assert.strictEqual(body.width, undefined);
+    assert.strictEqual(body.height, undefined);
   });
 
   it('extractExacgErrorMessage 不应把 success=true 的 message 当成错误', () => {
@@ -2055,7 +2052,7 @@ describe('上游模型列表 API', () => {
     assert.strictEqual(data.data[0].id, 'gpt-4o');
   });
 
-  it('POST /api/channel/models 对 Exacg 应返回空模型列表且不请求上游', async () => {
+  it('POST /api/channel/models 对 Exacg 应返回 sd-miaomiao-harem 且不请求上游', async () => {
     const calls = [];
     const app = createApp({
       fetch: createMockFetch({}, (url) => calls.push(url)),
@@ -2074,7 +2071,13 @@ describe('上游模型列表 API', () => {
 
     assert.strictEqual(response.status, HTTP_STATUS.OK, JSON.stringify(data));
     assert.strictEqual(data.success, true);
-    assert.deepStrictEqual(data.data, []);
+    assert.deepStrictEqual(data.data, [
+      {
+        "id": 'sd-miaomiao-harem',
+        "object": "model",
+        "owned_by": "exacg"
+      },
+    ]);
     assert.strictEqual(calls.length, 0);
   });
 

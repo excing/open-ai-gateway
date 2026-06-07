@@ -239,7 +239,7 @@ function createV1Gateway(deps = {}) {
   function getProviderAdapter(provider, env) {
     const adapters = [
       createOpenAICompatibleAdapter({ fetch: getFetchFn(env), now: nowFn }),
-      createExacgAdapter({ fetch: getFetchFn(env), now: nowFn }),
+      createExacgAdapter({ fetch: getFetchFn(env), now: nowFn, maxModelIndex: env?.EXACG_MODEL_MAX_INDEX }),
     ];
     const adapter = adapters.find((item) => item.supports(provider));
     if (!adapter) throw new Error(`Unsupported provider: ${provider}`);

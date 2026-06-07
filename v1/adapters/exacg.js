@@ -3,6 +3,8 @@ import { ProviderResponseError } from './openai-compatible.js';
 
 const EXACG_ADAPTER_ID = 'exacg';
 const EXACG_DEFAULT_BASE_URL = 'https://sd.exacg.cc/api/v1';
+const EXACG_DEFAULT_MODEL_MAX_INDEX = 15;
+const EXACG_MODEL_NAME = 'sd-miaomiao-harem';
 const EXACG_ENDPOINTS = {
   GENERATE_IMAGE: '/generate_image',
 };
@@ -102,15 +104,6 @@ function getExacgProviderOptions(requestBody) {
   return {};
 }
 
-function parseExacgModelIndex(modelCode) {
-  const normalizedModelCode = String(modelCode ?? '').trim();
-  const parsed = Number(normalizedModelCode);
-  if (!normalizedModelCode || !Number.isFinite(parsed)) {
-    throw new Error(`Exacg model_index must be numeric, got: ${modelCode}`);
-  }
-  return parsed;
-}
-
 function assignDefinedExacgOptions(body, providerOptions) {
   for (const field of EXACG_OPTION_FIELDS) {
     if (providerOptions[field] !== undefined) body[field] = providerOptions[field];
@@ -131,18 +124,25 @@ function generateExacgRandomSeed(randomFn = Math.random) {
   return Math.floor(boundedRandomValue * EXACG_RANDOM_SEED_RANGE) + EXACG_RANDOM_SEED_MIN;
 }
 
+function generateExacgRandomModelIndex(maxIndex, randomFn = Math.random) {
+  const randomValue = Number(randomFn());
+  const finiteRandomValue = Number.isFinite(randomValue) ? randomValue : 0;
+  const boundedRandomValue = Math.min(Math.max(finiteRandomValue, 0), 1 - Number.EPSILON);
+  return Math.floor(boundedRandomValue * maxIndex);
+}
+
 function resolveExacgSeed(seed, randomSeedFn = generateExacgRandomSeed) {
   return shouldRandomizeExacgSeed(seed) ? randomSeedFn() : seed;
 }
 
-function buildExacgGenerateBody(modelCode, requestBody = {}, randomSeedFn = generateExacgRandomSeed) {
+function buildExacgGenerateBody(requestBody = {}, maxModelIndex = EXACG_DEFAULT_MODEL_MAX_INDEX, randomSeedFn = generateExacgRandomSeed, randomModelIndexFn = generateExacgRandomModelIndex) {
   const providerOptions = getExacgProviderOptions(requestBody);
   const size = parseExacgSize(requestBody.size);
   const body = {
     prompt: String(requestBody.prompt ?? ''),
     seed: resolveExacgSeed(requestBody.seed, randomSeedFn),
     steps: EXACG_REQUEST_DEFAULTS.STEPS,
-    model_index: parseExacgModelIndex(modelCode),
+    model_index: randomModelIndexFn(maxModelIndex),
     negative_prompt: EXACG_DEFAULT_NEGATIVE_PROMPT,
   };
 
@@ -227,15 +227,11 @@ function assertJsonRequestBody(requestBody) {
   }
 }
 
-async function invokeExacg(fetchFn, nowFn, input) {
-  assertExacgImageEndpoint(input.endpoint);
-  assertJsonRequestBody(input.requestBody);
-
-  const connection = getSelectionConnection(input.selection);
+async function attemptExacgGenerate(fetchFn, maxModelIndex, connection, requestBody) {
   const response = await fetchFn(buildExacgURL(getExacgBaseURL(connection), EXACG_ENDPOINTS.GENERATE_IMAGE), {
     method: HTTP_METHODS.POST,
     headers: buildExacgHeaders(connection),
-    body: JSON.stringify(buildExacgGenerateBody(input.selection.model.code, input.requestBody)),
+    body: JSON.stringify(buildExacgGenerateBody(requestBody, maxModelIndex)),
   });
   const responseBody = await readExacgJson(response);
   const errorMessage = extractExacgErrorMessage(responseBody);
@@ -245,16 +241,29 @@ async function invokeExacg(fetchFn, nowFn, input) {
   if (errorMessage) {
     throw new Error(`Exacg upstream error: ${errorMessage}`);
   }
-
   const imageURL = extractExacgImageURL(responseBody);
   if (!imageURL) {
     throw new Error('Exacg upstream error: Exacg success response missing data.image_url');
+  }
+  return imageURL;
+}
+
+async function invokeExacg(fetchFn, nowFn, maxModelIndex, input) {
+  assertExacgImageEndpoint(input.endpoint);
+  assertJsonRequestBody(input.requestBody);
+
+  const connection = getSelectionConnection(input.selection);
+  let imageURL;
+  try {
+    imageURL = await attemptExacgGenerate(fetchFn, maxModelIndex, connection, input.requestBody);
+  } catch {
+    imageURL = await attemptExacgGenerate(fetchFn, maxModelIndex, connection, input.requestBody);
   }
 
   const imageGenerationBody = buildOpenAIImageGenerationBody(input, imageURL, nowFn());
   return {
     response: new Response(JSON.stringify(imageGenerationBody), {
-      status: response.status,
+      status: 200,
       headers: { [HEADERS.CONTENT_TYPE]: JSON_CONTENT_TYPE },
     }),
     responseBody: {
@@ -265,10 +274,16 @@ async function invokeExacg(fetchFn, nowFn, input) {
 }
 
 async function listExacgModels() {
-  return [];
+  return [
+      {
+        "id": EXACG_MODEL_NAME,
+        "object": "model",
+        "owned_by": "exacg"
+      },
+    ];
 }
 
-function buildExacgCheckRequest(input) {
+function buildExacgCheckRequest(input, maxModelIndex) {
   if (input.callType !== CALL_TYPES.IMAGE_GEN) {
     throw new Error(`Unsupported Exacg call type: ${input.callType}`);
   }
@@ -276,7 +291,7 @@ function buildExacgCheckRequest(input) {
     url: buildExacgURL(getExacgBaseURL(input), EXACG_ENDPOINTS.GENERATE_IMAGE),
     method: HTTP_METHODS.POST,
     headers: buildExacgHeaders(input),
-    body: JSON.stringify(buildExacgGenerateBody(input.model, { prompt: EXACG_REQUEST_DEFAULTS.CHECK_PROMPT })),
+    body: JSON.stringify(buildExacgGenerateBody({ prompt: EXACG_REQUEST_DEFAULTS.CHECK_PROMPT }, maxModelIndex)),
   };
 }
 
@@ -291,7 +306,7 @@ function buildUnavailableCheckResult(input, errorMessage, latencyMs) {
   };
 }
 
-async function checkExacgAvailability(fetchFn, nowFn, input) {
+async function checkExacgAvailability(fetchFn, nowFn, maxModelIndex, input) {
   if (input.callType !== CALL_TYPES.IMAGE_GEN) {
     return buildUnavailableCheckResult(input, `Unsupported Exacg call type: ${input.callType}`, 0);
   }
@@ -300,7 +315,7 @@ async function checkExacgAvailability(fetchFn, nowFn, input) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), input.timeoutMs);
   try {
-    const checkRequest = buildExacgCheckRequest(input);
+    const checkRequest = buildExacgCheckRequest(input, maxModelIndex);
     const response = await fetchFn(checkRequest.url, {
       method: checkRequest.method,
       headers: checkRequest.headers,
@@ -334,18 +349,20 @@ async function checkExacgAvailability(fetchFn, nowFn, input) {
 function createExacgAdapter(deps = {}) {
   const fetchFn = deps.fetch || fetch;
   const nowFn = deps.now || (() => new Date());
+  const maxModelIndex = deps.maxModelIndex != null ? Number(deps.maxModelIndex) : EXACG_DEFAULT_MODEL_MAX_INDEX;
   return {
     id: EXACG_ADAPTER_ID,
     supports: supportsExacg,
     defaultBaseURL: () => EXACG_DEFAULT_BASE_URL,
-    invoke: (input) => invokeExacg(fetchFn, nowFn, input),
+    invoke: (input) => invokeExacg(fetchFn, nowFn, maxModelIndex, input),
     listModels: listExacgModels,
-    checkAvailability: (input) => checkExacgAvailability(fetchFn, nowFn, input),
+    checkAvailability: (input) => checkExacgAvailability(fetchFn, nowFn, maxModelIndex, input),
   };
 }
 
 export {
   EXACG_ADAPTER_ID,
+  EXACG_DEFAULT_MODEL_MAX_INDEX,
   EXACG_DEFAULT_NEGATIVE_PROMPT,
   EXACG_DEFAULT_BASE_URL,
   EXACG_ENDPOINTS,
@@ -367,12 +384,12 @@ export {
   createExacgAdapter,
   extractExacgErrorMessage,
   extractExacgImageURL,
+  generateExacgRandomModelIndex,
   generateExacgRandomSeed,
   getExacgBaseURL,
   getExacgProviderOptions,
   invokeExacg,
   listExacgModels,
-  parseExacgModelIndex,
   parseExacgSize,
   readExacgJson,
   resolveExacgSeed,
