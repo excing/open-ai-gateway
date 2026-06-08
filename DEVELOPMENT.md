@@ -8,7 +8,7 @@ Open AI Gateway 当前定位为运行在 Cloudflare Workers 上的管理后台�
 - 管理渠道：创建、读取、更新、删除渠道配置。
 - 管理模型：维护渠道模型、别名、能力、价格、状态、权重和请求头。
 - `/v1/*`：支持 `openai`、`openai-compatible` provider 以原生 HTTP `fetch` 透传到上游；支持 `exacg` provider 将 OpenAI-compatible 图片生成请求适配为 Exacg `/generate_image` 请求。
-- 上游模型列表：OpenAI-compatible 适配器按 provider/baseURL 获取上游模型列表；Exacg 无模型列表接口，返回空数组。
+- 上游模型列表：OpenAI-compatible 适配器按 provider/baseURL 获取上游模型列表；Exacg 适配器返回内置模型 `sd-miaomiao-harem`。
 - 模型可用性检测：OpenAI-compatible 适配器按调用类型发起最小探活请求；Exacg 适配器仅对 `image_gen` 发起最小图片生成探活请求。
 - 前端模型检测：渠道抽屉和模型编辑抽屉可调用 `/api/model/check` 检测当前模型配置。
 - 状态查看：展示数据库中模型的状态、统计和冷却字段。
@@ -17,7 +17,7 @@ Open AI Gateway 当前定位为运行在 Cloudflare Workers 上的管理后台�
 **当前边界：**
 - 新 `/v1/*` 不使用 Vercel AI SDK，也不引入新的第三方类库。
 - 当前有效 provider 仅保留 `openai`、`openai-compatible`、`exacg`；未适配 provider 不再作为渠道配置选项。
-- `exacg` 仅实现 `/v1/images/generations` / `image_gen`，渠道模型 `code` 必须是可转换为数字的 Exacg `model_index`。
+- `exacg` 仅实现 `/v1/images/generations` / `image_gen`；网关模型 `code` 仅用于模型选择和日志，上游 `model_index` 由适配器按 `EXACG_MODEL_MAX_INDEX` 或默认上限随机生成。
 - 未列入 endpoint 表的 `/v1/*` 路径返回 404。
 
 **技术栈：**
@@ -59,10 +59,11 @@ graph TB
         UC3[文本补全 POST /v1/completions]
         UC4[Responses POST /v1/responses]
         UC5[图片生成 POST /v1/images/generations]
-        UC6[音频生成 POST /v1/audio/speech]
-        UC7[音频转写 POST /v1/audio/transcriptions]
-        UC8[向量化 POST /v1/embeddings]
-        UC9[视频生成 POST /v1/video/generations]
+        UC6[图片编辑 POST /v1/images/edits]
+        UC7[音频生成 POST /v1/audio/speech]
+        UC8[音频转写 POST /v1/audio/transcriptions]
+        UC9[向量化 POST /v1/embeddings]
+        UC10[视频生成 POST /v1/video/generations]
     end
 
     subgraph 访客用例
@@ -142,15 +143,20 @@ sequenceDiagram
     participant C as 管理员客户端
     participant W as Worker
     participant DB as D1
+    participant A as Provider Adapter
     participant P as 上游 Provider
 
     C->>W: GET /api/channel/:id/models + Authorization
     W->>W: authenticate()
     W->>DB: repo.getChannelById()
-    W->>W: getProviderAdapter(provider)
-    W->>P: adapter.listModels()
-    P-->>W: JSON
-    W->>W: normalizeModelList()
+    W->>A: getProviderAdapter(provider).listModels()
+    alt openai/openai-compatible
+        A->>P: GET /v1/models
+        P-->>A: JSON
+        A->>A: normalizeOpenAIModelList()
+    else exacg
+        A->>A: 返回内置模型 sd-miaomiao-harem
+    end
     W-->>C: 200 { success: true, data }
 ```
 
@@ -265,7 +271,7 @@ flowchart TD
 | `provider` | TEXT | NOT NULL, DEFAULT `openai` | 上游平台标识。用于上游模型列表 URL 和认证方式分支。 |
 | `api_key` | TEXT | NOT NULL | 上游 API Key。允许空字符串，但按连接获取模型时必须提供非空值。 |
 | `base_url` | TEXT | DEFAULT `''` | 自定义上游基础地址。为空时使用当前 provider 适配器的默认 baseURL。 |
-| `weight` | REAL | NOT NULL, DEFAULT `1.0` | 渠道权重，保留为模型配置元数据，范围 0-100。 |
+| `weight` | REAL | NOT NULL, DEFAULT `1.0` | 渠道权重，范围 0-100；模型选择打分时参与排序。 |
 | `created_at` | TEXT | NOT NULL | ISO 时间字符串。创建渠道时写入。 |
 | `updated_at` | TEXT | NOT NULL | ISO 时间字符串。更新渠道时写入。 |
 
@@ -275,27 +281,27 @@ flowchart TD
 |---|---|---|---|
 | `id` | TEXT | PRIMARY KEY | 模型唯一 ID。由 `generateUUID()` 生成。 |
 | `channel_id` | TEXT | NOT NULL, FK | 所属渠道 ID。删除渠道时同步删除模型。 |
-| `code` | TEXT | NOT NULL | 上游模型代码。创建时必填，更新时可选。 |
+| `code` | TEXT | NOT NULL | 网关真实模型代码。创建时必填，更新时可选；OpenAI-compatible 调用会把上游请求 `model` 重写为该值，Exacg 调用仅用于选择记录和日志。 |
 | `name` | TEXT | NOT NULL | 模型显示名。创建时必填，更新时可选。 |
 | `desc` | TEXT | DEFAULT `''` | 模型说明。允许空字符串。 |
-| `aliases` | TEXT | DEFAULT `[]` | JSON 字符串数组。用于后台展示和历史兼容，不再用于代理路由。 |
+| `aliases` | TEXT | DEFAULT `[]` | JSON 字符串数组。用于后台展示、`GET /v1/models` 输出和 `/v1/*` 代理模型匹配。 |
 | `call_type` | TEXT | NOT NULL, DEFAULT `chat` | 模型调用类型元数据。允许值见 `CALL_TYPES`。 |
 | `capabilities` | TEXT | DEFAULT `["chat"]` | JSON 字符串数组。表示模型能力标签。 |
-| `input_price` | TEXT | DEFAULT `0` | 输入价格配置文本。历史统计展示保留。 |
-| `output_price` | TEXT | DEFAULT `0` | 输出价格配置文本。历史统计展示保留。 |
+| `input_price` | TEXT | DEFAULT `0` | 输入价格配置文本。成功日志成本计算时读取。 |
+| `output_price` | TEXT | DEFAULT `0` | 输出价格配置文本。成功日志成本计算时读取。 |
 | `status` | TEXT | NOT NULL, DEFAULT `active` | 模型状态。允许 `active`、`open`、`disable`。 |
 | `weight` | REAL | NOT NULL, DEFAULT `1.0` | 模型权重，范围 0-100。 |
-| `avg_latency_ms` | REAL | NOT NULL, DEFAULT `0.0` | 历史平均延迟毫秒数。当前版本不再主动写入。 |
-| `success_rate` | REAL | NOT NULL, DEFAULT `1.0` | 历史成功率，范围 0-1。当前版本不再主动写入。 |
-| `error_rate` | REAL | NOT NULL, DEFAULT `0.0` | 历史错误率，范围 0-1。当前版本不再主动写入。 |
-| `consecutive_failures` | INTEGER | NOT NULL, DEFAULT `0` | 历史连续失败次数。当前版本不再主动写入。 |
-| `cooldown_until` | TEXT | NULL | 历史冷却结束时间。当前版本不再主动写入。 |
-| `request_count` | INTEGER | NOT NULL, DEFAULT `0` | 历史请求次数。当前版本不再主动写入。 |
-| `input_usage` | INTEGER | NOT NULL, DEFAULT `0` | 历史输入用量。当前版本不再主动写入。 |
+| `avg_latency_ms` | REAL | NOT NULL, DEFAULT `0.0` | 历史平均延迟毫秒数。成功调用后按 EMA 主动更新，并参与模型选择打分。 |
+| `success_rate` | REAL | NOT NULL, DEFAULT `1.0` | 历史成功率，范围 0-1。成功和失败调用后按 EMA 主动更新，并参与模型选择打分。 |
+| `error_rate` | REAL | NOT NULL, DEFAULT `0.0` | 历史错误率，范围 0-1。成功和失败调用后主动更新为 `1 - success_rate`。 |
+| `consecutive_failures` | INTEGER | NOT NULL, DEFAULT `0` | 历史连续失败次数。失败时递增，成功时重置为 0，并参与模型选择打分。 |
+| `cooldown_until` | TEXT | NULL | 冷却结束时间。失败次数达到冷却阈值时写入，成功时清空；模型选择会排除未过期冷却模型。 |
+| `request_count` | INTEGER | NOT NULL, DEFAULT `0` | 历史请求次数。成功和失败调用后都会递增。 |
+| `input_usage` | INTEGER | NOT NULL, DEFAULT `0` | 历史输入用量。成功调用后按日志输入计费用量累计。 |
 | `outpu_usage` | INTEGER | NOT NULL, DEFAULT `0` | 历史输出用量。字段名保留数据库现状。 |
-| `total_cost` | INTEGER | NOT NULL, DEFAULT `0` | 历史总成本，按十亿倍缩放保存。当前版本不再主动写入。 |
+| `total_cost` | INTEGER | NOT NULL, DEFAULT `0` | 历史总成本，按十亿倍缩放保存。成功调用后按日志总成本累计。 |
 | `last_updated` | TEXT | NOT NULL | 模型最后更新时间。 |
-| `headers` | TEXT | DEFAULT `{}` | JSON 对象字符串。保存模型级请求头元数据。 |
+| `headers` | TEXT | DEFAULT `{}` | JSON 对象字符串。保存模型级上游请求头；V1 调用和模型检测会发送到对应 provider 适配器。 |
 
 ### 6.3 `request_logs` 表
 
@@ -330,7 +336,7 @@ type Provider =
   | 'openai-compatible'
   | 'exacg';
 
-type CallType = 'chat' | 'image_gen' | 'audio_gen' | 'video_gen' | 'transcribe' | 'embedding';
+type CallType = 'chat' | 'image_gen' | 'image_edit' | 'audio_gen' | 'video_gen' | 'transcribe' | 'embedding';
 type ModelStatus = 'active' | 'open' | 'disable';
 type LogStatus = 'success' | 'error';
 type V1EndpointKey =
@@ -339,13 +345,14 @@ type V1EndpointKey =
   | 'completions'
   | 'responses'
   | 'image_generations'
+  | 'image_edits'
   | 'audio_speech'
   | 'audio_transcriptions'
   | 'embeddings'
   | 'video_generations';
 
 interface ChannelModelInput {
-  code: string;              // 上游模型代码，创建时必填
+  code: string;              // 网关真实模型代码，创建时必填；OpenAI-compatible 会作为上游 model，Exacg 仅用于选择和日志
   name: string;              // 后台显示名，创建时必填
   desc: string;              // 模型描述，默认空字符串
   aliases: string[];         // 别名列表，去重由前端处理，后端存 JSON
@@ -376,7 +383,7 @@ interface UpstreamModel {
 
 interface ModelSelectionInput {
   model: string;             // 用户请求的模型标识，可匹配 channel_models.code 或 aliases
-  callType: CallType;        // 用户请求的调用类型；只返回相同 call_type 的模型
+  callType: CallType;        // 用户请求的调用类型；默认只返回相同 call_type，image_gen/image_edit 还允许 chat 模型作为候选
   channelId?: string;        // 可选渠道 ID；传入时只在该渠道内选择
   now?: Date;                // 当前时间；用于过滤 cooldown_until，默认 new Date()
 }
@@ -469,7 +476,7 @@ interface AdapterInvokeResult {
 }
 
 interface ModelCheckInput extends ProviderConnection {
-  model: string;             // 待检测的上游模型代码
+  model: string;             // 待检测模型标识；OpenAI-compatible 作为上游 model，Exacg 仅用于结果回显
   callType: CallType;        // 检测调用类型
   timeoutMs: number;         // 探活超时时间，1-120000ms
 }
@@ -563,7 +570,7 @@ async function selectChannelModels(
 - `model` 匹配 `channel_models.code` 或 `channel_models.aliases`。
 - 排除 `status = disable` 的模型。
 - 排除 `cooldown_until >= now` 的模型。
-- 只保留 `call_type = callType` 的模型。
+- 默认只保留 `call_type = callType` 的模型；当请求 `callType` 为 `image_gen` 或 `image_edit` 时，也允许 `call_type = chat` 的模型作为候选。
 - 按 `calculateModelScore()` 从高到低排序。
 - `channelId` 有值时，只在指定渠道中选择。
 
@@ -729,9 +736,11 @@ const EXACG_RANDOM_SEED_SENTINEL: -1; // 调用方传入该值时，网关必须
 const EXACG_RANDOM_SEED_MIN: 1; // 随机 seed 的最小值，避免发送 0 或负数导致 Exacg 上游报错。
 const EXACG_RANDOM_SEED_MAX: 2147483647; // 随机 seed 的最大值，限制在 32-bit signed integer 正数范围内。
 const EXACG_RANDOM_SEED_RANGE: number; // 随机 seed 可用区间长度，用于把 Math.random() 映射到闭区间 [MIN, MAX]。
+const EXACG_DEFAULT_MODEL_MAX_INDEX: 15; // 未配置 EXACG_MODEL_MAX_INDEX 时，随机 model_index 的上限，不包含该值。
+const EXACG_MODEL_NAME: 'sd-miaomiao-harem'; // Exacg 适配器返回的内置模型 ID。
 const EXACG_REQUEST_DEFAULTS: { STEPS: 30; CHECK_PROMPT: string; TIMEOUT_PREFIX: string };
 
-function createExacgAdapter(deps: { fetch?: typeof fetch; now?: () => Date }): ProviderAdapter;
+function createExacgAdapter(deps: { fetch?: typeof fetch; now?: () => Date; maxModelIndex?: number }): ProviderAdapter;
 function supportsExacg(provider: Provider): boolean;
 function trimTrailingSlashes(value: string): string;
 function getExacgBaseURL(connection: ProviderConnection): string;
@@ -741,12 +750,17 @@ function buildExacgHeaders(connection: ProviderConnection): Headers;
 function parseExacgSize(size?: unknown): { width?: number; height?: number };
 function isPlainObject(value: unknown): boolean;
 function getExacgProviderOptions(requestBody: Record<string, unknown>): Record<string, unknown>;
-function parseExacgModelIndex(modelCode: string): number;
 function assignDefinedExacgOptions(body: Record<string, unknown>, providerOptions: Record<string, unknown>): void;
 function shouldRandomizeExacgSeed(seed: unknown): boolean;
 function generateExacgRandomSeed(randomFn?: () => number): number;
+function generateExacgRandomModelIndex(maxIndex: number, randomFn?: () => number): number;
 function resolveExacgSeed(seed: unknown, randomSeedFn?: () => number): unknown;
-function buildExacgGenerateBody(modelCode: string, requestBody: Record<string, unknown>, randomSeedFn?: () => number): Record<string, unknown>;
+function buildExacgGenerateBody(
+  requestBody?: Record<string, unknown>,
+  maxModelIndex?: number,
+  randomSeedFn?: () => number,
+  randomModelIndexFn?: (maxIndex: number) => number
+): Record<string, unknown>;
 async function readExacgJson(response: Response): Promise<Record<string, unknown>>;
 function extractExacgErrorMessage(responseBody?: Record<string, unknown>): string;
 function extractExacgImageURL(responseBody?: Record<string, unknown>): string;
@@ -756,21 +770,25 @@ function buildOpenAIImageGenerationBody(input: AdapterInvokeInput, imageURL: str
 function getSelectionConnection(selection: SelectedChannelModel): ProviderConnection;
 function assertExacgImageEndpoint(endpoint: V1EndpointDefinition): void;
 function assertJsonRequestBody(requestBody: Record<string, unknown> | FormData): void;
-async function invokeExacg(fetchFn: typeof fetch, nowFn: () => Date, input: AdapterInvokeInput): Promise<AdapterInvokeResult>;
-async function listExacgModels(input: ProviderConnection): Promise<UpstreamModel[]>;
-function buildExacgCheckRequest(input: ModelCheckInput): { url: string; method: 'POST'; body: BodyInit; headers: Headers };
+async function attemptExacgGenerate(fetchFn: typeof fetch, maxModelIndex: number, connection: ProviderConnection, requestBody: Record<string, unknown>): Promise<string>;
+async function invokeExacg(fetchFn: typeof fetch, nowFn: () => Date, maxModelIndex: number, input: AdapterInvokeInput): Promise<AdapterInvokeResult>;
+async function listExacgModels(): Promise<UpstreamModel[]>;
+function buildExacgCheckRequest(input: ModelCheckInput, maxModelIndex: number): { url: string; method: 'POST'; body: BodyInit; headers: Headers };
 function buildUnavailableCheckResult(input: ModelCheckInput, errorMessage: string, latencyMs: number): ModelCheckResult;
-async function checkExacgAvailability(fetchFn: typeof fetch, nowFn: () => Date, input: ModelCheckInput): Promise<ModelCheckResult>;
+async function checkExacgAvailability(fetchFn: typeof fetch, nowFn: () => Date, maxModelIndex: number, input: ModelCheckInput): Promise<ModelCheckResult>;
 ```
 
 Exacg 请求体映射规则：
-- `requestBody.model` 只用于网关模型选择，实际上游 `model_index` 来自命中的 `channel_models.code`，且必须为数字。
+- `requestBody.model` 和命中的 `channel_models.code` 只用于网关模型选择与日志；实际上游 `model_index` 由 `generateExacgRandomModelIndex(maxModelIndex)` 生成，范围为 `0..maxModelIndex-1`。
+- `maxModelIndex` 来自 Worker 环境变量 `EXACG_MODEL_MAX_INDEX`，未配置时使用 `15`。
 - `requestBody.prompt` 透传为 `prompt`；缺省时使用空字符串，探活时使用固定最小 prompt。
 - `requestBody.size` 支持 `"{width}x{height}"` 字符串；解析成功时写入 `width` 和 `height`。
 - `requestBody.seed` 未设置、为 `null` 或为 `-1` 时，网关生成 `1..2147483647` 的随机正整数发送给上游；其他显式 seed 保持透传。
 - `steps` 缺省为 `30`；调用方传入 `providerOptions.exacg.steps` 或 `provider_options.exacg.steps` 时覆盖默认值。
 - `negative_prompt` 有内置默认值；调用方传入 Exacg 私有 `negative_prompt` 时覆盖默认值。
 - `requestBody.providerOptions.exacg` 与 `requestBody.provider_options.exacg` 均可携带 Exacg 私有参数；当前仅映射 `negative_prompt`、`steps`、`cfg`、`image_source`。
+- `invokeExacg()` 在第一次图片生成请求失败后，会立即用同一个候选模型再重试一次；第二次仍失败时才把错误抛回 V1 fallback 流程。
+- `listExacgModels()` 不请求上游，直接返回 `[{ id: 'sd-miaomiao-harem', object: 'model', owned_by: 'exacg' }]`。
 - 响应按正文内容解析 JSON，不依赖上游 `content-type` 必须是 `application/json`。
 - `success: true` 响应中的 `message` 是成功提示，不作为错误；仅 `error` 或 `success: false` 时的 `message` 作为错误信息。
 - 成功响应转换为 OpenAI-compatible 图片生成响应 `{ created, data: [{ url }] }`；日志计费使用 `responseBody.images` 数组统计 `/img` 输出数量。
@@ -938,7 +956,7 @@ async function checkModelForm(): Promise<void>;
 
 ### `GET /api/channel/:id/models`
 
-按已保存渠道配置获取上游模型列表。当前有效 provider 仅为 `openai`、`openai-compatible`、`exacg`：`openai` 和 `openai-compatible` 由 OpenAI-compatible 适配器获取上游 `/models`；`exacg` 已接入适配器但上游无模型列表接口，因此返回 `success: true` 和空数组。
+按已保存渠道配置获取上游模型列表。当前有效 provider 仅为 `openai`、`openai-compatible`、`exacg`：`openai` 和 `openai-compatible` 由 OpenAI-compatible 适配器获取上游 `/models`；`exacg` 不请求上游，直接返回内置模型 `sd-miaomiao-harem`。
 
 **输出：**
 ```json
@@ -1022,6 +1040,7 @@ async function checkModelForm(): Promise<void>;
 ### `POST /v1/completions`
 ### `POST /v1/responses`
 ### `POST /v1/images/generations`
+### `POST /v1/images/edits`
 ### `POST /v1/audio/speech`
 ### `POST /v1/audio/transcriptions`
 ### `POST /v1/embeddings`
@@ -1029,8 +1048,11 @@ async function checkModelForm(): Promise<void>;
 
 所有调用入口都需要 `Authorization: Bearer {ADMIN_KEY}`。请求体必须包含 `model`。`x-channel-id` 可选，用于限定只在指定渠道中选择模型。成功时透传上游响应；失败时按候选模型 fallback，并记录失败日志。
 
+模型选择默认要求命中的 `channel_models.call_type` 等于当前 endpoint 对应的 `callType`；当 endpoint 是 `image_gen` 或 `image_edit` 时，`call_type = chat` 的模型也会进入候选列表并参与同一套打分排序。
+
 当命中的渠道 provider 为 `exacg` 时，仅支持 `POST /v1/images/generations`。网关会将请求体转换为 Exacg `/generate_image`：
-- `model` 匹配网关模型或别名；实际发送给 Exacg 的 `model_index` 使用命中模型的 `code`。
+- `model` 匹配网关模型或别名；命中模型的 `code` 用于日志和选择记录，不会作为 Exacg 上游 `model_index` 发送。
+- 实际发送给 Exacg 的 `model_index` 由适配器随机生成，范围为 `0..EXACG_MODEL_MAX_INDEX-1`；环境变量未配置时默认上限为 `15`。
 - `prompt`、`size`、`seed` 参与上游请求；`size` 只接受 `宽x高` 形式，无法解析时不发送宽高。
 - `seed` 未传或传 `-1` 时，网关生成 `1..2147483647` 的随机正整数发送给上游，避免 Exacg 上游因 `0` 或 `-1` 报错。
 - `steps` 默认发送 `30`；调用方传入 Exacg 私有 `steps` 时覆盖默认值。
@@ -1170,7 +1192,7 @@ handleProviderModels(channel, env):
   adapter = getProviderAdapter(channel.provider)
   try:
     data = adapter.listModels(channel)
-    # Exacg 无模型列表接口，适配器返回 []
+    # Exacg 不请求上游，适配器返回内置模型 sd-miaomiao-harem
     return { success: true, data }
   catch error:
     return { success: false, data: [], error: error.message }
@@ -1191,11 +1213,13 @@ handleModelCheck(request, env):
 ### 10.7 Exacg 图片生成适配
 
 ```text
-invokeExacg(fetchFn, nowFn, input):
+invokeExacg(fetchFn, nowFn, maxModelIndex, input):
   assert endpoint.callType == image_gen
   connection = selected channel api_key/base_url + selected model headers
-  request = buildExacgGenerateBody(selection.model.code, input.requestBody)
+  request = buildExacgGenerateBody(input.requestBody, maxModelIndex)
   response = fetch(buildExacgURL(connection.baseURL, /generate_image), POST JSON)
+  if first attempt fails:
+    retry once with buildExacgGenerateBody(input.requestBody, maxModelIndex)
   json = readExacgJson(response)
   if response not ok or json.error exists:
     throw upstream error
@@ -1218,7 +1242,9 @@ selectChannelModels(db, options):
     cooldown_until is null OR cooldown_until is before nowValue
     if options.channelId exists, channel_id equals options.channelId
 
-  matched = rows where call_type equals options.callType
+  matched = rows where:
+    call_type equals options.callType
+    OR options.callType is image_gen/image_edit and call_type equals chat
   for each row in matched:
     score =
       model.weight * 10
