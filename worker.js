@@ -12,6 +12,7 @@ const CONSTANTS = {
     OPENAI: 'openai',
     OPENAI_COMPATIBLE: 'openai-compatible',
     EXACG: 'exacg',
+    POLLINATIONS: 'pollinations',
   },
   CALL_TYPES: MODEL_SELECTION_CALL_TYPES,
   MODEL_STATUS: MODEL_SELECTION_MODEL_STATUS,
@@ -115,6 +116,7 @@ const SCHEMAS = (() => {
     PROVIDERS.OPENAI,
     PROVIDERS.OPENAI_COMPATIBLE,
     PROVIDERS.EXACG,
+    PROVIDERS.POLLINATIONS,
   ]);
 
   const CallTypeEnum = z.enum([

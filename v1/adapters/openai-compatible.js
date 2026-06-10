@@ -17,6 +17,13 @@ const OPENAI_OBJECTS = {
 const EVENT_STREAM_CONTENT_TYPE = 'text/event-stream';
 const SSE_DATA_PREFIX = 'data:';
 const SSE_DONE_MARKER = '[DONE]';
+const VIDEO_TASK_POLL_INTERVAL_MS = 5_000;
+const VIDEO_TASK_MAX_POLL_ATTEMPTS = 120;
+
+const VIDEO_TASK_STATUSES = {
+  COMPLETED: new Set(['completed', 'succeeded', 'success', 'finished']),
+  FAILED: new Set(['failed', 'error', 'cancelled', 'canceled']),
+};
 
 const OPENAI_CHECK = {
   PROMPT: 'Say "OK" if you can read this message.',
@@ -249,6 +256,127 @@ async function convertSSEToChatCompletion(response, fallbackModel) {
   return { response: new Response(JSON.stringify(body), { status: response.status, headers }), responseBody: body };
 }
 
+function createJsonResponseFromSource(sourceResponse, body) {
+  const headers = new Headers(sourceResponse.headers);
+  headers.set('content-type', JSON_CONTENT_TYPE);
+  headers.delete('content-length');
+  headers.delete('transfer-encoding');
+  headers.delete('content-encoding');
+  return new Response(JSON.stringify(body), { status: sourceResponse.status, headers });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function readVideoTaskId(responseBody) {
+  return String(responseBody?.task_id || responseBody?.data?.task_id || '').trim();
+}
+
+function normalizeVideoTaskStatus(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function readVideoTaskStatus(responseBody) {
+  return normalizeVideoTaskStatus(responseBody?.status || responseBody?.data?.status);
+}
+
+function isVideoTaskCompleted(responseBody) {
+  return VIDEO_TASK_STATUSES.COMPLETED.has(readVideoTaskStatus(responseBody));
+}
+
+function isVideoTaskFailed(responseBody) {
+  return VIDEO_TASK_STATUSES.FAILED.has(readVideoTaskStatus(responseBody));
+}
+
+function readVideoTaskError(responseBody) {
+  const error = responseBody?.error || responseBody?.data?.error;
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  if (error?.message) return String(error.message);
+  const message = responseBody?.message || responseBody?.data?.message;
+  if (typeof message === 'string' && message.trim()) return message.trim();
+  return `Video generation task failed with status ${readVideoTaskStatus(responseBody) || 'failed'}`;
+}
+
+function toOpenAIVideoEntry(value) {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    const url = value.trim();
+    return url ? { url } : null;
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) return null;
+  const url = String(value.url || value.video_url || value.output_url || value.download_url || '').trim();
+  const b64Json = String(value.b64_json || value.base64 || '').trim();
+  if (url) return { url };
+  if (b64Json) return { b64_json: b64Json };
+  return null;
+}
+
+function collectVideoEntries(responseBody) {
+  const entries = [];
+  const candidates = [
+    responseBody?.video_url,
+    responseBody?.url,
+    responseBody?.output_url,
+    responseBody?.download_url,
+    responseBody?.b64_json,
+    responseBody?.data?.video_url,
+    responseBody?.data?.url,
+    responseBody?.data?.output_url,
+    responseBody?.data?.download_url,
+    responseBody?.data?.b64_json,
+  ];
+  const arrays = [responseBody?.data, responseBody?.videos, responseBody?.data?.videos].filter(Array.isArray);
+  for (const array of arrays) candidates.push(...array);
+  for (const candidate of candidates) {
+    const entry = toOpenAIVideoEntry(candidate);
+    if (entry) entries.push(entry);
+  }
+  return entries;
+}
+
+function buildOpenAIVideoGenerationBody(responseBody) {
+  return {
+    created: Number(responseBody?.created || responseBody?.created_at || responseBody?.data?.created || responseBody?.data?.created_at || Math.floor(Date.now() / 1000)),
+    data: collectVideoEntries(responseBody),
+  };
+}
+
+async function fetchVideoTask(fetchFn, baseURL, connection, taskId) {
+  const response = await fetchFn(buildOpenAICompatibleURL(baseURL, `/v1/videos/${encodeURIComponent(taskId)}`), {
+    method: 'GET',
+    headers: buildOpenAIHeaders(connection, ''),
+  });
+  const responseBody = await readJsonIfPossible(response);
+  if (!response.ok) {
+    throw new ProviderResponseError(response, await readProviderErrorMessage(response, responseBody));
+  }
+  return responseBody || {};
+}
+
+async function resolveVideoTask(fetchFn, baseURL, connection, taskId) {
+  let taskBody = {};
+  for (let attempt = 0; attempt < VIDEO_TASK_MAX_POLL_ATTEMPTS; attempt += 1) {
+    await sleep(VIDEO_TASK_POLL_INTERVAL_MS);
+    taskBody = await fetchVideoTask(fetchFn, baseURL, connection, taskId);
+    if (isVideoTaskFailed(taskBody)) throw new Error(readVideoTaskError(taskBody));
+    if (isVideoTaskCompleted(taskBody)) return taskBody;
+  }
+  throw new Error(`Video generation task ${taskId} did not complete after ${VIDEO_TASK_MAX_POLL_ATTEMPTS} polling attempts`);
+}
+
+async function convertVideoTaskResponse(fetchFn, baseURL, connection, sourceResponse, responseBody) {
+  const taskId = readVideoTaskId(responseBody);
+  if (!taskId) return null;
+  const finalTaskBody = await resolveVideoTask(fetchFn, baseURL, connection, taskId);
+  const openAIBody = buildOpenAIVideoGenerationBody(finalTaskBody);
+  if (!openAIBody.data.length) throw new Error(`Video generation task ${taskId} completed without video data`);
+  return {
+    response: createJsonResponseFromSource(sourceResponse, openAIBody),
+    responseBody: openAIBody,
+  };
+}
+
 async function invokeOpenAICompatible(fetchFn, input) {
   const finalInput = await buildFrontendRequest(input, { fetch: fetchFn });
   const connection = getSelectionConnection(finalInput.selection);
@@ -271,6 +399,13 @@ async function invokeOpenAICompatible(fetchFn, input) {
     upstreamBody = converted.responseBody;
   } else {
     upstreamBody = await readJsonIfPossible(response);
+  }
+  if (finalInput.endpoint.callType === CALL_TYPES.VIDEO_GEN) {
+    const convertedVideoTask = await convertVideoTaskResponse(fetchFn, baseURL, connection, upstreamResponse, upstreamBody);
+    if (convertedVideoTask) {
+      upstreamResponse = convertedVideoTask.response;
+      upstreamBody = convertedVideoTask.responseBody;
+    }
   }
   const transformed = buildFrontendResponse(input.endpoint.callType, upstreamResponse, upstreamBody);
   return {

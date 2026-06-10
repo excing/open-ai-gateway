@@ -3,6 +3,7 @@ import { createGatewayRepository } from '../db-repository.js';
 import { CALL_TYPES, MODEL_STATUS, selectChannelModels } from '../model-selection.js';
 import { createExacgAdapter } from './adapters/exacg.js';
 import { createOpenAICompatibleAdapter } from './adapters/openai-compatible.js';
+import { createPollinationsAdapter } from './adapters/pollinations.js';
 
 const HTTP_STATUS = {
   OK: 200,
@@ -240,6 +241,7 @@ function createV1Gateway(deps = {}) {
     const adapters = [
       createOpenAICompatibleAdapter({ fetch: getFetchFn(env), now: nowFn }),
       createExacgAdapter({ fetch: getFetchFn(env), now: nowFn, maxModelIndex: env?.EXACG_MODEL_MAX_INDEX }),
+      createPollinationsAdapter({ fetch: getFetchFn(env), now: nowFn }),
     ];
     const adapter = adapters.find((item) => item.supports(provider));
     if (!adapter) throw new Error(`Unsupported provider: ${provider}`);
